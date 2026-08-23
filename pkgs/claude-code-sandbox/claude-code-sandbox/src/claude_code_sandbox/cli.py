@@ -1,0 +1,301 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+"""claude-code-sandbox: enroll checkouts into nix-declared Claude Code
+sandbox profiles.
+
+Enrollment writes the profile's settings fragment into the checkout's
+co-owned ``.claude/settings.local.json`` (three-way merge; Claude Code's
+own keys are never touched) and records what was applied in the sidecar
+``.claude/claude-code-sandbox.json``. Claude Code live-reloads settings
+files, so changes generally apply to running sessions; removing an ``env``
+variable is the documented exception (next launch).
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from .files import (
+    ToolError,
+    find_repo_root,
+    read_json,
+    read_sidecar,
+    settings_path,
+    update_json,
+    write_sidecar,
+)
+from .merge import adhoc_additions, merge
+from .registry import load_fragment, load_registry, scan_roots
+
+NONE_PROFILE = "none"
+_SKIP_DIRS = {".git", "node_modules", ".direnv", ".cache", "result"}
+
+
+def _root_or_die(directory: Path) -> Path:
+    root = find_repo_root(directory)
+    if root is None:
+        raise ToolError(f"{directory} is not inside a git repository")
+    return root
+
+
+def _apply(root: Path, profile: str, base: dict[str, Any], quiet: bool) -> None:
+    registry = load_registry()
+    fragment = load_fragment(registry, profile)
+    reports = []
+
+    def transform(current: dict[str, Any]) -> dict[str, Any] | None:
+        merged, report = merge(current, base, fragment)
+        reports.append(report)
+        return merged
+
+    changed = update_json(settings_path(root), transform)
+    write_sidecar(root, profile, fragment)
+    if quiet:
+        return
+    state = "updated" if changed else "already current"
+    print(f"{root}: profile '{profile}' {state}")
+    if reports and reports[-1].has_findings():
+        r = reports[-1]
+        for path, value, new in r.overridden_scalars:
+            print(f"  overrode drifted {path}: {value!r} -> {new!r}")
+        for path, value in r.preserved_drift:
+            print(f"  preserved local value at dropped key {path}: {value!r}")
+        for path, extras in r.adhoc_entries:
+            print(f"  kept {len(extras)} ad-hoc entr{'y' if len(extras) == 1 else 'ies'} in {path}")
+
+
+def _status_line(root: Path) -> tuple[str, bool]:
+    """One status line for a checkout; second element = needs attention."""
+    sidecar = read_sidecar(root)
+    settings = read_json(settings_path(root))
+    if sidecar is None:
+        if "sandbox" in settings or "env" in settings:
+            return (f"{root}: unmanaged (sandbox/env keys present, no sidecar)", True)
+        return (f"{root}: not enrolled", False)
+    profile = sidecar["profile"]
+    applied = sidecar["applied"]
+    try:
+        registry = load_registry()
+        fragment = load_fragment(registry, profile)
+    except ToolError as e:
+        return (f"{root}: profile '{profile}' DANGLING ({e})", True)
+    stale = fragment != applied
+    adhoc = adhoc_additions(settings, applied)
+    bits = [f"profile '{profile}'"]
+    bits.append("STALE (sync to update)" if stale else "current")
+    if adhoc:
+        entries = sum(len(x) for _, x in adhoc)
+        paths = ", ".join(p for p, _ in adhoc)
+        bits.append(f"{entries} local addition(s) in {paths}")
+    return (f"{root}: " + ", ".join(bits), stale)
+
+
+def _iter_enrolled(roots: list[Path]) -> list[Path]:
+    found: list[Path] = []
+    for top in roots:
+        if not top.is_dir():
+            continue
+        for dirpath, dirnames, _filenames in os.walk(top):
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            here = Path(dirpath)
+            if (here / ".claude" / "claude-code-sandbox.json").is_file() or (
+                here / ".claude" / "settings.local.json"
+            ).is_file():
+                found.append(here)
+                dirnames[:] = []  # do not descend into nested checkouts
+    return found
+
+
+def cmd_enroll(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    sidecar = read_sidecar(root)
+    base = sidecar["applied"] if sidecar else {}
+    _apply(root, args.profile, base, args.quiet)
+    return 0
+
+
+def cmd_retarget(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    sidecar = read_sidecar(root)
+    if sidecar is None:
+        raise ToolError(f"{root} is not enrolled (use enroll)")
+    _apply(root, args.profile, sidecar["applied"], args.quiet)
+    if args.profile == NONE_PROFILE and not args.quiet:
+        print(
+            "note: a live session keeps env vars from the old profile until "
+            "its next launch (documented removal behavior)"
+        )
+    return 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    if args.all:
+        registry = load_registry()
+        rc = 0
+        for root in _iter_enrolled(scan_roots(registry)):
+            sidecar = read_sidecar(root)
+            if sidecar is None:
+                continue
+            try:
+                _apply(root, sidecar["profile"], sidecar["applied"], args.quiet)
+            except ToolError as e:
+                print(f"{root}: {e}", file=sys.stderr)
+                rc = 1
+        return rc
+    root = _root_or_die(Path(args.directory))
+    sidecar = read_sidecar(root)
+    if sidecar is None:
+        raise ToolError(f"{root} is not enrolled (use enroll)")
+    _apply(root, sidecar["profile"], sidecar["applied"], args.quiet)
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    line, attention = _status_line(root)
+    print(line)
+    return 2 if attention else 0
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    attention = False
+    for root in _iter_enrolled(scan_roots(registry)):
+        line, needs = _status_line(root)
+        print(line)
+        attention = attention or needs
+    return 2 if attention else 0
+
+
+def cmd_materialize(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    projects = registry.get("projects") or {}
+    if args.name not in projects:
+        raise ToolError(
+            f"project '{args.name}' is not declared in the registry; declare it "
+            "under claude-code-sandbox.projects in home-manager first"
+        )
+    entry = projects[args.name]
+    path = Path(entry["path"]).expanduser()
+    if (path / ".git").exists():
+        print(f"{path}: already materialized")
+    else:
+        subprocess.run(["git", "clone", entry["url"], str(path)], check=True)
+    ns = argparse.Namespace(
+        directory=str(path),
+        profile=entry.get("profile", "default"),
+        quiet=False,
+    )
+    return cmd_enroll(ns)
+
+
+def cmd_hook_session_start(args: argparse.Namespace) -> int:
+    """Advisory SessionStart hook: report and self-heal staleness. Always
+    exits 0 — the sandbox design must stay correct without hooks."""
+    try:
+        root = find_repo_root(Path.cwd())
+        if root is None:
+            return 0
+        sidecar = read_sidecar(root)
+        if sidecar is None:
+            return 0
+        line, attention = _status_line(root)
+        if attention:
+            try:
+                _apply(root, sidecar["profile"], sidecar["applied"], quiet=True)
+                print(
+                    f"claude-code-sandbox: {line} — synced now; settings "
+                    "live-reload, so current session should pick this up"
+                )
+            except ToolError as e:
+                print(f"claude-code-sandbox: {line} — sync failed: {e}")
+    except Exception as e:  # noqa: BLE001 — advisory surface, never block a session
+        print(f"claude-code-sandbox: hook error (advisory): {e}")
+    return 0
+
+
+def cmd_hook_config_change(args: argparse.Namespace) -> int:
+    """Advisory ConfigChange canary: verify the applied blob survived a
+    foreign settings write. Always exits 0."""
+    try:
+        root = find_repo_root(Path.cwd())
+        if root is None:
+            return 0
+        sidecar = read_sidecar(root)
+        if sidecar is None:
+            return 0
+        settings = read_json(settings_path(root))
+        merged, _ = merge(settings, sidecar["applied"], sidecar["applied"])
+        if merged != settings:
+            print(
+                "claude-code-sandbox: a settings write dropped tool-owned keys "
+                f"in {settings_path(root)} — run `claude-code-sandbox sync` "
+                "(and report this: it means Claude Code's writer clobbered "
+                "foreign keys)"
+            )
+    except Exception as e:  # noqa: BLE001 — advisory surface, never block a session
+        print(f"claude-code-sandbox: hook error (advisory): {e}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="claude-code-sandbox",
+        description="Enroll checkouts into nix-declared Claude Code sandbox profiles",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def add(name: str, fn: Any, **kwargs: Any) -> argparse.ArgumentParser:
+        p = sub.add_parser(name, **kwargs)
+        p.set_defaults(fn=fn)
+        return p
+
+    p = add("enroll", cmd_enroll, help="bind this checkout to a profile")
+    p.add_argument("--profile", default="default")
+    p.add_argument("directory", nargs="?", default=".")
+    p.add_argument("--quiet", action="store_true")
+
+    p = add("retarget", cmd_retarget, help="rebind this checkout to a different profile")
+    p.add_argument("profile")
+    p.add_argument("directory", nargs="?", default=".")
+    p.add_argument("--quiet", action="store_true")
+
+    p = add("abandon", cmd_retarget, help="bind to the reserved empty profile 'none'")
+    p.set_defaults(profile=NONE_PROFILE)
+    p.add_argument("directory", nargs="?", default=".")
+    p.add_argument("--quiet", action="store_true")
+
+    p = add("sync", cmd_sync, help="re-apply the bound profile (here or --all)")
+    p.add_argument("--all", action="store_true", help="sync every enrolled checkout under the scan roots")
+    p.add_argument("directory", nargs="?", default=".")
+    p.add_argument("--quiet", action="store_true")
+
+    p = add("status", cmd_status, help="report this checkout's binding")
+    p.add_argument("directory", nargs="?", default=".")
+
+    add("scan", cmd_scan, help="walk scan roots and report every checkout")
+
+    p = add("materialize", cmd_materialize, help="clone + enroll a registry-declared project")
+    p.add_argument("name")
+
+    add("hook-session-start", cmd_hook_session_start, help=argparse.SUPPRESS)
+    add("hook-config-change", cmd_hook_config_change, help=argparse.SUPPRESS)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return args.fn(args)
+    except ToolError as e:
+        print(f"claude-code-sandbox: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

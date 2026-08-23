@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: LGPL-3.0-or-later
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-code-sandbox"
+version = "0.1.0"
+description = "Nix-authored per-project configuration for Claude Code's native sandbox"
+requires-python = ">=3.11"
+license = "LGPL-3.0-or-later"
+
+[project.scripts]
+claude-code-sandbox = "claude_code_sandbox.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

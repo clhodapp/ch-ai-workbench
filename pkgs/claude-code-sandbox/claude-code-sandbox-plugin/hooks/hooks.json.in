@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@claude-code-sandbox@/bin/claude-code-sandbox hook-session-start"
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@claude-code-sandbox@/bin/claude-code-sandbox hook-config-change"
+          }
+        ]
+      }
+    ]
+  }
+}
