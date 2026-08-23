@@ -6,6 +6,15 @@
 # $XDG_CONFIG_HOME/claude-code-sandbox/, deploys the CLI and the
 # skills-dir plugin, and re-syncs enrolled checkouts at every switch.
 #
+# Upstream references — check these when a Claude Code update changes
+# sandbox behavior or before emitting new keys:
+#
+#   https://code.claude.com/docs/en/settings-reference   (canonical key
+#     names, nesting, and scopes; every key this module emits was
+#     audited against it 2026-08-22, all exact)
+#   https://code.claude.com/docs/en/sandboxing           (behavior,
+#     platform setup, security notes)
+#
 # Design facts this module encodes (spike-verified 2026-08-22):
 #
 # - The store mask is mount-level: `denyRead ["/nix/store"]` plus exact
