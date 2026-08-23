@@ -81,6 +81,16 @@ let
         ]
         ++ cfg.runtime.sandboxTools
       );
+      # allowNix auto-grants the daemon socket; that promotion is the
+      # one place a null option can become non-null in the fragment.
+      effectiveUnixSockets =
+        let
+          auto = lib.optional profile.allowNix "/nix/var/nix/daemon-socket/socket";
+        in
+        if profile.allowUnixSockets == null && auto == [ ] then
+          null
+        else
+          (if profile.allowUnixSockets == null then [ ] else profile.allowUnixSockets) ++ auto;
       spec = builtins.toJSON {
         masked = !profile.allowNix;
         extraAllowRead = profile.extraAllowRead;
@@ -88,8 +98,7 @@ let
         allowedDomains = profile.allowedDomains;
         deniedDomains = profile.deniedDomains;
         excludedCommands = profile.excludedCommands;
-        allowUnixSockets =
-          profile.allowUnixSockets ++ lib.optional profile.allowNix "/nix/var/nix/daemon-socket/socket";
+        allowUnixSockets = effectiveUnixSockets;
         path = lib.concatStringsSep ":" ([ "${farm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools);
         shell = runtimeShell;
         extraEnv = profile.extraEnv;
@@ -153,39 +162,43 @@ let
                 else:
                     dst[k] = v
 
+        # Uniform decode: spec fields are null when the option was not
+        # set; null = omit from the fragment, anything else (including
+        # empty) is carried verbatim.
         fragment = {
             "sandbox": {
                 "enabled": True,
                 "failIfUnavailable": True,
                 "allowUnsandboxedCommands": False,
             },
-            "env": {"PATH": spec["path"], "SHELL": spec["shell"], **spec["extraEnv"]},
+            "env": {
+                "PATH": spec["path"],
+                "SHELL": spec["shell"],
+                **(spec["extraEnv"] or {}),
+            },
         }
         fs = {}
         if spec["masked"]:
             fs["denyRead"] = ["/nix/store"]
-            fs["allowRead"] = closure + spec["extraAllowRead"]
-        elif spec["extraAllowRead"]:
+            fs["allowRead"] = closure + (spec["extraAllowRead"] or [])
+        elif spec["extraAllowRead"] is not None:
             fs["allowRead"] = spec["extraAllowRead"]
-        if spec["allowWrite"]:
+        if spec["allowWrite"] is not None:
             fs["allowWrite"] = spec["allowWrite"]
         if fs:
             fragment["sandbox"]["filesystem"] = fs
 
         net = {}
-        if spec["allowedDomains"] is not None:
-            net["allowedDomains"] = spec["allowedDomains"]
-        if spec["deniedDomains"]:
-            net["deniedDomains"] = spec["deniedDomains"]
-        if spec["allowUnixSockets"]:
-            net["allowUnixSockets"] = spec["allowUnixSockets"]
+        for key in ("allowedDomains", "deniedDomains", "allowUnixSockets"):
+            if spec[key] is not None:
+                net[key] = spec[key]
         if net:
             fragment["sandbox"]["network"] = net
 
-        if spec["excludedCommands"]:
+        if spec["excludedCommands"] is not None:
             fragment["sandbox"]["excludedCommands"] = spec["excludedCommands"]
 
-        deep_update(fragment, spec["extraSettings"])
+        deep_update(fragment, spec["extraSettings"] or {})
 
         out = json.dumps(fragment, indent=2)
         limit = 100_000
@@ -256,14 +269,19 @@ let
           an unmasked store makes every installed tool reachable.
         '';
       };
+      # Uniform missing-ness convention for every optional field below:
+      # null (the default) = absent from the fragment entirely; any
+      # non-null value, including [] or {}, = the fragment carries
+      # exactly what you set (and the key joins the tool-managed merge
+      # domain). No per-option empty-vs-absent folklore.
       extraAllowRead = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
         description = "Additional allowRead paths merged into the fragment.";
       };
       allowWrite = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
         description = ''
           Paths writable beyond the sandbox default (cwd + session tmp).
           Writes into PATH-bearing or shell-config directories are code
@@ -274,26 +292,27 @@ let
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
         description = ''
-          Network domain allowlist for sandboxed commands; null leaves
-          network rules to lower settings scopes.
+          Network domain allowlist for sandboxed commands. [] is a real
+          policy (deny all domains); null leaves network rules to lower
+          settings scopes.
         '';
       };
       deniedDomains = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
         description = "Network domain denylist for sandboxed commands.";
       };
       excludedCommands = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
         description = ''
           Commands that run OUTSIDE the sandbox entirely. Each entry is
           a hole in the profile; prefer widening the profile instead.
         '';
       };
       allowUnixSockets = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
+        type = lib.types.nullOr (lib.types.listOf lib.types.str);
+        default = null;
         description = ''
           Unix socket paths reachable from sandboxed commands. A socket
           is often a capability grant (docker.sock is host access) —
@@ -302,13 +321,13 @@ let
         '';
       };
       extraEnv = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
-        default = { };
+        type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+        default = null;
         description = "Extra env vars carried by the fragment.";
       };
       extraSettings = lib.mkOption {
-        type = lib.types.attrs;
-        default = { };
+        type = lib.types.nullOr lib.types.attrs;
+        default = null;
         description = ''
           Deep-merged into the generated fragment: freeform passthrough
           (RFC-42 style) for settings keys this module does not
