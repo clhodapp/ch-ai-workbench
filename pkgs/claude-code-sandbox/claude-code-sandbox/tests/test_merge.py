@@ -148,5 +148,55 @@ class AdhocTest(unittest.TestCase):
         self.assertEqual(extras, ["/extra"])
 
 
+class NullSafetyTest(unittest.TestCase):
+    def test_null_scalar_in_current_within_domain(self):
+        current = dict(FRAG_A)
+        current["env"] = {**FRAG_A["env"], "PATH": None}
+        merged, report = merge(current, FRAG_A, FRAG_A)
+        self.assertEqual(merged["env"]["PATH"], "/profile-a/bin")
+        self.assertTrue(any(p == "env.PATH" for p, _, _ in report.overridden_scalars))
+
+    def test_null_where_dict_expected_in_current(self):
+        current = dict(FRAG_A)
+        current["sandbox"] = None
+        merged, _ = merge(current, FRAG_A, FRAG_B)
+        self.assertEqual(merged["sandbox"], FRAG_B["sandbox"])
+
+    def test_null_where_list_expected_in_current(self):
+        current = dict(FRAG_A)
+        current["sandbox"] = {
+            **FRAG_A["sandbox"],
+            "filesystem": {"denyRead": None, "allowRead": None},
+        }
+        merged, _ = merge(current, FRAG_A, FRAG_A)
+        self.assertEqual(
+            merged["sandbox"]["filesystem"], FRAG_A["sandbox"]["filesystem"]
+        )
+
+    def test_null_in_base_subtracts_as_nothing(self):
+        base = {"env": {"PATH": None}}
+        current = {"env": {"PATH": "/hand/bin"}}
+        merged, report = merge(current, base, {})
+        self.assertEqual(merged["env"], {"PATH": "/hand/bin"})
+        self.assertTrue(report.preserved_drift)
+
+    def test_null_entries_inside_arrays(self):
+        current = {"sandbox": {"filesystem": {"allowRead": [None, "/keep"]}}}
+        base = {"sandbox": {"filesystem": {"allowRead": [None]}}}
+        new = {"sandbox": {"filesystem": {"allowRead": ["/nix/store/x"]}}}
+        merged, _ = merge(current, base, new)
+        self.assertEqual(
+            merged["sandbox"]["filesystem"]["allowRead"], ["/nix/store/x", "/keep"]
+        )
+
+    def test_null_fragment_value_passes_through_as_scalar(self):
+        merged, _ = merge({}, {}, {"sandbox": {"weird": None}})
+        self.assertIsNone(merged["sandbox"]["weird"])
+
+    def test_adhoc_walk_tolerates_nulls(self):
+        current = {"sandbox": None, "env": {"PATH": None}}
+        self.assertEqual(adhoc_additions(current, FRAG_A), [])
+
+
 if __name__ == "__main__":
     unittest.main()
