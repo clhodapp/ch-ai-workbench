@@ -308,11 +308,11 @@ in
       basePackages = lib.mkOption {
         type = lib.types.listOf lib.types.package;
         default = [
-          pkgs.bashInteractive
+          pkgs.bashNonInteractive
           pkgs.coreutils
           pkgs.cacert
         ];
-        defaultText = lib.literalExpression "[ pkgs.bashInteractive pkgs.coreutils pkgs.cacert ]";
+        defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert ]";
         description = ''
           The floor added to every profile farm: shell, core utilities,
           TLS certificates. On NixOS even /bin/sh and /etc/ssl resolve
@@ -321,13 +321,16 @@ in
       };
       shellPackage = lib.mkOption {
         type = lib.types.shellPackage;
-        default = pkgs.bashInteractive;
-        defaultText = lib.literalExpression "pkgs.bashInteractive";
+        default = pkgs.bashNonInteractive;
+        defaultText = lib.literalExpression "pkgs.bashNonInteractive";
         description = ''
-          Pinned as env.SHELL in every fragment. The Bash tool execs
-          $SHELL, and the login shell resolves through the profile-farm
-          store path (whose closure is everything installed), so the
-          sandbox shell must be profile-owned instead.
+          Pinned as env.SHELL in every fragment. The Bash tool follows
+          $SHELL, and a login shell resolves through profile-farm store
+          paths whose closure is everything installed — so the sandbox
+          shell must be profile-owned. Non-interactive bash on purpose:
+          tool commands never use readline, and a non-interactive
+          posture keeps the session-start rc snapshot from flavoring
+          the sandbox world with login shell config.
         '';
       };
     };
