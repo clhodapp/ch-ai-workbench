@@ -56,7 +56,7 @@ files, so synced rules generally reach running sessions.
 {
   claude-code-sandbox = {
     enable = true;
-    claudePackage = pkgs.claude-code;
+    runtime.claudePackage = pkgs.claude-code;
     profiles.default.toolset = [ pkgs.ripgrep pkgs.jq ];
     profiles.python-work = {
       toolset = [ pkgs.python3 pkgs.ruff pkgs.ripgrep ];

@@ -37,40 +37,40 @@ let
   cfg = config.claude-code-sandbox;
   system = pkgs.stdenv.hostPlatform.system;
 
-  bash = pkgs.bashInteractive;
-  implicitPackages = [
-    bash
-    pkgs.coreutils
-    pkgs.cacert
-  ];
-
   farmStateSubpath = name: ".local/state/claude-code-sandbox/profiles/${name}";
   farmAbsPath = name: "${config.home.homeDirectory}/${farmStateSubpath name}";
 
+  # Every beyond-toolset need flows from cfg.runtime through here — one
+  # system, inspectable in the option docs, no hidden splices.
   profileFarm =
     name: profile:
     pkgs.buildEnv {
       name = "ccs-profile-${name}";
-      paths = profile.toolset ++ implicitPackages;
+      paths = profile.toolset ++ cfg.runtime.basePackages;
     };
+
+  runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
 
   fragmentDrv =
     name: profile:
     let
       farm = profileFarm name profile;
       closureFile = pkgs.writeClosure (
-        [ farm ] ++ lib.optional (cfg.claudePackage != null) cfg.claudePackage
+        [
+          farm
+          cfg.runtime.claudePackage
+          cfg.runtime.shellPackage
+        ]
+        ++ cfg.runtime.sandboxTools
       );
       spec = builtins.toJSON {
         masked = !profile.allowNix;
         extraAllowRead = profile.extraAllowRead;
         allowedDomains = profile.allowedDomains;
-        path = lib.concatStringsSep ":" [
-          "${farmAbsPath name}/bin"
-          "${pkgs.bubblewrap}/bin"
-          "${pkgs.socat}/bin"
-        ];
-        shell = "${bash}/bin/bash";
+        path = lib.concatStringsSep ":" (
+          [ "${farmAbsPath name}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools
+        );
+        shell = runtimeShell;
         extraEnv = profile.extraEnv;
         extraSettings = profile.extraSettings;
       };
@@ -238,15 +238,57 @@ in
       description = "The skills-dir plugin (ceremony skill + advisory hooks).";
     };
 
-    claudePackage = lib.mkOption {
-      type = lib.types.nullOr lib.types.package;
-      default = null;
-      description = ''
-        The claude-code package this machine runs. Its closure is added
-        to every masked profile's allowRead: the sandbox helper re-enters
-        it inside the sandbox, and without it masked profiles fail closed
-        on every command. Required in practice for masked profiles.
-      '';
+    # Everything a profile needs beyond its declared toolset lives here,
+    # in one visible surface. These are not optional conveniences: the
+    # spike showed each one's absence breaks sandboxed sessions outright.
+    runtime = {
+      claudePackage = lib.mkOption {
+        type = lib.types.package;
+        description = ''
+          The claude-code package this machine actually runs (no
+          default: only the config wiring claude into the profile knows
+          it). Its closure is in every masked profile's allowRead — the
+          sandbox helper re-enters it inside the sandbox, and without it
+          every sandboxed command fails closed.
+        '';
+      };
+      sandboxTools = lib.mkOption {
+        type = lib.types.listOf lib.types.package;
+        default = [
+          pkgs.bubblewrap
+          pkgs.socat
+        ];
+        defaultText = lib.literalExpression "[ pkgs.bubblewrap pkgs.socat ]";
+        description = ''
+          On every profile's PATH (and in its closure): the sandbox
+          runtime needs these to construct sandboxes at all.
+        '';
+      };
+      basePackages = lib.mkOption {
+        type = lib.types.listOf lib.types.package;
+        default = [
+          pkgs.bashInteractive
+          pkgs.coreutils
+          pkgs.cacert
+        ];
+        defaultText = lib.literalExpression "[ pkgs.bashInteractive pkgs.coreutils pkgs.cacert ]";
+        description = ''
+          The floor added to every profile farm: shell, core utilities,
+          TLS certificates. On NixOS even /bin/sh and /etc/ssl resolve
+          into the store, so a farm without these is not a Unix.
+        '';
+      };
+      shellPackage = lib.mkOption {
+        type = lib.types.shellPackage;
+        default = pkgs.bashInteractive;
+        defaultText = lib.literalExpression "pkgs.bashInteractive";
+        description = ''
+          Pinned as env.SHELL in every fragment. The Bash tool execs
+          $SHELL, and the login shell resolves through the profile-farm
+          store path (whose closure is everything installed), so the
+          sandbox shell must be profile-owned instead.
+        '';
+      };
     };
 
     profiles = lib.mkOption {
@@ -331,15 +373,6 @@ in
         message = ''
           claude-code-sandbox: the profile name `none` is reserved (the
           deliberately-empty target of `abandon`); it cannot be defined.
-        '';
-      }
-      {
-        assertion = cfg.claudePackage != null || lib.all (p: p.allowNix) (lib.attrValues cfg.profiles);
-        message = ''
-          claude-code-sandbox: masked profiles need `claudePackage` set —
-          the sandbox helper re-enters the claude-code package inside the
-          sandbox, and without its closure in allowRead every sandboxed
-          command fails.
         '';
       }
     ];
