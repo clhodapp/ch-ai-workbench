@@ -93,6 +93,40 @@ let
             line for line in open(sys.argv[2]).read().splitlines() if line
         )
 
+        # extraSettings/extraEnv transport keys this module does NOT
+        # generate; the generated keys carry the module's guarantees
+        # (fail-closed posture, the mask, the farm PATH/SHELL) and may
+        # not be silently overridden through the escape hatch. Wanting a
+        # different value for one of these is a profile-option request,
+        # not a passthrough.
+        OWNED = [
+            ("extraSettings", ["sandbox", "enabled"]),
+            ("extraSettings", ["sandbox", "failIfUnavailable"]),
+            ("extraSettings", ["sandbox", "allowUnsandboxedCommands"]),
+            ("extraSettings", ["sandbox", "filesystem", "denyRead"]),
+            ("extraSettings", ["sandbox", "filesystem", "allowRead"]),
+            ("extraSettings", ["sandbox", "network", "allowedDomains"]),
+            ("extraSettings", ["env"]),
+            ("extraEnv", ["PATH"]),
+            ("extraEnv", ["SHELL"]),
+        ]
+        def present(tree, path):
+            for part in path:
+                if not isinstance(tree, dict) or part not in tree:
+                    return False
+                tree = tree[part]
+            return True
+        collisions = [
+            f"{src}.{'.'.join(path)}"
+            for src, path in OWNED
+            if present(spec[src], path)
+        ]
+        if collisions:
+            sys.exit(
+                "claude-code-sandbox: profile escape hatches may not override "
+                "generator-owned keys: " + ", ".join(collisions)
+            )
+
         def deep_update(dst, src):
             for k, v in src.items():
                 if isinstance(v, dict) and isinstance(dst.get(k), dict):
@@ -214,9 +248,12 @@ let
         type = lib.types.attrs;
         default = { };
         description = ''
-          Deep-merged into the generated fragment last; escape hatch for
-          sandbox keys this module has no option for (e.g.
-          autoAllowBashIfSandboxed).
+          Deep-merged into the generated fragment: freeform passthrough
+          (RFC-42 style) for settings keys this module does not
+          generate, e.g. autoAllowBashIfSandboxed. Claude Code's own
+          loader validates the keys. Generator-owned keys (the
+          fail-closed posture, the mask, env.PATH/SHELL) may not be
+          overridden here — the fragment build fails on collision.
         '';
       };
     };
