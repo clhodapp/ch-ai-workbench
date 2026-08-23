@@ -72,7 +72,12 @@ let
       spec = builtins.toJSON {
         masked = !profile.allowNix;
         extraAllowRead = profile.extraAllowRead;
+        allowWrite = profile.allowWrite;
         allowedDomains = profile.allowedDomains;
+        deniedDomains = profile.deniedDomains;
+        excludedCommands = profile.excludedCommands;
+        allowUnixSockets =
+          profile.allowUnixSockets ++ lib.optional profile.allowNix "/nix/var/nix/daemon-socket/socket";
         path = lib.concatStringsSep ":" ([ "${farm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools);
         shell = runtimeShell;
         extraEnv = profile.extraEnv;
@@ -105,9 +110,9 @@ let
             ("extraSettings", ["sandbox", "enabled"]),
             ("extraSettings", ["sandbox", "failIfUnavailable"]),
             ("extraSettings", ["sandbox", "allowUnsandboxedCommands"]),
-            ("extraSettings", ["sandbox", "filesystem", "denyRead"]),
-            ("extraSettings", ["sandbox", "filesystem", "allowRead"]),
-            ("extraSettings", ["sandbox", "network", "allowedDomains"]),
+            ("extraSettings", ["sandbox", "excludedCommands"]),
+            ("extraSettings", ["sandbox", "filesystem"]),
+            ("extraSettings", ["sandbox", "network"]),
             ("extraSettings", ["env"]),
             ("extraEnv", ["PATH"]),
             ("extraEnv", ["SHELL"]),
@@ -144,19 +149,30 @@ let
             },
             "env": {"PATH": spec["path"], "SHELL": spec["shell"], **spec["extraEnv"]},
         }
+        fs = {}
         if spec["masked"]:
-            fragment["sandbox"]["filesystem"] = {
-                "denyRead": ["/nix/store"],
-                "allowRead": closure + spec["extraAllowRead"],
-            }
+            fs["denyRead"] = ["/nix/store"]
+            fs["allowRead"] = closure + spec["extraAllowRead"]
         elif spec["extraAllowRead"]:
-            fragment["sandbox"]["filesystem"] = {
-                "allowRead": spec["extraAllowRead"]
-            }
+            fs["allowRead"] = spec["extraAllowRead"]
+        if spec["allowWrite"]:
+            fs["allowWrite"] = spec["allowWrite"]
+        if fs:
+            fragment["sandbox"]["filesystem"] = fs
+
+        net = {}
         if spec["allowedDomains"] is not None:
-            fragment["sandbox"]["network"] = {
-                "allowedDomains": spec["allowedDomains"]
-            }
+            net["allowedDomains"] = spec["allowedDomains"]
+        if spec["deniedDomains"]:
+            net["deniedDomains"] = spec["deniedDomains"]
+        if spec["allowUnixSockets"]:
+            net["allowUnixSockets"] = spec["allowUnixSockets"]
+        if net:
+            fragment["sandbox"]["network"] = net
+
+        if spec["excludedCommands"]:
+            fragment["sandbox"]["excludedCommands"] = spec["excludedCommands"]
+
         deep_update(fragment, spec["extraSettings"])
 
         out = json.dumps(fragment, indent=2)
@@ -233,12 +249,44 @@ let
         default = [ ];
         description = "Additional allowRead paths merged into the fragment.";
       };
+      allowWrite = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Paths writable beyond the sandbox default (cwd + session tmp).
+          Writes into PATH-bearing or shell-config directories are code
+          execution in other contexts — scope narrowly.
+        '';
+      };
       allowedDomains = lib.mkOption {
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
         description = ''
           Network domain allowlist for sandboxed commands; null leaves
           network rules to lower settings scopes.
+        '';
+      };
+      deniedDomains = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Network domain denylist for sandboxed commands.";
+      };
+      excludedCommands = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Commands that run OUTSIDE the sandbox entirely. Each entry is
+          a hole in the profile; prefer widening the profile instead.
+        '';
+      };
+      allowUnixSockets = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Unix socket paths reachable from sandboxed commands. A socket
+          is often a capability grant (docker.sock is host access) —
+          scope carefully. allowNix adds the nix daemon socket
+          automatically.
         '';
       };
       extraEnv = lib.mkOption {
