@@ -21,10 +21,10 @@ All verbs are cwd-local unless noted. Run them with the Bash tool.
 - `claude-code-sandbox retarget NAME` — rebind to another profile.
 - `claude-code-sandbox abandon` — bind to the reserved empty profile
   `none` (deliberate opt-out that survives syncs; not a deletion).
-- `claude-code-sandbox sync [--all]` — re-apply the bound profile after
-  a profile edit; `--all` walks the scan roots.
-- `claude-code-sandbox scan` — report every checkout under the scan
-  roots.
+- `claude-code-sandbox sync` — re-apply the bound profile after a
+  profile edit.
+- `claude-code-sandbox scan DIR` — report every checkout under the
+  given directory (the invoker supplies the scope; nothing is assumed).
 - `claude-code-sandbox materialize NAME` — clone + enroll a project
   declared in the registry (network; user-invoked).
 

@@ -7,7 +7,6 @@ reads it. Shape::
 
     {
       "profiles": {"default": "/nix/store/...-fragment.json", ...},
-      "scanRoots": ["/home/user/Projects"],
       "projects": {"name": {"url": "...", "path": "...", "profile": "..."}}
     }
 
@@ -67,5 +66,3 @@ def load_fragment(registry: dict[str, Any], name: str) -> dict[str, Any]:
     return value
 
 
-def scan_roots(registry: dict[str, Any]) -> list[Path]:
-    return [Path(p).expanduser() for p in registry.get("scanRoots") or []]

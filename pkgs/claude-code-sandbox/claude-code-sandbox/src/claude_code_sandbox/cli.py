@@ -29,7 +29,7 @@ from .files import (
     write_sidecar,
 )
 from .merge import adhoc_additions, merge
-from .registry import load_fragment, load_registry, scan_roots
+from .registry import load_fragment, load_registry
 
 NONE_PROFILE = "none"
 _SKIP_DIRS = {".git", "node_modules", ".direnv", ".cache", "result"}
@@ -141,19 +141,6 @@ def cmd_retarget(args: argparse.Namespace) -> int:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    if args.all:
-        registry = load_registry()
-        rc = 0
-        for root in _iter_enrolled(scan_roots(registry)):
-            sidecar = read_sidecar(root)
-            if sidecar is None:
-                continue
-            try:
-                _apply(root, sidecar["profile"], sidecar["applied"], args.quiet)
-            except ToolError as e:
-                print(f"{root}: {e}", file=sys.stderr)
-                rc = 1
-        return rc
     root = _root_or_die(Path(args.directory))
     sidecar = read_sidecar(root)
     if sidecar is None:
@@ -170,12 +157,18 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    registry = load_registry()
+    top = Path(args.directory).expanduser()
+    if not top.is_dir():
+        raise ToolError(f"{top} is not a directory")
     attention = False
-    for root in _iter_enrolled(scan_roots(registry)):
+    found = False
+    for root in _iter_enrolled([top]):
+        found = True
         line, needs = _status_line(root)
         print(line)
         attention = attention or needs
+    if not found:
+        print(f"{top}: no checkouts with .claude state found")
     return 2 if attention else 0
 
 
@@ -253,15 +246,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("directory", nargs="?", default=".")
     p.add_argument("--quiet", action="store_true")
 
-    p = add("sync", cmd_sync, help="re-apply the bound profile (here or --all)")
-    p.add_argument("--all", action="store_true", help="sync every enrolled checkout under the scan roots")
+    p = add("sync", cmd_sync, help="re-apply the bound profile to this checkout")
     p.add_argument("directory", nargs="?", default=".")
     p.add_argument("--quiet", action="store_true")
 
     p = add("status", cmd_status, help="report this checkout's binding")
     p.add_argument("directory", nargs="?", default=".")
 
-    add("scan", cmd_scan, help="walk scan roots and report every checkout")
+    p = add("scan", cmd_scan, help="walk the given directory and report every checkout under it")
+    p.add_argument("directory")
 
     p = add("materialize", cmd_materialize, help="clone + enroll a registry-declared project")
     p.add_argument("name")

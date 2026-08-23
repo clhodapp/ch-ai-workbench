@@ -48,7 +48,6 @@ class CliTest(unittest.TestCase):
                         "none": str(none_path),
                         "default": str(default_path),
                     },
-                    "scanRoots": [str(tmp / "projects")],
                 }
             )
         )
@@ -116,14 +115,15 @@ class CliTest(unittest.TestCase):
         rc = self.run_cli("status", str(self.repo))
         self.assertEqual(rc, 0)
 
-    def test_sync_all_covers_scan_roots(self):
+    def test_scan_walks_given_directory_only(self):
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
-        changed = dict(FRAGMENT)
-        changed["env"] = {"PATH": "/synced/bin"}
-        self.fragment_path.write_text(json.dumps(changed))
-        rc = self.run_cli("sync", "--all", "--quiet")
+        rc = self.run_cli("scan", str(Path(self._tmp.name) / "projects"))
         self.assertEqual(rc, 0)
-        self.assertEqual(self.settings()["env"]["PATH"], "/synced/bin")
+        # A directory containing nothing enrolled reports cleanly.
+        empty = Path(self._tmp.name) / "elsewhere"
+        empty.mkdir()
+        rc = self.run_cli("scan", str(empty))
+        self.assertEqual(rc, 0)
 
     def test_unknown_profile_fails_cleanly(self):
         rc = self.run_cli("enroll", "--profile", "nope", str(self.repo), "--quiet")

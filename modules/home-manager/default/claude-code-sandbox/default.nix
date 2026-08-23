@@ -3,8 +3,12 @@
 # Home-manager half of claude-code-sandbox: declares named sandbox
 # *profiles* (toolsets compiled to Claude Code native-sandbox rules),
 # emits them as fragments plus a registry under
-# $XDG_CONFIG_HOME/claude-code-sandbox/, deploys the CLI and the
-# skills-dir plugin, and re-syncs enrolled checkouts at every switch.
+# $XDG_CONFIG_HOME/claude-code-sandbox/, and deploys the CLI and the
+# skills-dir plugin. HM never touches checkouts: freshness converges at
+# point of use (the SessionStart hook heals staleness in the session it
+# fires in; an unhealed checkout runs its consistent old closure) — no
+# enumeration of enrollments exists anywhere, so nothing breaks when
+# folders move.
 #
 # Upstream references — check these when a Claude Code update changes
 # sandbox behavior or before emitting new keys:
@@ -226,7 +230,6 @@ let
   registry = pkgs.writeText "ccs-registry.json" (
     builtins.toJSON {
       profiles = lib.mapAttrs (name: _: fragmentAbsPath name) allFragments;
-      scanRoots = cfg.scanRoots;
       projects = lib.mapAttrs (_: p: {
         inherit (p) url path;
         profile = p.profile;
@@ -425,12 +428,6 @@ in
       '';
     };
 
-    scanRoots = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ "~/Projects" ];
-      description = "Directories `scan`/`sync --all` walk for enrolled checkouts.";
-    };
-
     projects = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule {
@@ -478,15 +475,6 @@ in
       description = "Deploy the skills-dir plugin to ~/.claude/skills/claude-code-sandbox.";
     };
 
-    syncOnSwitch = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Re-apply profiles to enrolled checkouts under the scan roots at
-        every switch (converging derived state; advisory, never fails
-        the switch).
-      '';
-    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -521,11 +509,5 @@ in
         );
       };
 
-    home.activation.claudeCodeSandboxSync = lib.mkIf cfg.syncOnSwitch (
-      config.lib.dag.entryAfter [ "writeBoundary" ] ''
-        ${cfg.package}/bin/claude-code-sandbox sync --all --quiet \
-          || verboseEcho "claude-code-sandbox sync --all reported issues (advisory)"
-      ''
-    );
   };
 }

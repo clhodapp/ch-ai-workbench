@@ -43,14 +43,17 @@ arrays persist across syncs and are reported as local additions.
 | `retarget NAME` | Rebind to a different profile |
 | `abandon` | Bind to the reserved empty profile `none` |
 | `status` | This checkout's binding, staleness, local additions |
-| `scan` | Same, for every checkout under the scan roots |
-| `sync [--all]` | Re-apply the bound profile after a profile change |
+| `scan DIR` | Same, for every checkout under the given directory |
+| `sync` | Re-apply the bound profile after a profile change |
 | `materialize NAME` | Clone and enroll a registry-declared project |
 
-Profiles regenerate at every home-manager switch, and the switch also
-re-syncs enrolled checkouts under the scan roots, so converging the
-system converges the sandboxes. Claude Code live-reloads settings
-files, so synced rules generally reach running sessions.
+Profiles regenerate at every home-manager switch; enrolled checkouts
+converge at point of use — the session-start hook heals staleness in
+the session it fires in, and an unhealed checkout keeps running its
+previous closure consistently. No enumeration of enrollments exists
+anywhere, so nothing breaks when folders move. Claude Code
+live-reloads settings files, so synced rules generally reach running
+sessions.
 
 ## Module sketch
 

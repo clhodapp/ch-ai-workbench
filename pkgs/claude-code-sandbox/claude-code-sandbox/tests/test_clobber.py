@@ -44,7 +44,6 @@ class ClobberTest(unittest.TestCase):
                         "work": str(fragment_path),
                         "none": str(config / "profiles" / "none.json"),
                     },
-                    "scanRoots": [str(tmp / "projects")],
                 }
             )
         )
