@@ -84,14 +84,22 @@ def _status_line(root: Path) -> tuple[str, bool]:
     except ToolError as e:
         return (f"{root}: profile '{profile}' DANGLING ({e})", True)
     stale = fragment != applied
+    # Replay the applied blob: if re-merging it changes anything, a
+    # foreign writer dropped tool-owned keys (clobbering is removals, so
+    # neither staleness nor ad-hoc detection would see it).
+    replayed, _ = merge(settings, applied, applied)
+    clobbered = replayed != settings
     adhoc = adhoc_additions(settings, applied)
     bits = [f"profile '{profile}'"]
-    bits.append("STALE (sync to update)" if stale else "current")
+    if clobbered:
+        bits.append("CLOBBERED: applied keys missing from settings (sync restores)")
+    else:
+        bits.append("STALE (sync to update)" if stale else "current")
     if adhoc:
         entries = sum(len(x) for _, x in adhoc)
         paths = ", ".join(p for p, _ in adhoc)
         bits.append(f"{entries} local addition(s) in {paths}")
-    return (f"{root}: " + ", ".join(bits), stale)
+    return (f"{root}: " + ", ".join(bits), stale or clobbered)
 
 
 def _iter_enrolled(roots: list[Path]) -> list[Path]:
