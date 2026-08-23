@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "@claude-code-sandbox@/bin/claude-code-sandbox hook-session-start"
+            "command": "@ccsTool@/bin/claude-code-sandbox hook-session-start"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "@claude-code-sandbox@/bin/claude-code-sandbox hook-config-change"
+            "command": "@ccsTool@/bin/claude-code-sandbox hook-config-change"
           }
         ]
       }

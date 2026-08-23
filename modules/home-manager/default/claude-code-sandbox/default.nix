@@ -140,11 +140,9 @@ let
   fragmentXdgPath = name: "claude-code-sandbox/profiles/${name}.json";
   fragmentAbsPath = name: "${config.xdg.configHome}/${fragmentXdgPath name}";
 
-  allFragments =
-    lib.mapAttrs fragmentDrv cfg.profiles
-    // {
-      none = noneFragment;
-    };
+  allFragments = lib.mapAttrs fragmentDrv cfg.profiles // {
+    none = noneFragment;
+  };
 
   registry = pkgs.writeText "ccs-registry.json" (
     builtins.toJSON {
@@ -336,9 +334,7 @@ in
         '';
       }
       {
-        assertion =
-          cfg.claudePackage != null
-          || lib.all (p: p.allowNix) (lib.attrValues cfg.profiles);
+        assertion = cfg.claudePackage != null || lib.all (p: p.allowNix) (lib.attrValues cfg.profiles);
         message = ''
           claude-code-sandbox: masked profiles need `claudePackage` set —
           the sandbox helper re-enters the claude-code package inside the
@@ -352,25 +348,24 @@ in
 
     home.packages = [ cfg.package ];
 
-    xdg.configFile =
-      {
-        "claude-code-sandbox/registry.json".source = registry;
-      }
-      // lib.mapAttrs' (
-        name: drv: lib.nameValuePair (fragmentXdgPath name) { source = drv; }
-      ) allFragments;
+    xdg.configFile = {
+      "claude-code-sandbox/registry.json".source = registry;
+    }
+    // lib.mapAttrs' (
+      name: drv: lib.nameValuePair (fragmentXdgPath name) { source = drv; }
+    ) allFragments;
 
     home.file =
       lib.mapAttrs' (
-        name: profile:
-        lib.nameValuePair (farmStateSubpath name) { source = profileFarm name profile; }
+        name: profile: lib.nameValuePair (farmStateSubpath name) { source = profileFarm name profile; }
       ) cfg.profiles
       // lib.optionalAttrs cfg.plugin.enable {
         ".claude/skills/claude-code-sandbox".source = cfg.pluginPackage;
       }
       // lib.optionalAttrs cfg.baseline.install {
-        ".claude/settings.json".source =
-          pkgs.writeText "claude-settings-baseline.json" (builtins.toJSON monotoneBaseline);
+        ".claude/settings.json".source = pkgs.writeText "claude-settings-baseline.json" (
+          builtins.toJSON monotoneBaseline
+        );
       };
 
     home.activation.claudeCodeSandboxSync = lib.mkIf cfg.syncOnSwitch (

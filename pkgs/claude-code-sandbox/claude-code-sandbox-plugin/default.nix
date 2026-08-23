@@ -14,7 +14,7 @@
 }:
 runCommand "claude-code-sandbox-plugin"
   {
-    inherit claude-code-sandbox;
+    ccsTool = claude-code-sandbox;
     meta = {
       description = "Claude Code skills-dir plugin for claude-code-sandbox";
       license = lib.licenses.lgpl3Plus;
@@ -25,5 +25,5 @@ runCommand "claude-code-sandbox-plugin"
     cp ${./plugin.json} "$out/.claude-plugin/plugin.json"
     cp -r ${./skills} "$out/skills"
     substitute ${./hooks/hooks.json.in} "$out/hooks/hooks.json" \
-      --subst-var claude-code-sandbox
+      --subst-var ccsTool
   ''
