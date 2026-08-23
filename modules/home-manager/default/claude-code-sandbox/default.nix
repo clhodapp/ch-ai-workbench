@@ -18,9 +18,11 @@
 # - Rules ride the exec environment: fragments have a hard size ceiling
 #   (~128KB single-string). The fragment builder fails the build past a
 #   conservative 100KB.
-# - Sandboxed commands exec $SHELL, and the login shell resolves through
-#   the profile-farm store path (whose closure is everything installed),
-#   so every masked profile pins env.SHELL to its own bash instead.
+# - The Bash tool follows $SHELL (documented: tools-reference sources
+#   rc files "depending on your shell", snapshot at session start), and
+#   a login shell resolves through profile-farm store paths whose
+#   closure is everything installed — so every masked profile pins
+#   env.SHELL to its own bash via the documented env mechanism.
 # - The sandbox helper re-enters the claude-code package inside the
 #   sandbox; masked profiles therefore need that package's closure
 #   readable (`claudePackage`).
