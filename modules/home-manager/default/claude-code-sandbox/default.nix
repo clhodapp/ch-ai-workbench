@@ -37,11 +37,15 @@ let
   cfg = config.claude-code-sandbox;
   system = pkgs.stdenv.hostPlatform.system;
 
-  farmStateSubpath = name: ".local/state/claude-code-sandbox/profiles/${name}";
-  farmAbsPath = name: "${config.home.homeDirectory}/${farmStateSubpath name}";
-
   # Every beyond-toolset need flows from cfg.runtime through here — one
   # system, inspectable in the option docs, no hidden splices.
+  #
+  # Fragments reference the farm by EXACT store path, deliberately: a
+  # stable-path indirection would mix worlds at switch (farm repointed
+  # before rules resync = fail-closed tear in live sessions; a checkout
+  # the sync misses would stay torn). With exact paths every checkout is
+  # a consistent world — new after sync, old-but-working when missed
+  # (the old farm stays rooted by the previous HM generation).
   profileFarm =
     name: profile:
     pkgs.buildEnv {
@@ -67,9 +71,7 @@ let
         masked = !profile.allowNix;
         extraAllowRead = profile.extraAllowRead;
         allowedDomains = profile.allowedDomains;
-        path = lib.concatStringsSep ":" (
-          [ "${farmAbsPath name}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools
-        );
+        path = lib.concatStringsSep ":" ([ "${farm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools);
         shell = runtimeShell;
         extraEnv = profile.extraEnv;
         extraSettings = profile.extraSettings;
@@ -389,10 +391,7 @@ in
     ) allFragments;
 
     home.file =
-      lib.mapAttrs' (
-        name: profile: lib.nameValuePair (farmStateSubpath name) { source = profileFarm name profile; }
-      ) cfg.profiles
-      // lib.optionalAttrs cfg.plugin.enable {
+      lib.optionalAttrs cfg.plugin.enable {
         ".claude/skills/claude-code-sandbox".source = cfg.pluginPackage;
       }
       // lib.optionalAttrs cfg.baseline.install {

@@ -19,7 +19,9 @@ built-in sandbox:
   the closure are *nonexistent* inside sandboxed commands, so the
   profile's toolset is the executable world, cryptographically exact —
   no name patterns, no PATH-only hygiene.
-- An `env.PATH` pointing at a stable per-profile bin farm, and
+- An `env.PATH` pointing at the profile's bin farm by exact store
+  path (each checkout sees one consistent world: new after sync,
+  old-but-working when a sync hasn't reached it yet), and
   `env.SHELL` pinned to the profile's bash.
 - Fail-closed posture: `failIfUnavailable` so a sandbox that cannot
   initialize refuses commands instead of silently running them
