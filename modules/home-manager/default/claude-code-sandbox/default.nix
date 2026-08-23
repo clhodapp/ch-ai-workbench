@@ -14,6 +14,9 @@
 #     audited against it 2026-08-22, all exact)
 #   https://code.claude.com/docs/en/sandboxing           (behavior,
 #     platform setup, security notes)
+#   https://code.claude.com/docs/en/env-vars             (env-in-settings
+#     semantics the fragments lean on: launch-independent, live-applied
+#     on save, removals only at next launch, no $VAR expansion)
 #
 # Design facts this module encodes (spike-verified 2026-08-22):
 #
