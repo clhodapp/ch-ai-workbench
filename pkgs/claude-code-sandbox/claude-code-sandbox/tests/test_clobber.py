@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Clobber detection: a foreign writer dropping tool-owned keys must be
-visible to status (attention) and repaired by sync — the model-free
-repair path must not depend on the ConfigChange canary being acted on."""
+"""Integrity detection: applied content missing from the settings file
+(any cause — hand edit, tooling accident) must be visible to status as
+CLOBBERED (attention) and repaired by a plain sync."""
 
 import json
 import os

@@ -1,5 +1,5 @@
 {
   "name": "claude-code-sandbox",
-  "description": "Nix-declared sandbox profiles for Claude Code: enrollment ceremony, staleness tripwire, co-ownership canary",
+  "description": "Nix-declared sandbox profiles for Claude Code: enrollment ceremony and staleness tripwire",
   "version": "0.1.0"
 }

@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-# The skills-dir plugin: ceremony skill + advisory hooks (SessionStart
-# staleness tripwire, ConfigChange co-ownership canary). Deployed by the
+# The skills-dir plugin: ceremony skill + the advisory SessionStart hook
+# (staleness/integrity tripwire with auto-sync). Deployed by the
 # home-manager module into ~/.claude/skills/claude-code-sandbox, where it
 # auto-loads as claude-code-sandbox@skills-dir.
 #
-# The hooks are advisory only: the sandbox design stays correct without
-# them (they always exit 0), and managed policies like
-# allowManagedHooksOnly may suppress them entirely.
+# The hook is advisory only: the sandbox design stays correct without it
+# (it always exits 0), and managed policies like allowManagedHooksOnly
+# may suppress it entirely.
 {
   claude-code-sandbox,
   lib,

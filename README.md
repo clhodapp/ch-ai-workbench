@@ -70,8 +70,8 @@ files, so synced rules generally reach running sessions.
 `default` exists even when empty and is augmentable: checkouts bound to
 it track whatever it becomes. `none` is reserved and deliberately empty
 forever. A skills-dir plugin ships alongside with an enrollment skill
-and two advisory hooks (session-start staleness tripwire, config-change
-co-ownership canary); the design is correct without them.
+and an advisory session-start hook (staleness/integrity tripwire with
+auto-sync); the design is correct without it.
 
 ## Boundaries worth knowing
 

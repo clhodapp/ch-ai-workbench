@@ -226,30 +226,6 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_hook_config_change(args: argparse.Namespace) -> int:
-    """Advisory ConfigChange canary: verify the applied blob survived a
-    foreign settings write. Always exits 0."""
-    try:
-        root = find_repo_root(Path.cwd())
-        if root is None:
-            return 0
-        sidecar = read_sidecar(root)
-        if sidecar is None:
-            return 0
-        settings = read_json(settings_path(root))
-        merged, _ = merge(settings, sidecar["applied"], sidecar["applied"])
-        if merged != settings:
-            print(
-                "claude-code-sandbox: a settings write dropped tool-owned keys "
-                f"in {settings_path(root)} — run `claude-code-sandbox sync` "
-                "(and report this: it means Claude Code's writer clobbered "
-                "foreign keys)"
-            )
-    except Exception as e:  # noqa: BLE001 — advisory surface, never block a session
-        print(f"claude-code-sandbox: hook error (advisory): {e}")
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="claude-code-sandbox",
@@ -291,7 +267,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
 
     add("hook-session-start", cmd_hook_session_start, help=argparse.SUPPRESS)
-    add("hook-config-change", cmd_hook_config_change, help=argparse.SUPPRESS)
 
     return parser
 
