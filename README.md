@@ -17,8 +17,7 @@ built-in sandbox:
 - `denyRead ["/nix/store"]` plus exact per-path `allowRead` entries for
   the profile's closure. The mask is mount-level: store paths outside
   the closure are *nonexistent* inside sandboxed commands, so the
-  profile's toolset is the executable world, cryptographically exact —
-  no name patterns, no PATH-only hygiene.
+  profile's toolset is the executable world, exact to the store hash.
 - An `env.PATH` pointing at the profile's bin farm by exact store
   path (each checkout sees one consistent world: new after sync,
   old-but-working when a sync hasn't reached it yet), and

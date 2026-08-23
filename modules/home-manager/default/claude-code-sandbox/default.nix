@@ -55,15 +55,14 @@ let
   cfg = config.claude-code-sandbox;
   system = pkgs.stdenv.hostPlatform.system;
 
-  # Every beyond-toolset need flows from cfg.runtime through here — one
-  # system, inspectable in the option docs, no hidden splices.
+  # Everything a fragment needs beyond the declared toolset flows from
+  # cfg.runtime.
   #
-  # Fragments reference the farm by EXACT store path, deliberately: a
-  # stable-path indirection would mix worlds at switch (farm repointed
-  # before rules resync = fail-closed tear in live sessions; a checkout
-  # the sync misses would stay torn). With exact paths every checkout is
-  # a consistent world — new after sync, old-but-working when missed
-  # (the old farm stays rooted by the previous HM generation).
+  # Fragments reference the farm by exact store path: every enrolled
+  # checkout runs one consistent closure-generation — the new one after
+  # a sync, the previous one until then (kept alive by the prior HM
+  # generation). Guard: stable-path indirection here desynchronizes
+  # rules and farm in live sessions at switch.
   profileFarm =
     name: profile:
     pkgs.buildEnv {
@@ -275,8 +274,8 @@ let
       # Uniform missing-ness convention for every optional field below:
       # null (the default) = absent from the fragment entirely; any
       # non-null value, including [] or {}, = the fragment carries
-      # exactly what you set (and the key joins the tool-managed merge
-      # domain). No per-option empty-vs-absent folklore.
+      # exactly what you set, and the key joins the tool-managed merge
+      # domain.
       extraAllowRead = lib.mkOption {
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
@@ -406,13 +405,10 @@ in
         default = pkgs.bashNonInteractive;
         defaultText = lib.literalExpression "pkgs.bashNonInteractive";
         description = ''
-          Pinned as env.SHELL in every fragment. The Bash tool follows
-          $SHELL, and a login shell resolves through profile-farm store
-          paths whose closure is everything installed — so the sandbox
-          shell must be profile-owned. Non-interactive bash on purpose:
-          tool commands never use readline, and a non-interactive
-          posture keeps the session-start rc snapshot from flavoring
-          the sandbox world with login shell config.
+          Pinned as env.SHELL in every fragment: the Bash tool follows
+          $SHELL, and the sandbox shell must come from the profile's
+          own closure. Non-interactive bash keeps the session-start rc
+          snapshot free of login-shell config.
         '';
       };
     };

@@ -8,7 +8,7 @@ checkouts opt into by explicit enrollment.
 Principles the design settled on:
 
 - **Enforcement belongs to Claude Code's sandbox**; Nix authors its
-  configuration. No external sandbox, no process wrapper, no launcher.
+  configuration.
 - **Enrollment is the user's act.** Nothing is ambient: unenrolled
   repos get only the monotone baseline, and no file ever lands in a
   shared repository.
