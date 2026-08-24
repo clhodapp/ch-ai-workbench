@@ -82,6 +82,14 @@ auto-sync); the design is correct without it.
 - Only Bash commands are OS-sandboxed by Claude Code; file tools and
   MCP servers are gated by its permission system. The module's baseline
   guards the settings files at both layers.
+- Unix sockets: upstream's Linux seccomp filter is all-or-nothing, so a
+  profile's `allowUnixSockets` list is made real by opening that filter
+  and pinning the profile's SHELL to a Landlock wrapper
+  (`landlock-unix-shim`) that narrows `connect()` back to the declared
+  paths. Requires Landlock ABI 9 (kernel 7.1+); older kernels fail
+  closed. `allowAllUnixSockets = true` skips the narrowing entirely.
+  `allowNix` grants the nix daemon socket through this mechanism
+  automatically.
 - On non-NixOS hosts the store mask governs the nix side only; system
   directories like `/usr/bin` remain. The closed-world property is a
   NixOS property.

@@ -84,6 +84,10 @@
               # checkPhase, so building it IS the test run.
               package = self.packages.${system}.claude-code-sandbox;
               plugin = self.packages.${system}.claude-code-sandbox-plugin;
+              # Compiling the shim is its build-time test; Landlock
+              # behavior cannot be exercised inside the Nix build
+              # sandbox.
+              landlock-unix-shim = self.packages.${system}.landlock-unix-shim;
             };
           };
       };

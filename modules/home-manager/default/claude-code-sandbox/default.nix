@@ -72,18 +72,38 @@ let
 
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
 
+  landlockShim = closure-inputs.self.packages.${system}.landlock-unix-shim;
+
+  # A profile with a socket allowlist gets its SHELL pinned to this
+  # wrapper: upstream's Linux seccomp filter is all-or-nothing, so the
+  # fragment opens it (allowAllUnixSockets) and this layer narrows
+  # connect() back to the declared paths via Landlock — strictly
+  # narrowing, upstream enforcement untouched, retirable if upstream
+  # grows path-scoped Linux support (anthropics/claude-code#44180).
+  #
+  # The narrowing applies only in sandbox context, detected by the
+  # proxy environment the sandbox injects into every sandboxed command:
+  # the same SHELL also reaches unsandboxed and excludedCommands runs,
+  # which must keep escaping. Misdetection therefore fails open into
+  # exactly the allow-all state the fragment already declares upstream —
+  # never into breaking an escape hatch.
+  shimShell =
+    name: sockets:
+    pkgs.writeShellScript "ccs-shell-${name}" ''
+      case "''${HTTPS_PROXY:-}" in
+        http://*localhost:*)
+          exec ${landlockShim}/bin/landlock-unix-shim ${
+            lib.concatMapStringsSep " " (s: "--allow ${lib.escapeShellArg s}") sockets
+          } -- ${runtimeShell} "$@"
+          ;;
+      esac
+      exec ${runtimeShell} "$@"
+    '';
+
   fragmentDrv =
     name: profile:
     let
       farm = profileFarm name profile;
-      closureFile = pkgs.writeClosure (
-        [
-          farm
-          cfg.runtime.claudePackage
-          cfg.runtime.shellPackage
-        ]
-        ++ cfg.runtime.sandboxTools
-      );
       # allowNix auto-grants the daemon socket; that promotion is the
       # one place a null option can become non-null in the fragment.
       effectiveUnixSockets =
@@ -94,6 +114,22 @@ let
           null
         else
           (if profile.allowUnixSockets == null then [ ] else profile.allowUnixSockets) ++ auto;
+      # A non-empty allowlist (without an explicit allow-all) engages
+      # the Landlock wrapper; an explicit allowAllUnixSockets is carried
+      # verbatim and wins.
+      wantsShim =
+        profile.allowAllUnixSockets != true && effectiveUnixSockets != null && effectiveUnixSockets != [ ];
+      effectiveAllowAll = if wantsShim then true else profile.allowAllUnixSockets;
+      profileShell = if wantsShim then "${shimShell name effectiveUnixSockets}" else runtimeShell;
+      closureFile = pkgs.writeClosure (
+        [
+          farm
+          cfg.runtime.claudePackage
+          cfg.runtime.shellPackage
+        ]
+        ++ lib.optional wantsShim (shimShell name effectiveUnixSockets)
+        ++ cfg.runtime.sandboxTools
+      );
       spec = builtins.toJSON {
         masked = !profile.allowNix;
         extraAllowRead = profile.extraAllowRead;
@@ -102,8 +138,9 @@ let
         deniedDomains = profile.deniedDomains;
         excludedCommands = profile.excludedCommands;
         allowUnixSockets = effectiveUnixSockets;
+        allowAllUnixSockets = effectiveAllowAll;
         path = lib.concatStringsSep ":" ([ "${farm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools);
-        shell = runtimeShell;
+        shell = profileShell;
         extraEnv = profile.extraEnv;
         extraSettings = profile.extraSettings;
       };
@@ -192,7 +229,8 @@ let
             fragment["sandbox"]["filesystem"] = fs
 
         net = {}
-        for key in ("allowedDomains", "deniedDomains", "allowUnixSockets"):
+        for key in ("allowedDomains", "deniedDomains", "allowUnixSockets",
+                    "allowAllUnixSockets"):
             if spec[key] is not None:
                 net[key] = spec[key]
         if net:
@@ -320,6 +358,25 @@ let
           is often a capability grant (docker.sock is host access) —
           scope carefully. allowNix adds the nix daemon socket
           automatically.
+
+          Upstream enforces this list on macOS only; on Linux its
+          seccomp filter is all-or-nothing. A non-empty list therefore
+          makes the generator open the upstream filter
+          (allowAllUnixSockets) and pin the profile's SHELL to a
+          Landlock wrapper that narrows connect() back to exactly these
+          paths (kernel Landlock ABI 9+, i.e. 7.1+; older kernels fail
+          closed). Sockets a sandboxed command creates itself are
+          always reachable.
+        '';
+      };
+      allowAllUnixSockets = lib.mkOption {
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = ''
+          Plainly allow every unix socket on the host (upstream's
+          boolean; no Landlock narrowing). This is a large capability
+          grant — prefer allowUnixSockets. Takes precedence over the
+          list when both are set.
         '';
       };
       extraEnv = lib.mkOption {
