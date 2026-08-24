@@ -17,7 +17,12 @@
  * address to pathname sockets created OUTSIDE this Landlock domain are
  * refused with EACCES unless the socket path is allowed; sockets a
  * wrapped command creates itself stay accessible (tool-private IPC is
- * unaffected). Abstract-namespace sockets are out of scope here.
+ * unaffected). Abstract-namespace sockets have no pathname for the
+ * allowlist to speak about, so connects to abstract sockets created
+ * outside the domain are denied wholesale (LANDLOCK_SCOPE_
+ * ABSTRACT_UNIX_SOCKET, ABI 6) — without this, opening the upstream
+ * seccomp filter would leave the abstract namespace wide open,
+ * uncovered by the list. Intra-domain abstract sockets stay free.
  *
  * Failure posture: no Landlock or ABI < 9 fails closed (exit 2) —
  * consistent with the module's failIfUnavailable stance. A listed path
@@ -46,6 +51,7 @@
 #define SHIM_CREATE_RULESET_VERSION (1U << 0)
 #define SHIM_RULE_PATH_BENEATH 1
 #define SHIM_ACCESS_FS_RESOLVE_UNIX (1ULL << 16)
+#define SHIM_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0)
 
 struct shim_ruleset_attr {
   uint64_t handled_access_fs;
@@ -103,7 +109,7 @@ int main(int argc, char **argv) {
   struct shim_ruleset_attr attr = {
     .handled_access_fs = SHIM_ACCESS_FS_RESOLVE_UNIX,
     .handled_access_net = 0,
-    .scoped = 0,
+    .scoped = SHIM_SCOPE_ABSTRACT_UNIX_SOCKET,
   };
   int ruleset_fd =
       (int)syscall(SHIM_NR_landlock_create_ruleset, &attr, sizeof(attr), 0);
