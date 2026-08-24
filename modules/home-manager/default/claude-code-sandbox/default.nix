@@ -392,12 +392,17 @@ in
           pkgs.bashNonInteractive
           pkgs.coreutils
           pkgs.cacert
+          pkgs.jq
+          pkgs.ripgrep
+          pkgs.gnused
         ];
-        defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert ]";
+        defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert pkgs.jq pkgs.ripgrep pkgs.gnused ]";
         description = ''
           The floor added to every profile farm: shell, core utilities,
-          TLS certificates. On NixOS even /bin/sh and /etc/ssl resolve
-          into the store, so a farm without these is not a Unix.
+          TLS certificates, and the handful of text/JSON tools that
+          agent sessions reach for constantly regardless of profile. On
+          NixOS even /bin/sh and /etc/ssl resolve into the store, so a
+          farm without the first three is not a Unix.
         '';
       };
       shellPackage = lib.mkOption {
