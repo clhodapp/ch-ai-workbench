@@ -89,11 +89,14 @@ auto-sync); the design is correct without it.
   MCP servers are gated by its permission system. The module's baseline
   guards the settings files at both layers.
 - Background-job scratch: Claude Code tells background jobs to write
-  under `$CLAUDE_JOB_DIR/tmp`, which sits under `~/.claude` and is
-  read-only inside the sandbox — and no static `allowWrite` can name a
-  per-job path. The plugin's session-start hook therefore replaces that
-  directory with a symlink into the session temp dir, which sandboxed
-  commands may already write to; this redirects, it grants nothing.
+  under `$CLAUDE_JOB_DIR/tmp`, which sits under `~/.claude` — kept
+  write-protected inside the sandbox regardless of grants — and no
+  static `allowWrite` can name a per-job path. Every fragment therefore
+  grants a durable scratch root, `$XDG_STATE_HOME/claude-code-sandbox/jobs`,
+  and the plugin's session-start hook replaces the job's `tmp` with a
+  symlink to a per-job directory beneath it (same lifetime as the job,
+  on home storage; scratch of vanished jobs is pruned). Isolation
+  matches the session temp dir's: a shared root, per-job subdirectories.
 - Unix sockets: upstream's Linux seccomp filter is all-or-nothing, so a
   profile's `allowUnixSockets` list is made real by opening that filter
   and pinning the profile's SHELL to a Landlock wrapper

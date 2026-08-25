@@ -205,33 +205,35 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     return cmd_enroll(ns)
 
 
-def _session_tmp_root() -> Path:
-    """The directory Claude Code points $TMPDIR at inside sandboxed
-    commands (writable there, a real host directory). Per user, not per
-    session, in current builds."""
-    override = os.environ.get("CLAUDE_CODE_SANDBOX_SESSION_TMP")
-    return Path(override) if override else Path(f"/tmp/claude-{os.getuid()}")
-
-
 def redirect_job_tmp() -> str | None:
     """Make $CLAUDE_JOB_DIR/tmp writable from sandboxed commands.
 
     Background jobs are told to use $CLAUDE_JOB_DIR/tmp for scratch, but
-    it lives under ~/.claude, which the sandbox keeps read-only, and no
-    static allowWrite can name a per-job path. A symlink is a plain
-    directory entry the sandbox resolves into the session temp mount,
-    which every sandboxed command may already write to — so this adds
-    no grant. Sandboxed commands cannot remove the link (the job dir is
-    read-only to them); job cleanup removes the link, not the target.
-    Returns the target when a redirect was made, else None.
+    it lives under ~/.claude, which the sandbox keeps write-protected
+    regardless of grants, and no static allowWrite can name a per-job
+    path. The fragment instead grants a durable scratch root outside
+    ~/.claude and hands it to this hook as CLAUDE_CODE_SANDBOX_JOB_SCRATCH;
+    the job's tmp becomes a symlink into a per-job directory beneath it
+    (a plain directory entry the sandbox resolves into the granted
+    region). Sandboxed commands cannot remove the link (the job dir is
+    read-only to them); job cleanup removes the link, not the target,
+    so targets whose job is gone are pruned here. Returns the target
+    when a redirect was made, else None.
     """
     job_dir = os.environ.get("CLAUDE_JOB_DIR")
-    if not job_dir:
+    scratch = os.environ.get("CLAUDE_CODE_SANDBOX_JOB_SCRATCH")
+    if not job_dir or not scratch:
         return None
+    jobs_root = Path(job_dir).parent
+    root = Path(scratch)
+    if root.is_dir():
+        for orphan in root.iterdir():
+            if orphan.is_dir() and not (jobs_root / orphan.name).exists():
+                shutil.rmtree(orphan, ignore_errors=True)
     tmp = Path(job_dir) / "tmp"
     if tmp.is_symlink() or not tmp.is_dir():
         return None
-    target = _session_tmp_root() / "claude-code-sandbox" / "jobs" / Path(job_dir).name / "tmp"
+    target = root / Path(job_dir).name / "tmp"
     target.mkdir(parents=True, exist_ok=True)
     for child in tmp.iterdir():
         shutil.move(str(child), str(target / child.name))
