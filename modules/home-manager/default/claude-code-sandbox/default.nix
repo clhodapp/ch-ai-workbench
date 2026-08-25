@@ -67,6 +67,26 @@ let
   # run `claude-code-sandbox status` to verify its own enrollment (in
   # masked profiles the registry/fragments are unreadable, so status
   # reports freshness as unknown there and stays truthful).
+  # An `ssh` that redirects config to the checkout's owned creds copy.
+  # Inside the sandbox, ssh rejects the store-symlinked ~/.ssh/config
+  # ("Bad owner or permissions": the userns maps its root owner to
+  # nobody). The session-start hook writes an owned copy to
+  # <checkout>/.claude/claude-code-sandbox/creds/ssh_config; this wrapper
+  # points ssh at it with -F, then passes through every argument the
+  # sandbox's injected GIT_SSH_COMMAND supplies (the CONNECT ProxyCommand
+  # included) since git invokes `ssh` by bare name and PATH resolves it
+  # here. Outside the sandbox (or with no owned copy) it falls through to
+  # real ssh unchanged, so it is inert there.
+  sshWrapper = pkgs.writeShellScriptBin "ssh" ''
+    real=${cfg.runtime.opensshPackage}/bin/ssh
+    root=$(${cfg.runtime.gitPackage}/bin/git rev-parse --show-toplevel 2>/dev/null || true)
+    cfgfile="$root/.claude/claude-code-sandbox/creds/ssh_config"
+    if [ -n "''${SANDBOX_RUNTIME:-}" ] && [ -n "$root" ] && [ -f "$cfgfile" ]; then
+      exec "$real" -F "$cfgfile" "$@"
+    fi
+    exec "$real" "$@"
+  '';
+
   profileFarm =
     name: profile:
     pkgs.buildEnv {
@@ -128,6 +148,18 @@ let
           null
         else
           (if profile.allowUnixSockets == null then [ ] else profile.allowUnixSockets) ++ auto;
+      # allowNix also needs the client-side fetcher cache writable: nix
+      # (the client, inside the sandbox) writes $XDG_CACHE_HOME/nix even
+      # though the daemon builds outside it. Without this a sandboxed
+      # `nix build`/flake fetch fails opening fetcher-cache-v*.sqlite.
+      effectiveAllowWrite =
+        let
+          auto = lib.optional profile.allowNix "${config.xdg.cacheHome}/nix";
+        in
+        if profile.allowWrite == null && auto == [ ] then
+          null
+        else
+          (if profile.allowWrite == null then [ ] else profile.allowWrite) ++ auto;
       # A non-empty allowlist (without an explicit allow-all) is what
       # the shim narrows sockets to, and what makes the fragment open
       # upstream's filter; an explicit allowAllUnixSockets is carried
@@ -141,6 +173,7 @@ let
       closureFile = pkgs.writeClosure (
         [
           farm
+          sshWrapper
           cfg.runtime.claudePackage
           cfg.runtime.shellPackage
         ]
@@ -150,13 +183,23 @@ let
       spec = builtins.toJSON {
         masked = !profile.allowNix;
         extraAllowRead = profile.extraAllowRead;
-        allowWrite = profile.allowWrite;
+        allowWrite = effectiveAllowWrite;
         allowedDomains = profile.allowedDomains;
         deniedDomains = profile.deniedDomains;
         excludedCommands = profile.excludedCommands;
         allowUnixSockets = effectiveUnixSockets;
         allowAllUnixSockets = effectiveAllowAll;
-        path = lib.concatStringsSep ":" ([ "${farm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools);
+        # The ssh wrapper's bin goes first so its `ssh` is found ahead of
+        # the farm's openssh — an ordinary PATH precedence, not a
+        # buildEnv override; a user who fronts their own ssh knows what
+        # they are doing.
+        path = lib.concatStringsSep ":" (
+          [
+            "${sshWrapper}/bin"
+            "${farm}/bin"
+          ]
+          ++ map (p: "${p}/bin") cfg.runtime.sandboxTools
+        );
         shell = "${profileShell}";
         extraEnv = profile.extraEnv;
         extraSettings = profile.extraSettings;
@@ -288,6 +331,12 @@ let
         inherit (p) url path;
         profile = p.profile;
       }) cfg.projects;
+      # source→target for the session-start hook to materialize as owned
+      # copies under the checkout's creds dir. source null = create an
+      # empty 0600 drop point for a runtime provisioner.
+      credentials = lib.mapAttrs (_: c: {
+        inherit (c) source target;
+      }) cfg.credentials;
     }
   );
 
@@ -496,6 +545,26 @@ in
           snapshot free of login-shell config.
         '';
       };
+      opensshPackage = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.openssh;
+        defaultText = lib.literalExpression "pkgs.openssh";
+        description = ''
+          The real ssh the farm's ssh wrapper execs (with -F pointing at
+          the checkout's owned config copy inside the sandbox). Pinned so
+          the wrapper never resolves itself.
+        '';
+      };
+      gitPackage = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.git;
+        defaultText = lib.literalExpression "pkgs.git";
+        description = ''
+          Used by the farm's ssh wrapper to locate the checkout root
+          (git rev-parse --show-toplevel) so it can find the credentials
+          dir. Not the git a profile puts on PATH for the agent.
+        '';
+      };
       landlock = {
         socketFallback = lib.mkOption {
           type = lib.types.enum [
@@ -543,6 +612,46 @@ in
       description = "Projects `materialize` may clone + enroll (never at switch).";
     };
 
+    credentials = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule (
+          { name, ... }:
+          {
+            options = {
+              source = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = ''
+                  Absolute path whose *content* the session-start hook
+                  copies into the checkout's credentials dir, owned by
+                  the invoking user (so it survives the sandbox userns
+                  root→nobody mapping that makes store-symlinked dotfiles
+                  unreadable to tools that strict-check config ownership,
+                  e.g. ssh on ~/.ssh/config). null = the hook creates an
+                  empty 0600 target instead, a drop point for a runtime
+                  provisioner to fill with a delegated credential.
+                '';
+              };
+              target = lib.mkOption {
+                type = lib.types.str;
+                default = name;
+                description = "Filename under the credentials dir.";
+              };
+            };
+          }
+        )
+      );
+      default = { };
+      description = ''
+        Config/credential files the session-start hook materializes as
+        user-owned copies under
+        <checkout>/.claude/claude-code-sandbox/creds/, so sandboxed tools
+        can read them. Point tools at a copy with a profile `extraEnv`
+        entry or a farm wrapper; the credentials dir path is knowable at
+        enroll time. Built-ins wire ssh and git below.
+      '';
+    };
+
     baseline = {
       install = lib.mkOption {
         type = lib.types.bool;
@@ -587,6 +696,16 @@ in
     ];
 
     claude-code-sandbox.profiles.default = { };
+
+    # Built-in: an owned copy of ~/.ssh/config, so sandboxed git-over-ssh
+    # works (the store-symlinked original is rejected by ssh's config
+    # ownership check under the sandbox userns). The farm's ssh wrapper
+    # points -F at the copy. git config is not wired: this fleet has no
+    # ~/.gitconfig, and the mechanism is here to extend when one appears.
+    claude-code-sandbox.credentials.ssh-config = {
+      source = lib.mkDefault "${config.home.homeDirectory}/.ssh/config";
+      target = lib.mkDefault "ssh_config";
+    };
 
     home.packages = [ cfg.package ];
 

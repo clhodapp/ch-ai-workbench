@@ -28,6 +28,7 @@ from .files import (
     settings_path,
     update_json,
     write_sidecar,
+    write_text_atomic,
 )
 from .merge import adhoc_additions, merge
 from .registry import MaskedStore, load_fragment, load_registry
@@ -221,6 +222,57 @@ def _git_dir(root: Path) -> Path | None:
 
 
 SCRATCH_SUBDIR = Path(".claude") / "claude-code-sandbox" / "jobs"
+CREDS_SUBDIR = Path(".claude") / "claude-code-sandbox" / "creds"
+
+
+def creds_dir(root: Path) -> Path:
+    """The checkout's credentials dir: user-owned (written unsandboxed),
+    inside the sandbox's default read/write scope, git-excluded alongside
+    the job scratch. Its absolute path is knowable at enroll time, so
+    fragment env / farm wrappers can name it literally."""
+    return root / CREDS_SUBDIR
+
+
+def provision_creds(root: Path) -> list[str]:
+    """Materialize the registry's credential files as user-owned copies
+    under the checkout's creds dir, so sandboxed tools whose config
+    ownership checks reject the store-symlinked originals can read them.
+
+    Runs from the unsandboxed session-start hook, so copies are owned by
+    the invoking user (not store root → nobody). A registry entry with a
+    null source is created as an empty 0600 file — a drop point for a
+    runtime provisioner to fill with a delegated credential. Returns the
+    target filenames written. Best-effort per entry; a missing source is
+    skipped (nothing to copy)."""
+    try:
+        registry = load_registry()
+    except MaskedStore:
+        return []
+    creds = registry.get("credentials") or {}
+    if not creds:
+        return []
+    out = creds_dir(root)
+    written: list[str] = []
+    for entry in creds.values():
+        target = entry.get("target")
+        if not target:
+            continue
+        dest = out / target
+        source = entry.get("source")
+        if source is None:
+            # Drop point for a provisioner: ensure an empty owned file
+            # exists, but never clobber content a provisioner has placed.
+            if not dest.exists():
+                write_text_atomic(dest, "")
+                written.append(target)
+            continue
+        try:
+            content = Path(source).expanduser().read_text(encoding="utf-8")
+        except (FileNotFoundError, IsADirectoryError, PermissionError, OSError):
+            continue  # source absent/unreadable — nothing to materialize
+        write_text_atomic(dest, content)
+        written.append(target)
+    return written
 
 
 def _ensure_excluded(root: Path) -> None:
@@ -300,6 +352,12 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
             print(
                 "claude-code-sandbox: $CLAUDE_JOB_DIR/tmp now points into this "
                 f"checkout ({target}) so sandboxed commands can write there"
+            )
+        creds = provision_creds(root)
+        if creds:
+            print(
+                "claude-code-sandbox: provisioned owned credential copies "
+                f"({', '.join(sorted(creds))}) so sandboxed tools can read them"
             )
         line, attention = _status_line(root)
         if attention:

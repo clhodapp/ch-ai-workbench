@@ -99,6 +99,25 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
         raise
 
 
+def write_text_atomic(path: Path, text: str, mode: int = 0o600) -> None:
+    """Write ``text`` to ``path`` via same-dir temp + rename, mode 0600 by
+    default — the owned-copy primitive for the credential broker. Same
+    discipline as write_json_atomic; the caller owns the content."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def update_json(
     path: Path,
     fn: Callable[[dict[str, Any]], dict[str, Any] | None],

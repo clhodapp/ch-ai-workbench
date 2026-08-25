@@ -123,6 +123,48 @@ class CliTest(unittest.TestCase):
         self.assertIn(rc, (0, 2))
         self.assertIn("profile 'work'", buf.getvalue())
 
+    def _write_registry_with_credentials(self, creds):
+        config = Path(os.environ["CLAUDE_CODE_SANDBOX_CONFIG"])
+        reg = json.loads((config / "registry.json").read_text())
+        reg["credentials"] = creds
+        (config / "registry.json").write_text(json.dumps(reg))
+
+    def test_provision_creds_copies_owned_content(self):
+        src = Path(self._tmp.name) / "src_ssh_config"
+        src.write_text("Host example\n  User me\n")
+        self._write_registry_with_credentials(
+            {"ssh-config": {"source": str(src), "target": "ssh_config"}}
+        )
+        written = cli.provision_creds(self.repo)
+        self.assertEqual(written, ["ssh_config"])
+        dest = self.repo / ".claude" / "claude-code-sandbox" / "creds" / "ssh_config"
+        self.assertEqual(dest.read_text(), "Host example\n  User me\n")
+        self.assertEqual(dest.stat().st_mode & 0o777, 0o600)
+        # Idempotent: a second run rewrites the same content, no error.
+        self.assertEqual(cli.provision_creds(self.repo), ["ssh_config"])
+        self.assertEqual(dest.read_text(), "Host example\n  User me\n")
+
+    def test_provision_creds_skips_absent_source(self):
+        self._write_registry_with_credentials(
+            {"ssh-config": {"source": "/no/such/file", "target": "ssh_config"}}
+        )
+        self.assertEqual(cli.provision_creds(self.repo), [])
+        dest = self.repo / ".claude" / "claude-code-sandbox" / "creds" / "ssh_config"
+        self.assertFalse(dest.exists())
+
+    def test_provision_creds_null_source_is_empty_droppoint(self):
+        self._write_registry_with_credentials(
+            {"token": {"source": None, "target": "token"}}
+        )
+        self.assertEqual(cli.provision_creds(self.repo), ["token"])
+        dest = self.repo / ".claude" / "claude-code-sandbox" / "creds" / "token"
+        self.assertTrue(dest.exists())
+        self.assertEqual(dest.read_text(), "")
+        # A provisioner fills it; a later hook run must not clobber it.
+        dest.write_text("delegated-secret")
+        self.assertEqual(cli.provision_creds(self.repo), [])
+        self.assertEqual(dest.read_text(), "delegated-secret")
+
     def test_status_reports_stale_after_fragment_change(self):
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
         changed = dict(FRAGMENT)
