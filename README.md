@@ -88,6 +88,12 @@ auto-sync); the design is correct without it.
 - Only Bash commands are OS-sandboxed by Claude Code; file tools and
   MCP servers are gated by its permission system. The module's baseline
   guards the settings files at both layers.
+- Background-job scratch: Claude Code tells background jobs to write
+  under `$CLAUDE_JOB_DIR/tmp`, which sits under `~/.claude` and is
+  read-only inside the sandbox — and no static `allowWrite` can name a
+  per-job path. The plugin's session-start hook therefore replaces that
+  directory with a symlink into the session temp dir, which sandboxed
+  commands may already write to; this redirects, it grants nothing.
 - Unix sockets: upstream's Linux seccomp filter is all-or-nothing, so a
   profile's `allowUnixSockets` list is made real by opening that filter
   and pinning the profile's SHELL to a Landlock wrapper

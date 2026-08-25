@@ -136,6 +136,35 @@ class CliTest(unittest.TestCase):
         self.assertIn("freshness unknown", buf.getvalue())
         self.assertNotIn("DANGLING", buf.getvalue())
 
+    def test_hook_redirects_job_tmp_into_session_tmp(self):
+        # Background jobs are told to write under $CLAUDE_JOB_DIR/tmp,
+        # which is read-only inside the sandbox; the hook replaces it
+        # with a symlink into the session temp dir (writable there),
+        # preserving anything already present, and is idempotent.
+        self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
+        tmp = Path(self._tmp.name)
+        job = tmp / "jobs" / "abc123"
+        (job / "tmp").mkdir(parents=True)
+        (job / "tmp" / "keep.txt").write_text("x")
+        session_tmp = tmp / "session-tmp"
+        env = {
+            "CLAUDE_JOB_DIR": str(job),
+            "CLAUDE_CODE_SANDBOX_SESSION_TMP": str(session_tmp),
+        }
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with mock.patch.dict(os.environ, env):
+                self.assertEqual(self.run_cli("hook-session-start"), 0)
+                self.assertEqual(self.run_cli("hook-session-start"), 0)
+        finally:
+            os.chdir(cwd)
+        link = job / "tmp"
+        target = session_tmp / "claude-code-sandbox" / "jobs" / "abc123" / "tmp"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(), target.resolve())
+        self.assertEqual((link / "keep.txt").read_text(), "x")
+
     def test_scan_walks_given_directory_only(self):
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
         rc = self.run_cli("scan", str(Path(self._tmp.name) / "projects"))

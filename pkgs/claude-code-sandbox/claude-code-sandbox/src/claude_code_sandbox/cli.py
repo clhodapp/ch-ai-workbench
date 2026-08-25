@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -204,9 +205,45 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     return cmd_enroll(ns)
 
 
+def _session_tmp_root() -> Path:
+    """The directory Claude Code points $TMPDIR at inside sandboxed
+    commands (writable there, a real host directory). Per user, not per
+    session, in current builds."""
+    override = os.environ.get("CLAUDE_CODE_SANDBOX_SESSION_TMP")
+    return Path(override) if override else Path(f"/tmp/claude-{os.getuid()}")
+
+
+def redirect_job_tmp() -> str | None:
+    """Make $CLAUDE_JOB_DIR/tmp writable from sandboxed commands.
+
+    Background jobs are told to use $CLAUDE_JOB_DIR/tmp for scratch, but
+    it lives under ~/.claude, which the sandbox keeps read-only, and no
+    static allowWrite can name a per-job path. A symlink is a plain
+    directory entry the sandbox resolves into the session temp mount,
+    which every sandboxed command may already write to — so this adds
+    no grant. Sandboxed commands cannot remove the link (the job dir is
+    read-only to them); job cleanup removes the link, not the target.
+    Returns the target when a redirect was made, else None.
+    """
+    job_dir = os.environ.get("CLAUDE_JOB_DIR")
+    if not job_dir:
+        return None
+    tmp = Path(job_dir) / "tmp"
+    if tmp.is_symlink() or not tmp.is_dir():
+        return None
+    target = _session_tmp_root() / "claude-code-sandbox" / "jobs" / Path(job_dir).name / "tmp"
+    target.mkdir(parents=True, exist_ok=True)
+    for child in tmp.iterdir():
+        shutil.move(str(child), str(target / child.name))
+    tmp.rmdir()
+    tmp.symlink_to(target)
+    return str(target)
+
+
 def cmd_hook_session_start(args: argparse.Namespace) -> int:
-    """Advisory SessionStart hook: report and self-heal staleness. Always
-    exits 0 — the sandbox design must stay correct without hooks."""
+    """Advisory SessionStart hook: report and self-heal staleness, and
+    redirect the job scratch dir. Always exits 0 — the sandbox design
+    must stay correct without hooks."""
     try:
         root = find_repo_root(Path.cwd())
         if root is None:
@@ -214,6 +251,12 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
         sidecar = read_sidecar(root)
         if sidecar is None:
             return 0
+        target = redirect_job_tmp()
+        if target:
+            print(
+                "claude-code-sandbox: $CLAUDE_JOB_DIR/tmp now points into the "
+                f"session temp dir ({target}) so sandboxed commands can write there"
+            )
         line, attention = _status_line(root)
         if attention:
             try:
