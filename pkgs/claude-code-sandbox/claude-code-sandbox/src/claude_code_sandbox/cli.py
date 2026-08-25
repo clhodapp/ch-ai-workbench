@@ -207,28 +207,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 2 if attention else 0
 
 
-def cmd_materialize(args: argparse.Namespace) -> int:
-    registry = load_registry()
-    projects = registry.get("projects") or {}
-    if args.name not in projects:
-        raise ToolError(
-            f"project '{args.name}' is not declared in the registry; declare it "
-            "under claude-code-sandbox.projects in home-manager first"
-        )
-    entry = projects[args.name]
-    path = Path(entry["path"]).expanduser()
-    if (path / ".git").exists():
-        print(f"{path}: already materialized")
-    else:
-        subprocess.run(["git", "clone", entry["url"], str(path)], check=True)
-    ns = argparse.Namespace(
-        directory=str(path),
-        profile=entry.get("profile", "default"),
-        quiet=False,
-    )
-    return cmd_enroll(ns)
-
-
 def _git_dir(root: Path) -> Path | None:
     """The checkout's own git directory (a worktree's private one for
     linked worktrees). None when git cannot tell us."""
@@ -433,9 +411,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("scan", cmd_scan, help="walk the given directory and report every checkout under it")
     p.add_argument("directory")
-
-    p = add("materialize", cmd_materialize, help="clone + enroll a registry-declared project")
-    p.add_argument("name")
 
     add("hook-session-start", cmd_hook_session_start, help=argparse.SUPPRESS)
 
