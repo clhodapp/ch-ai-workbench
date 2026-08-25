@@ -70,19 +70,34 @@ let
   # An `ssh` that redirects config to the checkout's owned creds copy.
   # Inside the sandbox, ssh rejects the store-symlinked ~/.ssh/config
   # ("Bad owner or permissions": the userns maps its root owner to
-  # nobody). The session-start hook writes an owned copy to
-  # <checkout>/.claude/claude-code-sandbox/creds/ssh_config; this wrapper
-  # points ssh at it with -F, then passes through every argument the
-  # sandbox's injected GIT_SSH_COMMAND supplies (the CONNECT ProxyCommand
-  # included) since git invokes `ssh` by bare name and PATH resolves it
-  # here. Outside the sandbox (or with no owned copy) it falls through to
-  # real ssh unchanged, so it is inert there.
+  # nobody). The session-start hook writes an owned copy at the
+  # ENROLLED-CHECKOUT root: <root>/.claude/claude-code-sandbox/creds/
+  # ssh_config, beside the sidecar (.claude/claude-code-sandbox.json).
+  # This wrapper points ssh at it with -F, then passes through every
+  # argument the sandbox's injected GIT_SSH_COMMAND supplies (the CONNECT
+  # ProxyCommand included) — git invokes `ssh` by bare name and PATH
+  # resolves it here.
+  #
+  # Finding the root: NOT `git rev-parse --show-toplevel` — git runs the
+  # ssh transport with cwd inside the repo, but when that repo is a
+  # submodule (the normal multi-repo case here) toplevel is the SUBMODULE
+  # root, while the creds live at the OUTER enrolled-checkout root where
+  # the sidecar is. So walk up from $PWD to the directory that holds the
+  # sidecar — submodule-independent, and it names exactly the root the
+  # hook wrote to. Outside the sandbox, or with no sidecar/copy, it falls
+  # through to real ssh unchanged, so it is inert there.
   sshWrapper = pkgs.writeShellScriptBin "ssh" ''
     real=${cfg.runtime.opensshPackage}/bin/ssh
-    root=$(${cfg.runtime.gitPackage}/bin/git rev-parse --show-toplevel 2>/dev/null || true)
-    cfgfile="$root/.claude/claude-code-sandbox/creds/ssh_config"
-    if [ -n "''${SANDBOX_RUNTIME:-}" ] && [ -n "$root" ] && [ -f "$cfgfile" ]; then
-      exec "$real" -F "$cfgfile" "$@"
+    if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
+      d=$PWD
+      while [ "$d" != / ]; do
+        if [ -f "$d/.claude/claude-code-sandbox.json" ]; then
+          cfgfile="$d/.claude/claude-code-sandbox/creds/ssh_config"
+          [ -f "$cfgfile" ] && exec "$real" -F "$cfgfile" "$@"
+          break
+        fi
+        d=$(dirname "$d")
+      done
     fi
     exec "$real" "$@"
   '';
@@ -553,16 +568,6 @@ in
           The real ssh the farm's ssh wrapper execs (with -F pointing at
           the checkout's owned config copy inside the sandbox). Pinned so
           the wrapper never resolves itself.
-        '';
-      };
-      gitPackage = lib.mkOption {
-        type = lib.types.package;
-        default = pkgs.git;
-        defaultText = lib.literalExpression "pkgs.git";
-        description = ''
-          Used by the farm's ssh wrapper to locate the checkout root
-          (git rev-parse --show-toplevel) so it can find the credentials
-          dir. Not the git a profile puts on PATH for the agent.
         '';
       };
       landlock = {
