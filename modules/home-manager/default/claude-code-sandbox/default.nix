@@ -76,11 +76,6 @@ let
 
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
 
-  # Durable, statically grantable, outside ~/.claude (whose contents the
-  # sandbox keeps write-protected regardless of grants): where the
-  # session-start hook relocates each background job's scratch dir.
-  jobScratchRoot = "${config.xdg.stateHome}/claude-code-sandbox/jobs";
-
   landlockShim = closure-inputs.self.packages.${system}.landlock-unix-shim;
 
   # A profile with a socket allowlist gets its SHELL pinned to this
@@ -142,11 +137,7 @@ let
       spec = builtins.toJSON {
         masked = !profile.allowNix;
         extraAllowRead = profile.extraAllowRead;
-        # The job-scratch root is always writable: the session-start hook
-        # redirects $CLAUDE_JOB_DIR/tmp (read-only under ~/.claude) into a
-        # per-job directory beneath it, on durable home storage.
-        allowWrite = (if profile.allowWrite == null then [ ] else profile.allowWrite) ++ [ jobScratchRoot ];
-        jobScratchRoot = jobScratchRoot;
+        allowWrite = profile.allowWrite;
         allowedDomains = profile.allowedDomains;
         deniedDomains = profile.deniedDomains;
         excludedCommands = profile.excludedCommands;
@@ -190,7 +181,6 @@ let
             ("extraSettings", ["env"]),
             ("extraEnv", ["PATH"]),
             ("extraEnv", ["SHELL"]),
-            ("extraEnv", ["CLAUDE_CODE_SANDBOX_JOB_SCRATCH"]),
         ]
         def present(tree, path):
             for part in path:
@@ -228,7 +218,6 @@ let
             "env": {
                 "PATH": spec["path"],
                 "SHELL": spec["shell"],
-                "CLAUDE_CODE_SANDBOX_JOB_SCRATCH": spec["jobScratchRoot"],
                 **(spec["extraEnv"] or {}),
             },
         }

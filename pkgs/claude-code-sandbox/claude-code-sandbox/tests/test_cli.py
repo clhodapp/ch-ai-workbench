@@ -5,6 +5,8 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -136,27 +138,31 @@ class CliTest(unittest.TestCase):
         self.assertIn("freshness unknown", buf.getvalue())
         self.assertNotIn("DANGLING", buf.getvalue())
 
-    def test_hook_redirects_job_tmp_into_scratch_root(self):
+    def _git_init_repo(self):
+        # The fixture's bare `.git` directory is enough for root discovery
+        # but not for `git rev-parse`; make it a real repository.
+        shutil.rmtree(self.repo / ".git")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+
+    def test_hook_redirects_job_tmp_into_checkout(self):
         # Background jobs are told to write under $CLAUDE_JOB_DIR/tmp,
         # which is read-only inside the sandbox; the hook replaces it
-        # with a symlink into the fragment-granted scratch root,
-        # preserving anything already present, pruning scratch dirs of
-        # jobs that no longer exist, and is idempotent.
+        # with a symlink into the checkout's working tree (writable
+        # there, per checkout), preserving anything already present,
+        # pruning scratch of jobs that no longer exist, excluding the
+        # tree from git status, and is idempotent.
+        self._git_init_repo()
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
         tmp = Path(self._tmp.name)
         job = tmp / "jobs" / "abc123"
         (job / "tmp").mkdir(parents=True)
         (job / "tmp" / "keep.txt").write_text("x")
-        scratch = tmp / "scratch"
+        scratch = self.repo / ".claude" / "claude-code-sandbox" / "jobs"
         (scratch / "gone-job" / "tmp").mkdir(parents=True)  # its job dir does not exist
-        env = {
-            "CLAUDE_JOB_DIR": str(job),
-            "CLAUDE_CODE_SANDBOX_JOB_SCRATCH": str(scratch),
-        }
         cwd = os.getcwd()
         os.chdir(self.repo)
         try:
-            with mock.patch.dict(os.environ, env):
+            with mock.patch.dict(os.environ, {"CLAUDE_JOB_DIR": str(job)}):
                 self.assertEqual(self.run_cli("hook-session-start"), 0)
                 self.assertEqual(self.run_cli("hook-session-start"), 0)
         finally:
@@ -167,19 +173,21 @@ class CliTest(unittest.TestCase):
         self.assertEqual(link.resolve(), target.resolve())
         self.assertEqual((link / "keep.txt").read_text(), "x")
         self.assertFalse((scratch / "gone-job").exists())
+        exclude = (self.repo / ".git" / "info" / "exclude").read_text()
+        self.assertEqual(exclude.count("/.claude/claude-code-sandbox/"), 1)
 
-    def test_hook_leaves_job_tmp_alone_without_scratch_root(self):
+    def test_hook_leaves_job_tmp_alone_without_job_dir(self):
+        self._git_init_repo()
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
-        job = Path(self._tmp.name) / "jobs" / "noroot"
-        (job / "tmp").mkdir(parents=True)
         cwd = os.getcwd()
         os.chdir(self.repo)
         try:
-            with mock.patch.dict(os.environ, {"CLAUDE_JOB_DIR": str(job)}):
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CLAUDE_JOB_DIR", None)
                 self.assertEqual(self.run_cli("hook-session-start"), 0)
         finally:
             os.chdir(cwd)
-        self.assertFalse((job / "tmp").is_symlink())
+        self.assertFalse((self.repo / ".claude" / "claude-code-sandbox").exists())
 
     def test_scan_walks_given_directory_only(self):
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")

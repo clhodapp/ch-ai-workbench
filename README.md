@@ -91,12 +91,15 @@ auto-sync); the design is correct without it.
 - Background-job scratch: Claude Code tells background jobs to write
   under `$CLAUDE_JOB_DIR/tmp`, which sits under `~/.claude` — kept
   write-protected inside the sandbox regardless of grants — and no
-  static `allowWrite` can name a per-job path. Every fragment therefore
-  grants a durable scratch root, `$XDG_STATE_HOME/claude-code-sandbox/jobs`,
-  and the plugin's session-start hook replaces the job's `tmp` with a
-  symlink to a per-job directory beneath it (same lifetime as the job,
-  on home storage; scratch of vanished jobs is pruned). Isolation
-  matches the session temp dir's: a shared root, per-job subdirectories.
+  static `allowWrite` can name a per-job path. The plugin's
+  session-start hook therefore replaces the job's `tmp` with a symlink
+  into the checkout's working tree, at
+  `.claude/claude-code-sandbox/jobs/<id>/tmp`: writable inside the
+  sandbox, per worktree by construction, alive as long as the checkout,
+  and kept out of `git status` through the clone's `.git/info/exclude`.
+  Nothing is granted, and the isolation unit stays the checkout — the
+  sandbox's own (every session in a checkout can already write its
+  working tree). Scratch of vanished jobs is pruned.
 - Unix sockets: upstream's Linux seccomp filter is all-or-nothing, so a
   profile's `allowUnixSockets` list is made real by opening that filter
   and pinning the profile's SHELL to a Landlock wrapper

@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-{ python3Packages, lib }:
+{
+  python3Packages,
+  lib,
+  git,
+}:
 python3Packages.buildPythonApplication {
   pname = "claude-code-sandbox";
   version = "0.1.0";
@@ -8,6 +12,10 @@ python3Packages.buildPythonApplication {
   src = lib.cleanSource ./.;
 
   build-system = [ python3Packages.setuptools ];
+
+  # The session-start hook locates a checkout's git dir via `git
+  # rev-parse`; the tests exercise it against a real repository.
+  nativeCheckInputs = [ git ];
 
   checkPhase = ''
     runHook preCheck

@@ -205,40 +205,82 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     return cmd_enroll(ns)
 
 
-def redirect_job_tmp() -> str | None:
+def _git_dir(root: Path) -> Path | None:
+    """The checkout's own git directory (a worktree's private one for
+    linked worktrees). None when git cannot tell us."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--absolute-git-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return Path(out) if out else None
+
+
+SCRATCH_SUBDIR = Path(".claude") / "claude-code-sandbox" / "jobs"
+
+
+def _ensure_excluded(root: Path) -> None:
+    """Keep the scratch tree out of `git status` via the per-clone
+    exclude file (never the repository's own .gitignore)."""
+    git_dir = _git_dir(root)
+    if git_dir is None:
+        return
+    exclude = git_dir / "info" / "exclude"
+    line = f"/{SCRATCH_SUBDIR.parent.as_posix()}/"
+    try:
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if line in existing.splitlines():
+            return
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as fh:
+            if existing and not existing.endswith("\n"):
+                fh.write("\n")
+            fh.write(line + "\n")
+    except OSError:
+        return
+
+
+def redirect_job_tmp(root: Path) -> str | None:
     """Make $CLAUDE_JOB_DIR/tmp writable from sandboxed commands.
 
     Background jobs are told to use $CLAUDE_JOB_DIR/tmp for scratch, but
     it lives under ~/.claude, which the sandbox keeps write-protected
     regardless of grants, and no static allowWrite can name a per-job
-    path. The fragment instead grants a durable scratch root outside
-    ~/.claude and hands it to this hook as CLAUDE_CODE_SANDBOX_JOB_SCRATCH;
-    the job's tmp becomes a symlink into a per-job directory beneath it
-    (a plain directory entry the sandbox resolves into the granted
-    region). Sandboxed commands cannot remove the link (the job dir is
-    read-only to them); job cleanup removes the link, not the target,
-    so targets whose job is gone are pruned here. Returns the target
-    when a redirect was made, else None.
+    path. The job's tmp becomes a symlink into the checkout's working
+    tree, under .claude/claude-code-sandbox/jobs/<id>/tmp: a plain
+    directory entry the sandbox resolves into space the checkout
+    already owns, so nothing is granted and the isolation unit stays
+    the checkout — the sandbox's own (every session in a checkout can
+    already write its working tree). Per worktree by construction,
+    alive as long as the checkout, excluded from git status via the
+    per-clone exclude file. Sandboxed commands cannot remove the link
+    (the job dir is read-only to them); job cleanup removes the link,
+    not the target, so targets whose job is gone are pruned here.
+    Returns the target when a redirect was made, else None.
     """
     job_dir = os.environ.get("CLAUDE_JOB_DIR")
-    scratch = os.environ.get("CLAUDE_CODE_SANDBOX_JOB_SCRATCH")
-    if not job_dir or not scratch:
+    if not job_dir:
         return None
     jobs_root = Path(job_dir).parent
-    root = Path(scratch)
-    if root.is_dir():
-        for orphan in root.iterdir():
+    scratch_root = root / SCRATCH_SUBDIR
+    if scratch_root.is_dir():
+        for orphan in scratch_root.iterdir():
             if orphan.is_dir() and not (jobs_root / orphan.name).exists():
                 shutil.rmtree(orphan, ignore_errors=True)
     tmp = Path(job_dir) / "tmp"
     if tmp.is_symlink() or not tmp.is_dir():
         return None
-    target = root / Path(job_dir).name / "tmp"
+    target = scratch_root / Path(job_dir).name / "tmp"
     target.mkdir(parents=True, exist_ok=True)
     for child in tmp.iterdir():
         shutil.move(str(child), str(target / child.name))
     tmp.rmdir()
     tmp.symlink_to(target)
+    _ensure_excluded(root)
     return str(target)
 
 
@@ -253,11 +295,11 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
         sidecar = read_sidecar(root)
         if sidecar is None:
             return 0
-        target = redirect_job_tmp()
+        target = redirect_job_tmp(root)
         if target:
             print(
-                "claude-code-sandbox: $CLAUDE_JOB_DIR/tmp now points into the "
-                f"session temp dir ({target}) so sandboxed commands can write there"
+                "claude-code-sandbox: $CLAUDE_JOB_DIR/tmp now points into this "
+                f"checkout ({target}) so sandboxed commands can write there"
             )
         line, attention = _status_line(root)
         if attention:
