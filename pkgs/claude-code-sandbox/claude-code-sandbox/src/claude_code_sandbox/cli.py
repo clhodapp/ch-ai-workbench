@@ -44,9 +44,29 @@ def _root_or_die(directory: Path) -> Path:
     return root
 
 
+ROOT_ENV_VAR = "CLAUDE_CODE_SANDBOX_ROOT"
+
+
+def _with_root_env(fragment: dict[str, Any], root: Path) -> dict[str, Any]:
+    """Add this checkout's enrolled root to the fragment's env, so it
+    reaches sandboxed commands (settings env is the only channel that
+    does — hooks can't inject env, CLAUDE_PROJECT_DIR is hook-only, and
+    the fragment is generated per-profile without knowing the checkout).
+    The farm's ssh wrapper reads it to locate the credentials dir
+    independent of cwd. Skips the empty/`none` fragment so it stays
+    deliberately nothing. Making it part of the applied fragment keeps
+    the merge authoritative for the key (it lives in base∪new), so no
+    ad-hoc-addition noise."""
+    if not fragment:
+        return fragment
+    out = dict(fragment)
+    out["env"] = {**out.get("env", {}), ROOT_ENV_VAR: str(root)}
+    return out
+
+
 def _apply(root: Path, profile: str, base: dict[str, Any], quiet: bool) -> None:
     registry = load_registry()
-    fragment = load_fragment(registry, profile)
+    fragment = _with_root_env(load_fragment(registry, profile), root)
     reports = []
 
     def transform(current: dict[str, Any]) -> dict[str, Any] | None:
@@ -87,12 +107,15 @@ def _status_line(root: Path) -> tuple[str, bool]:
     stale: bool | None
     try:
         registry = load_registry()
-        fragment = load_fragment(registry, profile)
+        fragment = _with_root_env(load_fragment(registry, profile), root)
     except MaskedStore:
         stale = None
     except ToolError as e:
         return (f"{root}: profile '{profile}' DANGLING ({e})", True)
     else:
+        # Compare against the augmented fragment: the sidecar stores what
+        # _apply wrote (root env included), so the fresh fragment must be
+        # augmented the same way or staleness would fire on every check.
         stale = fragment != applied
     # Replay the applied blob: if re-merging it changes anything, a
     # foreign writer dropped tool-owned keys (clobbering is removals, so

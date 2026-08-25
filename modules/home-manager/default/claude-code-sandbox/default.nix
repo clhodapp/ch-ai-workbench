@@ -78,26 +78,36 @@ let
   # ProxyCommand included) — git invokes `ssh` by bare name and PATH
   # resolves it here.
   #
-  # Finding the root: NOT `git rev-parse --show-toplevel` — git runs the
-  # ssh transport with cwd inside the repo, but when that repo is a
-  # submodule (the normal multi-repo case here) toplevel is the SUBMODULE
-  # root, while the creds live at the OUTER enrolled-checkout root where
-  # the sidecar is. So walk up from $PWD to the directory that holds the
-  # sidecar — submodule-independent, and it names exactly the root the
-  # hook wrote to. Outside the sandbox, or with no sidecar/copy, it falls
-  # through to real ssh unchanged, so it is inert there.
+  # Finding the enrolled root: prefer CLAUDE_CODE_SANDBOX_ROOT, which the
+  # session-start apply writes into the checkout's settings env — the
+  # only channel that reaches a Bash command cwd-independently (hooks
+  # can't inject env; CLAUDE_PROJECT_DIR is hook-only). This is
+  # authoritative: it names the checkout the session is enrolled in,
+  # regardless of where the command's cwd has wandered. Fallback (an
+  # un-applied checkout, or a stale session predating this key): walk up
+  # from $PWD to the sidecar — correct whenever cwd is inside the
+  # checkout, which is NOT `git rev-parse --show-toplevel` (that gives
+  # the SUBMODULE root in the multi-repo case, but the creds live at the
+  # OUTER enrolled root beside the sidecar). Outside the sandbox, or with
+  # no root/copy, it falls through to real ssh unchanged — inert there.
   sshWrapper = pkgs.writeShellScriptBin "ssh" ''
     real=${cfg.runtime.opensshPackage}/bin/ssh
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
-      d=$PWD
-      while [ "$d" != / ]; do
-        if [ -f "$d/.claude/claude-code-sandbox.json" ]; then
-          cfgfile="$d/.claude/claude-code-sandbox/creds/ssh_config"
-          [ -f "$cfgfile" ] && exec "$real" -F "$cfgfile" "$@"
-          break
-        fi
-        d=$(dirname "$d")
-      done
+      root=''${CLAUDE_CODE_SANDBOX_ROOT:-}
+      if [ -z "$root" ]; then
+        d=$PWD
+        while [ "$d" != / ]; do
+          if [ -f "$d/.claude/claude-code-sandbox.json" ]; then
+            root=$d
+            break
+          fi
+          d=$(dirname "$d")
+        done
+      fi
+      cfgfile="$root/.claude/claude-code-sandbox/creds/ssh_config"
+      if [ -n "$root" ] && [ -f "$cfgfile" ]; then
+        exec "$real" -F "$cfgfile" "$@"
+      fi
     fi
     exec "$real" "$@"
   '';

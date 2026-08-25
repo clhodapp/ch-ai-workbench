@@ -71,12 +71,28 @@ class CliTest(unittest.TestCase):
     def test_enroll_writes_settings_and_sidecar(self):
         rc = self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
         self.assertEqual(rc, 0)
-        self.assertEqual(self.settings(), FRAGMENT)
+        # _apply injects the enrolled root into env so the ssh wrapper can
+        # find the creds dir cwd-independently.
+        expected = cli._with_root_env(FRAGMENT, self.repo)
+        self.assertEqual(self.settings(), expected)
+        self.assertEqual(
+            self.settings()["env"]["CLAUDE_CODE_SANDBOX_ROOT"], str(self.repo)
+        )
         sidecar = json.loads(
             (self.repo / ".claude" / "claude-code-sandbox.json").read_text()
         )
         self.assertEqual(sidecar["profile"], "work")
-        self.assertEqual(sidecar["applied"], FRAGMENT)
+        self.assertEqual(sidecar["applied"], expected)
+
+    def test_enroll_root_env_and_status_current(self):
+        # The root env is tool-owned (part of the applied fragment), so
+        # status reports current right after enroll, not stale.
+        self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.run_cli("status", str(self.repo))
+        self.assertEqual(rc, 0)
+        self.assertIn("current", buf.getvalue())
 
     def test_enroll_preserves_existing_foreign_keys(self):
         claude_dir = self.repo / ".claude"
