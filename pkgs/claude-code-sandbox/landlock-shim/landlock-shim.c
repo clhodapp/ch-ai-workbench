@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later
  *
- * landlock-shim: narrow a sandboxed command with Landlock, then exec it.
+ * landlock-shim: narrow a sandboxed command's unix-socket reach with
+ * Landlock, then exec it.
  *
- * Usage: landlock-shim [OPTIONS] -- CMD [ARGS...]
- *   --allow-exec PATH        execve() allowed only beneath the given
- *                            paths (repeatable). Landlock ABI 1.
+ * Usage: landlock-shim [--allow PATH]... [--socket-fallback open|closed]
+ *                      -- CMD [ARGS...]
  *   --allow PATH             pathname unix-socket connect() allowed only
  *                            to the given sockets (repeatable); abstract
  *                            sockets created outside the domain are
@@ -16,17 +16,25 @@
  *                            left them; "closed" refuses to run (exit 2).
  *
  * The home-manager module runs this inside Claude Code's sandbox as the
- * profile's shell wrapper. Every restriction here is strictly
- * narrowing — it can deny, never grant — and each is gated on the
- * kernel's Landlock ABI so that an older kernel degrades to exactly what
- * the upstream sandbox already enforces instead of breaking commands
- * (Ubuntu 24.04 HWE kernels, for instance, have EXECUTE and the abstract
- * scope but not RESOLVE_UNIX).
+ * profile's shell wrapper. It exists to make a profile's unix-socket
+ * allowlist real on Linux: upstream's seccomp filter is all-or-nothing,
+ * so the fragment opens it (allowAllUnixSockets) and this layer narrows
+ * connect() back to the declared sockets. That is a genuine reach
+ * barrier — it bounds which host services sandboxed code can talk to,
+ * and a copy of a file cannot defeat it. (Execve confinement was tried
+ * and removed: it could not be a real boundary while the checkout and
+ * scratch dirs are both writable and executable — an agent copies a
+ * readable file in and runs it — and no_new_privs already neutralizes
+ * setuid. The real barriers are network isolation, read-confinement,
+ * and write-confinement.)
+ *
+ * Every restriction here is strictly narrowing — it can deny, never
+ * grant — and each is gated on the kernel's Landlock ABI so an older
+ * kernel degrades to exactly what the upstream sandbox already enforces
+ * instead of breaking commands (Ubuntu 24.04 HWE kernels, for instance,
+ * have the abstract scope but not RESOLVE_UNIX).
  *
  * Semantics (see linux/landlock.h):
- * - EXECUTE: execve of a file outside the allowed trees fails with
- *   EACCES. Interpreters that merely read a script are not affected —
- *   the same ceiling a noexec mount has.
  * - RESOLVE_UNIX: connect(2)/sendmsg(2)-with-address to pathname sockets
  *   created outside this domain fail with EACCES unless allowed;
  *   sockets the command creates itself stay reachable.
@@ -35,9 +43,9 @@
  *   kernel has no per-name rule for them.
  *
  * Listed paths that do not exist are skipped with a warning: skipping is
- * strictly narrower, and an absent file cannot be executed or connected
- * to anyway. uapi constants and structs are declared locally so the
- * build never depends on the toolchain's bundled kernel-header age.
+ * strictly narrower, and an absent socket cannot be connected to anyway.
+ * uapi constants and structs are declared locally so the build never
+ * depends on the toolchain's bundled kernel-header age.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -56,11 +64,9 @@
 
 #define SHIM_CREATE_RULESET_VERSION (1U << 0)
 #define SHIM_RULE_PATH_BENEATH 1
-#define SHIM_ACCESS_FS_EXECUTE (1ULL << 0)
 #define SHIM_ACCESS_FS_RESOLVE_UNIX (1ULL << 16)
 #define SHIM_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0)
 
-#define ABI_EXECUTE 1
 #define ABI_ABSTRACT_SCOPE 6
 #define ABI_RESOLVE_UNIX 9
 
@@ -84,7 +90,7 @@ static void die(const char *msg) {
 
 static void usage(void) {
   fprintf(stderr,
-          "usage: landlock-shim [--allow-exec PATH]... [--allow PATH]... "
+          "usage: landlock-shim [--allow PATH]... "
           "[--socket-fallback open|closed] -- CMD [ARGS...]\n");
   exit(2);
 }
@@ -115,16 +121,12 @@ static int add_path_rule(int ruleset_fd, const char *path, uint64_t access) {
 }
 
 int main(int argc, char **argv) {
-  const char *exec_paths[MAX_PATHS];
   const char *sock_paths[MAX_PATHS];
-  int n_exec = 0, n_sock = 0;
+  int n_sock = 0;
   int fallback_closed = 0;
   int i = 1;
   for (; i < argc; i++) {
-    if (strcmp(argv[i], "--allow-exec") == 0 && i + 1 < argc) {
-      if (n_exec >= MAX_PATHS) usage();
-      exec_paths[n_exec++] = argv[++i];
-    } else if (strcmp(argv[i], "--allow") == 0 && i + 1 < argc) {
+    if (strcmp(argv[i], "--allow") == 0 && i + 1 < argc) {
       if (n_sock >= MAX_PATHS) usage();
       sock_paths[n_sock++] = argv[++i];
     } else if (strcmp(argv[i], "--socket-fallback") == 0 && i + 1 < argc) {
@@ -164,12 +166,10 @@ int main(int argc, char **argv) {
   }
 
   struct shim_ruleset_attr attr = {0};
-  int want_exec = n_exec > 0 && abi >= ABI_EXECUTE;
   int want_sock = n_sock > 0;
   int can_sock = abi >= ABI_RESOLVE_UNIX;
   int can_scope = abi >= ABI_ABSTRACT_SCOPE;
 
-  if (want_exec) attr.handled_access_fs |= SHIM_ACCESS_FS_EXECUTE;
   if (want_sock) {
     if (can_sock) {
       attr.handled_access_fs |= SHIM_ACCESS_FS_RESOLVE_UNIX;
@@ -200,9 +200,6 @@ int main(int argc, char **argv) {
       (int)syscall(SHIM_NR_landlock_create_ruleset, &attr, sizeof(attr), 0);
   if (ruleset_fd < 0) die("create_ruleset");
 
-  if (want_exec)
-    for (int a = 0; a < n_exec; a++)
-      add_path_rule(ruleset_fd, exec_paths[a], SHIM_ACCESS_FS_EXECUTE);
   if (want_sock && can_sock)
     for (int a = 0; a < n_sock; a++)
       add_path_rule(ruleset_fd, sock_paths[a], SHIM_ACCESS_FS_RESOLVE_UNIX);

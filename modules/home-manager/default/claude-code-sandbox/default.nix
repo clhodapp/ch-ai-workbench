@@ -78,17 +78,15 @@ let
 
   landlockShim = closure-inputs.self.packages.${system}.landlock-shim;
 
-  # Every profile's SHELL is pinned to this wrapper, which narrows each
-  # sandboxed command with Landlock before exec'ing the profile bash:
-  # - execve allowed only beneath the store (the mask already narrows it
-  #   to the closure), the checkout, and the session temp dir;
-  # - with a socket allowlist, connect() narrowed back to the declared
-  #   sockets: upstream's Linux seccomp filter is all-or-nothing, so the
-  #   fragment opens it (allowAllUnixSockets) and this layer re-narrows.
-  # Strictly narrowing, upstream enforcement untouched, each feature
-  # gated on the kernel's Landlock ABI so older kernels degrade to
-  # upstream's enforcement instead of breaking (see the shim source).
-  # Retirable if upstream grows path-scoped Linux support
+  # A profile with a socket allowlist gets its SHELL pinned to this
+  # wrapper, which narrows connect() back to the declared sockets with
+  # Landlock before exec'ing the profile bash: upstream's Linux seccomp
+  # filter is all-or-nothing, so the fragment opens it
+  # (allowAllUnixSockets) and this layer re-narrows. That is a real
+  # reach barrier (it bounds which host services sandboxed code can
+  # talk to). Strictly narrowing, upstream enforcement untouched, ABI-
+  # gated so older kernels degrade to upstream's enforcement instead of
+  # breaking. Retirable if upstream grows path-scoped Linux support
   # (anthropics/claude-code#44180).
   #
   # The narrowing applies only in sandbox context, detected by the
@@ -96,18 +94,20 @@ let
   # the same SHELL also reaches unsandboxed and excludedCommands runs,
   # which must keep escaping. Misdetection therefore fails open into
   # exactly the state the fragment already declares upstream — never
-  # into breaking an escape hatch. The exec-allowed checkout root is the
-  # command's working directory (CLAUDE_PROJECT_DIR is honored if a
-  # future Claude Code sets it, but it is not set today).
+  # into breaking an escape hatch.
+  #
+  # Execve confinement was tried and removed: it could not be a real
+  # boundary while the checkout and scratch dirs are both writable and
+  # executable (an agent copies a readable file in and runs it), and
+  # no_new_privs already neutralizes setuid. The barriers that hold are
+  # network isolation, read-confinement, and write-confinement.
   shimShell =
     name: sockets:
     pkgs.writeShellScript "ccs-shell-${name}" ''
       if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
-        exec ${landlockShim}/bin/landlock-shim ${lib.optionalString cfg.runtime.landlock.restrictExec ''
-          --allow-exec /nix/store \
-          --allow-exec "''${CLAUDE_PROJECT_DIR:-$PWD}" \
-          ''${TMPDIR:+--allow-exec "$TMPDIR"} \
-        ''} ${lib.concatMapStringsSep " " (s: "--allow ${lib.escapeShellArg s}") sockets} \
+        exec ${landlockShim}/bin/landlock-shim ${
+          lib.concatMapStringsSep " " (s: "--allow ${lib.escapeShellArg s}") sockets
+        } \
           --socket-fallback ${cfg.runtime.landlock.socketFallback} \
           -- ${runtimeShell} "$@"
       fi
@@ -135,15 +135,16 @@ let
       narrowsSockets =
         profile.allowAllUnixSockets != true && effectiveUnixSockets != null && effectiveUnixSockets != [ ];
       effectiveAllowAll = if narrowsSockets then true else profile.allowAllUnixSockets;
-      shimSockets = if narrowsSockets then effectiveUnixSockets else [ ];
-      profileShell = shimShell name shimSockets;
+      # Only a socket-narrowing profile needs the shim wrapper; others
+      # run the profile bash directly.
+      profileShell = if narrowsSockets then "${shimShell name effectiveUnixSockets}" else runtimeShell;
       closureFile = pkgs.writeClosure (
         [
           farm
           cfg.runtime.claudePackage
           cfg.runtime.shellPackage
-          profileShell
         ]
+        ++ lib.optional narrowsSockets (shimShell name effectiveUnixSockets)
         ++ cfg.runtime.sandboxTools
       );
       spec = builtins.toJSON {
@@ -496,17 +497,6 @@ in
         '';
       };
       landlock = {
-        restrictExec = lib.mkOption {
-          type = lib.types.bool;
-          default = true;
-          description = ''
-            Allow execve only beneath /nix/store (already narrowed to
-            the closure by the mask), the checkout, and the session temp
-            dir. Interpreters reading a script elsewhere are unaffected
-            — the same ceiling a noexec mount has. Landlock ABI 1, so
-            any supported kernel enforces it.
-          '';
-        };
         socketFallback = lib.mkOption {
           type = lib.types.enum [
             "open"
