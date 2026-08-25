@@ -46,6 +46,12 @@ arrays persist across syncs and are reported as local additions.
 | `sync` | Re-apply the bound profile after a profile change |
 | `materialize NAME` | Clone and enroll a registry-declared project |
 
+The CLI is on every profile's PATH, so a sandboxed agent can run
+`claude-code-sandbox status` to verify its own enrollment. Inside a
+masked profile the registry and fragments (store symlinks) are
+unreadable, so status there reports the profile and settings integrity
+with freshness marked unknown rather than guessing.
+
 Profiles regenerate at every home-manager switch; enrolled checkouts
 converge at point of use — the session-start hook heals staleness in
 the session it fires in, and an unhealed checkout keeps running its

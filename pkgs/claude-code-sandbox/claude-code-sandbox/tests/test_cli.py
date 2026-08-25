@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """End-to-end CLI tests against a temp checkout and registry."""
 
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -114,6 +116,25 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.settings()["env"]["PATH"], "/new-profile/bin")
         rc = self.run_cli("status", str(self.repo))
         self.assertEqual(rc, 0)
+
+    def test_status_degrades_inside_masked_store(self):
+        # Inside a masked-store sandbox the HM symlinks for the registry
+        # and fragments dangle (targets in /nix/store are outside the
+        # allowRead closure). Status must still report the enrollment
+        # from the sidecar, with freshness unknown, and not claim the
+        # profile is dangling.
+        self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
+        config = Path(os.environ["CLAUDE_CODE_SANDBOX_CONFIG"])
+        for p in (self.fragment_path, config / "registry.json"):
+            p.unlink()
+            p.symlink_to("/nix/store/masked-away")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.run_cli("status", str(self.repo))
+        self.assertEqual(rc, 0)
+        self.assertIn("profile 'work'", buf.getvalue())
+        self.assertIn("freshness unknown", buf.getvalue())
+        self.assertNotIn("DANGLING", buf.getvalue())
 
     def test_scan_walks_given_directory_only(self):
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")

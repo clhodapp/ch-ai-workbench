@@ -63,11 +63,15 @@ let
   # a sync, the previous one until then (kept alive by the prior HM
   # generation). Guard: stable-path indirection here desynchronizes
   # rules and farm in live sessions at switch.
+  # The module's own CLI rides every farm: a sandboxed agent can then
+  # run `claude-code-sandbox status` to verify its own enrollment (in
+  # masked profiles the registry/fragments are unreadable, so status
+  # reports freshness as unknown there and stays truthful).
   profileFarm =
     name: profile:
     pkgs.buildEnv {
       name = "ccs-profile-${name}";
-      paths = profile.toolset ++ cfg.runtime.basePackages;
+      paths = profile.toolset ++ cfg.runtime.basePackages ++ [ cfg.package ];
     };
 
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
@@ -449,17 +453,23 @@ in
           pkgs.bashNonInteractive
           pkgs.coreutils
           pkgs.cacert
+          pkgs.diffutils
+          pkgs.findutils
+          pkgs.gnugrep
+          pkgs.gnused
           pkgs.jq
           pkgs.ripgrep
-          pkgs.gnused
         ];
-        defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert pkgs.jq pkgs.ripgrep pkgs.gnused ]";
+        defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert pkgs.diffutils pkgs.findutils pkgs.gnugrep pkgs.gnused pkgs.jq pkgs.ripgrep ]";
         description = ''
-          The floor added to every profile farm: shell, core utilities,
-          TLS certificates, and the handful of text/JSON tools that
-          agent sessions reach for constantly regardless of profile. On
-          NixOS even /bin/sh and /etc/ssl resolve into the store, so a
-          farm without the first three is not a Unix.
+          The floor added to every profile farm: shell, the GNU basics
+          (coreutils, diff/cmp, find/xargs, grep, sed), TLS
+          certificates, and the JSON/search tools agent sessions reach
+          for regardless of profile. On NixOS even /bin/sh and /etc/ssl
+          resolve into the store, so a farm without shell, coreutils
+          and cacert is not a Unix. The module's own CLI also rides
+          every farm, so sandboxed agents can run
+          `claude-code-sandbox status`.
         '';
       };
       shellPackage = lib.mkOption {

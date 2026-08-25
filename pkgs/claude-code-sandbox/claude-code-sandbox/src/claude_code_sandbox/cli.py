@@ -29,7 +29,7 @@ from .files import (
     write_sidecar,
 )
 from .merge import adhoc_additions, merge
-from .registry import load_fragment, load_registry
+from .registry import MaskedStore, load_fragment, load_registry
 
 NONE_PROFILE = "none"
 _SKIP_DIRS = {".git", "node_modules", ".direnv", ".cache", "result"}
@@ -78,12 +78,20 @@ def _status_line(root: Path) -> tuple[str, bool]:
         return (f"{root}: not enrolled", False)
     profile = sidecar["profile"]
     applied = sidecar["applied"]
+    # From inside a masked-store sandbox the registry and fragments (HM
+    # symlinks into /nix/store) are unreadable; the sidecar and settings
+    # still are, so enrollment and integrity remain reportable — only
+    # freshness needs the fragment.
+    stale: bool | None
     try:
         registry = load_registry()
         fragment = load_fragment(registry, profile)
+    except MaskedStore:
+        stale = None
     except ToolError as e:
         return (f"{root}: profile '{profile}' DANGLING ({e})", True)
-    stale = fragment != applied
+    else:
+        stale = fragment != applied
     # Replay the applied blob: if re-merging it changes anything, a
     # foreign writer dropped tool-owned keys (clobbering is removals, so
     # neither staleness nor ad-hoc detection would see it).
@@ -93,6 +101,8 @@ def _status_line(root: Path) -> tuple[str, bool]:
     bits = [f"profile '{profile}'"]
     if clobbered:
         bits.append("CLOBBERED: applied keys missing from settings (sync restores)")
+    elif stale is None:
+        bits.append("applied (freshness unknown here: store masked, fragment unreadable)")
     else:
         bits.append("STALE (sync to update)" if stale else "current")
     if adhoc:

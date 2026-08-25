@@ -32,8 +32,21 @@ def config_dir() -> Path:
     return base / "claude-code-sandbox"
 
 
+class MaskedStore(ToolError):
+    """A registry/fragment path is a symlink whose target is unreadable
+    from here: the home-manager symlink points into /nix/store, and this
+    process runs inside a masked-store sandbox whose allowRead closure
+    does not include it. Callers that can degrade (status) should."""
+
+
+def _masked_here(path: Path) -> bool:
+    return path.is_symlink() and not path.exists()
+
+
 def load_registry() -> dict[str, Any]:
     path = config_dir() / "registry.json"
+    if _masked_here(path):
+        raise MaskedStore(f"registry {path} is not readable from inside a masked-store sandbox")
     if not path.exists():
         raise ToolError(
             f"no registry at {path} — is the claude-code-sandbox home-manager "
@@ -54,6 +67,11 @@ def load_fragment(registry: dict[str, Any], name: str) -> dict[str, Any]:
             f"(known: {', '.join(sorted(profiles)) or 'none at all'})"
         )
     path = Path(profiles[name])
+    if _masked_here(path):
+        raise MaskedStore(
+            f"profile '{name}' fragment {path} is not readable from inside a "
+            "masked-store sandbox"
+        )
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as e:
