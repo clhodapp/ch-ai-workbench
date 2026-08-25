@@ -87,7 +87,7 @@
               # Compiling the shim is its build-time test; Landlock
               # behavior cannot be exercised inside the Nix build
               # sandbox.
-              landlock-unix-shim = self.packages.${system}.landlock-unix-shim;
+              landlock-shim = self.packages.${system}.landlock-shim;
             };
           };
       };

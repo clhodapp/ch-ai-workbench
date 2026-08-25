@@ -100,14 +100,31 @@ auto-sync); the design is correct without it.
   Nothing is granted, and the isolation unit stays the checkout — the
   sandbox's own (every session in a checkout can already write its
   working tree). Scratch of vanished jobs is pruned.
-- Unix sockets: upstream's Linux seccomp filter is all-or-nothing, so a
-  profile's `allowUnixSockets` list is made real by opening that filter
-  and pinning the profile's SHELL to a Landlock wrapper
-  (`landlock-unix-shim`) that narrows `connect()` back to the declared
-  paths. Requires Landlock ABI 9 (kernel 7.1+); older kernels fail
-  closed. `allowAllUnixSockets = true` skips the narrowing entirely.
-  `allowNix` grants the nix daemon socket through this mechanism
-  automatically.
+- Landlock narrowing: every profile's SHELL is a wrapper that applies a
+  Landlock ruleset to each sandboxed command before exec'ing the
+  profile bash (`landlock-shim`). Two narrowings ride it:
+  - Exec: `execve` is allowed only beneath `/nix/store` (already
+    narrowed to the closure by the mask), the checkout, and the session
+    temp dir — so a downloaded binary or a script planted in the home
+    directory cannot be run directly. Interpreters reading a script
+    are unaffected, the same ceiling a `noexec` mount has.
+    `runtime.landlock.restrictExec = false` turns it off.
+  - Unix sockets: upstream's Linux seccomp filter is all-or-nothing, so
+    a profile's `allowUnixSockets` list is made real by opening that
+    filter (`allowAllUnixSockets`) and narrowing `connect()` back to
+    the declared paths; abstract-namespace sockets from outside the
+    sandbox are denied wholesale. `allowAllUnixSockets = true` skips
+    the narrowing. `allowNix` grants the nix daemon socket this way
+    automatically.
+
+  Each narrowing is gated on the kernel's Landlock ABI, so an older
+  kernel degrades to upstream's enforcement rather than breaking
+  commands: exec needs ABI 1 (any supported kernel), the abstract-socket
+  scope ABI 6 (6.12+), the socket allowlist ABI 9 (7.1+). On a kernel
+  without ABI 9 — Ubuntu 24.04 HWE, for instance — a socket-allowlist
+  profile warns once per command and leaves sockets as upstream left
+  them; `runtime.landlock.socketFallback = "closed"` makes it refuse
+  instead.
 - On non-NixOS hosts the store mask governs the nix side only; system
   directories like `/usr/bin` remain. The closed-world property is a
   NixOS property.

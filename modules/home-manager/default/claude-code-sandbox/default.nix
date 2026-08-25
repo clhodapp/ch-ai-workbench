@@ -76,31 +76,41 @@ let
 
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
 
-  landlockShim = closure-inputs.self.packages.${system}.landlock-unix-shim;
+  landlockShim = closure-inputs.self.packages.${system}.landlock-shim;
 
-  # A profile with a socket allowlist gets its SHELL pinned to this
-  # wrapper: upstream's Linux seccomp filter is all-or-nothing, so the
-  # fragment opens it (allowAllUnixSockets) and this layer narrows
-  # connect() back to the declared paths via Landlock — strictly
-  # narrowing, upstream enforcement untouched, retirable if upstream
-  # grows path-scoped Linux support (anthropics/claude-code#44180).
+  # Every profile's SHELL is pinned to this wrapper, which narrows each
+  # sandboxed command with Landlock before exec'ing the profile bash:
+  # - execve allowed only beneath the store (the mask already narrows it
+  #   to the closure), the checkout, and the session temp dir;
+  # - with a socket allowlist, connect() narrowed back to the declared
+  #   sockets: upstream's Linux seccomp filter is all-or-nothing, so the
+  #   fragment opens it (allowAllUnixSockets) and this layer re-narrows.
+  # Strictly narrowing, upstream enforcement untouched, each feature
+  # gated on the kernel's Landlock ABI so older kernels degrade to
+  # upstream's enforcement instead of breaking (see the shim source).
+  # Retirable if upstream grows path-scoped Linux support
+  # (anthropics/claude-code#44180).
   #
   # The narrowing applies only in sandbox context, detected by the
-  # proxy environment the sandbox injects into every sandboxed command:
+  # SANDBOX_RUNTIME marker the sandbox sets for every sandboxed command:
   # the same SHELL also reaches unsandboxed and excludedCommands runs,
   # which must keep escaping. Misdetection therefore fails open into
-  # exactly the allow-all state the fragment already declares upstream —
-  # never into breaking an escape hatch.
+  # exactly the state the fragment already declares upstream — never
+  # into breaking an escape hatch. The exec-allowed checkout root is the
+  # command's working directory (CLAUDE_PROJECT_DIR is honored if a
+  # future Claude Code sets it, but it is not set today).
   shimShell =
     name: sockets:
     pkgs.writeShellScript "ccs-shell-${name}" ''
-      case "''${HTTPS_PROXY:-}" in
-        http://*localhost:*)
-          exec ${landlockShim}/bin/landlock-unix-shim ${
-            lib.concatMapStringsSep " " (s: "--allow ${lib.escapeShellArg s}") sockets
-          } -- ${runtimeShell} "$@"
-          ;;
-      esac
+      if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
+        exec ${landlockShim}/bin/landlock-shim ${lib.optionalString cfg.runtime.landlock.restrictExec ''
+          --allow-exec /nix/store \
+          --allow-exec "''${CLAUDE_PROJECT_DIR:-$PWD}" \
+          ''${TMPDIR:+--allow-exec "$TMPDIR"} \
+        ''} ${lib.concatMapStringsSep " " (s: "--allow ${lib.escapeShellArg s}") sockets} \
+          --socket-fallback ${cfg.runtime.landlock.socketFallback} \
+          -- ${runtimeShell} "$@"
+      fi
       exec ${runtimeShell} "$@"
     '';
 
@@ -118,20 +128,22 @@ let
           null
         else
           (if profile.allowUnixSockets == null then [ ] else profile.allowUnixSockets) ++ auto;
-      # A non-empty allowlist (without an explicit allow-all) engages
-      # the Landlock wrapper; an explicit allowAllUnixSockets is carried
-      # verbatim and wins.
-      wantsShim =
+      # A non-empty allowlist (without an explicit allow-all) is what
+      # the shim narrows sockets to, and what makes the fragment open
+      # upstream's filter; an explicit allowAllUnixSockets is carried
+      # verbatim, wins, and gets no socket narrowing.
+      narrowsSockets =
         profile.allowAllUnixSockets != true && effectiveUnixSockets != null && effectiveUnixSockets != [ ];
-      effectiveAllowAll = if wantsShim then true else profile.allowAllUnixSockets;
-      profileShell = if wantsShim then "${shimShell name effectiveUnixSockets}" else runtimeShell;
+      effectiveAllowAll = if narrowsSockets then true else profile.allowAllUnixSockets;
+      shimSockets = if narrowsSockets then effectiveUnixSockets else [ ];
+      profileShell = shimShell name shimSockets;
       closureFile = pkgs.writeClosure (
         [
           farm
           cfg.runtime.claudePackage
           cfg.runtime.shellPackage
+          profileShell
         ]
-        ++ lib.optional wantsShim (shimShell name effectiveUnixSockets)
         ++ cfg.runtime.sandboxTools
       );
       spec = builtins.toJSON {
@@ -144,7 +156,7 @@ let
         allowUnixSockets = effectiveUnixSockets;
         allowAllUnixSockets = effectiveAllowAll;
         path = lib.concatStringsSep ":" ([ "${farm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools);
-        shell = profileShell;
+        shell = "${profileShell}";
         extraEnv = profile.extraEnv;
         extraSettings = profile.extraSettings;
       };
@@ -482,6 +494,34 @@ in
           own closure. Non-interactive bash keeps the session-start rc
           snapshot free of login-shell config.
         '';
+      };
+      landlock = {
+        restrictExec = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Allow execve only beneath /nix/store (already narrowed to
+            the closure by the mask), the checkout, and the session temp
+            dir. Interpreters reading a script elsewhere are unaffected
+            — the same ceiling a noexec mount has. Landlock ABI 1, so
+            any supported kernel enforces it.
+          '';
+        };
+        socketFallback = lib.mkOption {
+          type = lib.types.enum [
+            "open"
+            "closed"
+          ];
+          default = "open";
+          description = ''
+            What a profile with a unix-socket allowlist does on a kernel
+            whose Landlock cannot enforce it (ABI < 9, i.e. before
+            7.1 — Ubuntu 24.04 HWE kernels, for instance). "open" warns
+            once per command and leaves sockets as the upstream sandbox
+            left them (allow-all, which the fragment already declares);
+            "closed" refuses to run sandboxed commands there.
+          '';
+        };
       };
     };
 
