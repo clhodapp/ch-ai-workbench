@@ -106,6 +106,23 @@ class CliTest(unittest.TestCase):
         )
         self.assertEqual(sidecar["profile"], "none")
 
+    def test_status_survives_device_settings_file(self):
+        # A worktree / bg-isolation harness can bind the checkout's
+        # settings file to a character device (e.g. /dev/null), which is
+        # not a regular file and may deny reads. status must degrade, not
+        # crash with a traceback.
+        self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
+        settings = self.repo / ".claude" / "settings.local.json"
+        settings.unlink()
+        os.symlink("/dev/null", settings)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self.run_cli("status", str(self.repo))
+        # /dev/null reads as empty -> no sidecar-matching settings, but
+        # the sidecar is intact, so status still reports the profile.
+        self.assertIn(rc, (0, 2))
+        self.assertIn("profile 'work'", buf.getvalue())
+
     def test_status_reports_stale_after_fragment_change(self):
         self.run_cli("enroll", "--profile", "work", str(self.repo), "--quiet")
         changed = dict(FRAGMENT)

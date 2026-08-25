@@ -52,6 +52,19 @@ def read_json(path: Path) -> dict[str, Any]:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
+    except (IsADirectoryError, PermissionError, OSError):
+        # A settings path can be substituted by the worktree/bg-isolation
+        # harness — e.g. bound to a character device, not a regular file,
+        # which may deny reads. There is no JSON content to merge in that
+        # case; treat it as absent rather than crash. A genuine regular
+        # file with a real read error still raises.
+        if path.is_file():
+            raise
+        return {}
+    if not raw.strip():
+        # Empty content (e.g. reading through /dev/null) is not valid
+        # JSON but carries nothing to merge; treat it as absent.
+        return {}
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as e:
