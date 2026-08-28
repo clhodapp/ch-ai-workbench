@@ -352,10 +352,6 @@ let
   registry = pkgs.writeText "ccs-registry.json" (
     builtins.toJSON {
       profiles = lib.mapAttrs (name: _: fragmentAbsPath name) allFragments;
-      projects = lib.mapAttrs (_: p: {
-        inherit (p) url path;
-        profile = p.profile;
-      }) cfg.projects;
       # source→target for the session-start hook to materialize as owned
       # copies under the checkout's creds dir. source null = create an
       # empty 0600 drop point for a runtime provisioner.
@@ -608,23 +604,6 @@ in
         becomes). `none` is reserved: deliberately empty forever, the
         target of `abandon`.
       '';
-    };
-
-    projects = lib.mkOption {
-      type = lib.types.attrsOf (
-        lib.types.submodule {
-          options = {
-            url = lib.mkOption { type = lib.types.str; };
-            path = lib.mkOption { type = lib.types.str; };
-            profile = lib.mkOption {
-              type = lib.types.str;
-              default = "default";
-            };
-          };
-        }
-      );
-      default = { };
-      description = "Projects `materialize` may clone + enroll (never at switch).";
     };
 
     credentials = lib.mkOption {

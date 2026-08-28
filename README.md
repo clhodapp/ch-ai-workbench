@@ -44,7 +44,6 @@ arrays persist across syncs and are reported as local additions.
 | `status` | This checkout's binding, staleness, local additions |
 | `scan DIR` | Same, for every checkout under the given directory |
 | `sync` | Re-apply the bound profile after a profile change |
-| `materialize NAME` | Clone and enroll a registry-declared project |
 
 The CLI is on every profile's PATH, so a sandboxed agent can run
 `claude-code-sandbox status` to verify its own enrollment. Inside a

@@ -25,8 +25,6 @@ All verbs are cwd-local unless noted. Run them with the Bash tool.
   profile edit.
 - `claude-code-sandbox scan DIR` — report every checkout under the
   given directory (the invoker supplies the scope; nothing is assumed).
-- `claude-code-sandbox materialize NAME` — clone + enroll a project
-  declared in the registry (network; user-invoked).
 
 Facts that prevent wrong conclusions:
 
