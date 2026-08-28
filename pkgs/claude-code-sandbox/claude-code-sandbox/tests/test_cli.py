@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """End-to-end CLI tests against a temp checkout and registry."""
 
 import contextlib
