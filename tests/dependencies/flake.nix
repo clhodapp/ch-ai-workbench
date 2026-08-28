@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 {
   inputs.ch-flake.url = "github:clhodapp/ch-flake";
   inputs.flake-parts.url = "github:hercules-ci/flake-parts";

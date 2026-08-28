@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """File plumbing: repo discovery, atomic JSON IO, sidecar, registry.
 
 The settings file is written the same way Claude Code writes it (temp file

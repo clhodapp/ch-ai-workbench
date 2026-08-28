@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LGPL-3.0-or-later
+/* SPDX-License-Identifier: MIT
  *
  * landlock-shim: narrow a sandboxed command's unix-socket reach with
  * Landlock, then exec it.

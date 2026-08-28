@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Landlock-based narrowing (exec allowlist, unix-socket allowlist) that
 # the home-manager module wraps around every profile's shell inside the
 # sandbox. Not meant to be invoked by hand. See the C source header for
@@ -27,7 +27,7 @@ stdenv.mkDerivation {
 
   meta = {
     description = "Narrow execve and unix-socket connect() via Landlock, then exec";
-    license = lib.licenses.lgpl3Plus;
+    license = lib.licenses.mit;
     platforms = lib.platforms.linux;
     mainProgram = "landlock-shim";
   };

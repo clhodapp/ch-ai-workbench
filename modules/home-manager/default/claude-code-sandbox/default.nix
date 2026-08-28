@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 #
 # Home-manager half of claude-code-sandbox: declares named sandbox
 # *profiles* (toolsets compiled to Claude Code native-sandbox rules),

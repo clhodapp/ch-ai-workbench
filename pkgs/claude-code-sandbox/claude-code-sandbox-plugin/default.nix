@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # The skills-dir plugin: ceremony skill + the advisory SessionStart hook
 # (staleness/integrity tripwire with auto-sync). Deployed by the
 # home-manager module into ~/.claude/skills/claude-code-sandbox, where it
@@ -17,7 +17,7 @@ runCommand "claude-code-sandbox-plugin"
     ccsTool = claude-code-sandbox;
     meta = {
       description = "Claude Code skills-dir plugin for claude-code-sandbox";
-      license = lib.licenses.lgpl3Plus;
+      license = lib.licenses.mit;
     };
   }
   ''

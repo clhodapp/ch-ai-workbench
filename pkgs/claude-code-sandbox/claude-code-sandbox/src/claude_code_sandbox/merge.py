@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Three-way merge for co-owned Claude Code settings files.
 
 The tool co-owns ``.claude/settings.local.json`` with Claude Code itself:

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 {
   python3Packages,
   lib,
@@ -25,7 +25,7 @@ python3Packages.buildPythonApplication {
 
   meta = {
     description = "Nix-authored per-project configuration for Claude Code's native sandbox";
-    license = lib.licenses.lgpl3Plus;
+    license = lib.licenses.mit;
     mainProgram = "claude-code-sandbox";
   };
 }
