@@ -93,11 +93,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1787902056,
-        "narHash": "sha256-Yn8B2a3h33u5KTWycbHDDIwPGL+KhLaDMjDyJ636k6s=",
+        "lastModified": 1788087587,
+        "narHash": "sha256-1VmuaKSgZC2sof2BsZLS3/+UBWbUJUM58cTk/Hp4LiU=",
         "owner": "clhodapp",
         "repo": "ch-nixpkgs",
-        "rev": "1834a627cdeed6d002b312b4eea2afd0986e7c01",
+        "rev": "9b4fafd66cff899fd4f7ddf256fbb94aac16bda2",
         "type": "github"
       },
       "original": {
