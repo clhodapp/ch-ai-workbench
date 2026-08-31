@@ -70,11 +70,11 @@
         "plasma-manager": "plasma-manager"
       },
       "locked": {
-        "lastModified": 1788161120,
-        "narHash": "sha256-VjNT007mvu/8Up+a1E7QhRTBeB4jA0xhYk0E5JXJW1w=",
+        "lastModified": 1788176827,
+        "narHash": "sha256-XmoK4cHLsvlHL+9cWoUNmckHX4aSWEkuVpENza1OXkQ=",
         "owner": "clhodapp",
         "repo": "ch-home-manager",
-        "rev": "eb348dc588295b154f19ba2fd1b6eab48a07de9d",
+        "rev": "6000befaa413df83f9e8948bdc05f18621383d97",
         "type": "github"
       },
       "original": {
@@ -176,11 +176,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1787797243,
-        "narHash": "sha256-8+Q7NOB7RPajRjA4pbCDLzqH+MTjnG9x6LUPLfL2joA=",
+        "lastModified": 1788146656,
+        "narHash": "sha256-XmJmvk9rytTb7dCotO/aqR+YysB8HOqnprlOdv+LAF4=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "99c9ec63390f1d8c14d95d9e8b17cc29cfbd4e11",
+        "rev": "82c265faf4e3161d6015db07c9b0f1ee36a9029b",
         "type": "github"
       },
       "original": {
