@@ -70,11 +70,11 @@
         "plasma-manager": "plasma-manager"
       },
       "locked": {
-        "lastModified": 1788124952,
-        "narHash": "sha256-saOeEnuO6QukXf4z5rffcGpMp9kFx7Z9dOBz0KA0sTA=",
+        "lastModified": 1788161120,
+        "narHash": "sha256-VjNT007mvu/8Up+a1E7QhRTBeB4jA0xhYk0E5JXJW1w=",
         "owner": "clhodapp",
         "repo": "ch-home-manager",
-        "rev": "ba801824cc48f1f4d4c4d627ed4f150f3af1f994",
+        "rev": "eb348dc588295b154f19ba2fd1b6eab48a07de9d",
         "type": "github"
       },
       "original": {
