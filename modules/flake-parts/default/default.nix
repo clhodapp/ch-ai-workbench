@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: MIT
-{ closure-inputs, mkModule, ... }:
+#
+# The exported flake module. Consumers also need caisson's default
+# flake module (configInfo and the export options) applied, which any
+# caisson composition selects from its own registry.
+{ mkModule, ... }:
 { ... }:
 {
   imports = [
     (mkModule ./claude-code-sandbox)
-    closure-inputs.ch-flake.flakeModules.default
-    closure-inputs.ch-nixpkgs.flakeModules.default
   ];
 }

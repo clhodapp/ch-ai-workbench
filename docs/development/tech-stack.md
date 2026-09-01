@@ -6,11 +6,13 @@ Extends the workspace `tech-defaults.md`.
   `unittest`). The three-way merge wants real data handling and unit
   tests; no dependency tail is the point. Packaged with
   `buildPythonApplication` (pyproject/setuptools).
-- **Flake**: ch-flake `mkLib`/`mkFlake`, caisson layout. Packages
-  export through ch-nixpkgs overlays; checks and formatter live in
-  partitions against `tests/dependencies`.
-- **Home-manager module**: exported via
-  `lib.ch-home-manager.mkHomeManagerModule`; options under
+- **Flake**: caisson `mkLib`/`mkFlake`
+  ([github:nix-caisson/caisson](https://github.com/nix-caisson/caisson)),
+  caisson layout. Packages export through ch-nixpkgs overlays; checks
+  and formatter live in partitions against `tests/dependencies`.
+- **Home-manager module**: registered with
+  `lib.caisson-core.mkModule "homeManager"` and exported via
+  `caisson.modules.homeManager.exported`; options under
   `claude-code-sandbox.*`. Profile fragments are built at generation
   time (`writeClosure` → JSON via an inline python builder) and placed
   behind stable `$XDG_CONFIG_HOME` paths; per-profile bin farms are
