@@ -24,7 +24,7 @@
     };
   };
 
-  ch-nixpkgs = {
+  caisson.nixpkgs = {
     overlays.all = {
       packages = lib.caisson.nixpkgs.mkPackagesOverlay (
         { callPackage, ... }: import ../../../pkgs/claude-code-sandbox { inherit callPackage; }

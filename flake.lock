@@ -2,11 +2,11 @@
   "nodes": {
     "caisson": {
       "locked": {
-        "lastModified": 1788242478,
-        "narHash": "sha256-ue/yZgHDW2wbiEBxWgbd743242rx+73OpFk/dUt3suI=",
+        "lastModified": 1788424022,
+        "narHash": "sha256-O5L156uTgGIjBlD9R4uTl4cGAfTa1SiWZRSZBneF7Lo=",
         "owner": "nix-caisson",
         "repo": "caisson",
-        "rev": "c1e3347080a20fefc17d368673af691cdea4a2ed",
+        "rev": "7eb1bd6270d2a38c6f7973dae3288841cbece3e4",
         "type": "github"
       },
       "original": {
@@ -17,11 +17,11 @@
     },
     "caisson_2": {
       "locked": {
-        "lastModified": 1788242478,
-        "narHash": "sha256-ue/yZgHDW2wbiEBxWgbd743242rx+73OpFk/dUt3suI=",
+        "lastModified": 1788424022,
+        "narHash": "sha256-O5L156uTgGIjBlD9R4uTl4cGAfTa1SiWZRSZBneF7Lo=",
         "owner": "nix-caisson",
         "repo": "caisson",
-        "rev": "c1e3347080a20fefc17d368673af691cdea4a2ed",
+        "rev": "7eb1bd6270d2a38c6f7973dae3288841cbece3e4",
         "type": "github"
       },
       "original": {
@@ -35,11 +35,11 @@
         "caisson": "caisson_2"
       },
       "locked": {
-        "lastModified": 1788242948,
-        "narHash": "sha256-jp+ST7Q4id1fLXi8hAAG6UDNRddBj9Y6BRDq86ihA7I=",
+        "lastModified": 1788424039,
+        "narHash": "sha256-sok/44kXqfj2hVM2S+pALzFK6+gdAvFHKTSW2iMjReM=",
         "owner": "clhodapp",
         "repo": "ch-nixpkgs",
-        "rev": "a89147749f4bd04115c173b69844f16f4db66727",
+        "rev": "76f99be67addd45cba13ed516ecfde930b252c59",
         "type": "github"
       },
       "original": {

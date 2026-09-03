@@ -8,8 +8,9 @@ Extends the workspace `tech-defaults.md`.
   `buildPythonApplication` (pyproject/setuptools).
 - **Flake**: caisson `mkLib`/`mkFlake`
   ([github:nix-caisson/caisson](https://github.com/nix-caisson/caisson)),
-  caisson layout. Packages export through ch-nixpkgs overlays; checks
-  and formatter live in partitions against `tests/dependencies`.
+  caisson layout. Packages export through the caisson.nixpkgs overlay
+  machinery; checks and formatter live in partitions against
+  `tests/dependencies`.
 - **Home-manager module**: registered with
   `lib.caisson-core.mkModule "homeManager"` and exported via
   `caisson.modules.homeManager.exported`; options under
