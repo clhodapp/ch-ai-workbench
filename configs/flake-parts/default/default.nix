@@ -1,0 +1,219 @@
+# SPDX-License-Identifier: MIT
+{ ... }:
+{
+  inputs,
+  lib,
+  ...
+}:
+{
+
+  debug = false;
+  systems = [ "x86_64-linux" ];
+
+  caisson.configInfo.configName = "ch-ai-workbench";
+  caisson.modules.homeManager.exported = modules: {
+    inherit (modules)
+      emacs
+      claude-code
+      emacs-integration
+      zsh
+      ;
+  };
+
+  caisson.nixpkgs.overlays.all = {
+    merman = _name: inputs.merman.overlays.packages;
+    # The editor's Emacs bases and ELPA pins: the checks below build
+    # this layer's packages against the same Emacs the editor
+    # configures, since they load into it.
+    emacs = _name: inputs.ch-emacs-config.overlays.emacs;
+    emacs-packages = _name: inputs.ch-emacs-config.overlays.emacs-packages;
+  };
+
+  caisson.nixpkgs.pkgSets.pkgs = {
+    pkgFunction = import inputs.nixpkgs;
+    overlayImports = overlays: [
+      overlays.emacs-packages
+      overlays.emacs
+      overlays.merman
+    ];
+  };
+
+  partitionedAttrs.checks = "checks";
+  partitionedAttrs.formatter = "formatter";
+
+  partitions.formatter = {
+    extraInputs = lib.caisson-core.partitionExtraInputs ../../../tests/dependencies;
+    module =
+      { inputs, ... }:
+      {
+        imports = [ inputs.treefmt-nix.flakeModule ];
+        perSystem.treefmt.programs.nixfmt.enable = true;
+      };
+  };
+
+  partitions.checks = {
+    extraInputs = lib.caisson-core.partitionExtraInputs ../../../tests/dependencies;
+    module =
+      { inputs, self, ... }:
+      {
+        imports = [ inputs.treefmt-nix.flakeModule ];
+        perSystem =
+          { pkgs, system, ... }:
+          let
+            merman = inputs.merman.packages.${system}.merman;
+
+            # An Emacs carrying both layers' bundles, built the way the
+            # editor builds its own check Emacs: the ERT suites below run
+            # `--batch` against the full init, so the packages must be in
+            # the init package's closure rather than merely installed
+            # into a profile.
+            scope = import "${inputs.ch-emacs-config}/modules/home-manager/emacs/lib/package-scope.nix" {
+              inherit pkgs;
+              lib = pkgs.lib;
+              emacsPackage = pkgs.ch-emacs-config.emacs-pgtk;
+              bundles =
+                (import "${inputs.ch-emacs-config}/modules/home-manager/emacs/bundles/spec.nix")
+                // workbenchBundles;
+              sources = {
+                # Through the editor rather than a second input, so both
+                # layers build pr-review from one revision.
+                inherit (inputs.ch-emacs-config.inputs) pr-review;
+              };
+              extraOverrides = [
+                (self: _super: {
+                  collab-comments = self.callPackage ../../../pkgs/emacs/collab-comments/package.nix {
+                    src = inputs.collab-comments;
+                  };
+                  parenting = self.callPackage ../../../pkgs/emacs/parenting/package.nix {
+                    src = inputs.parenting;
+                  };
+                })
+              ];
+              localPackageOverlays = workbenchLocalPackages;
+            };
+
+            emacs = scope.emacs;
+
+            # This layer's bundle spec and local packages, read from the
+            # module so the checks and a real configuration cannot drift.
+            workbenchBundles = import ../../../modules/home-manager/emacs/bundles-spec.nix {
+              inherit lib;
+              readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
+              merman = inputs.merman.packages.${system}.merman;
+            };
+            workbenchLocalPackages = import ../../../modules/home-manager/emacs/local-packages.nix;
+
+            aiCommitSrc = "${self}/modules/home-manager/emacs/packages/ai-commit";
+            claudeQueueSrc = "${self}/modules/home-manager/emacs/packages/claude-queue";
+            semanticFinderSrc = "${self}/modules/home-manager/emacs/packages/semantic-finder";
+            testsSrc = "${self}/modules/home-manager/emacs/tests";
+
+            mermanMmdcShim = pkgs.writeShellScriptBin "mmdc" ''exec ${lib.getExe merman} mmdc "$@"'';
+          in
+          {
+            checks = {
+              # Evaluating the two modules together is itself the check
+              # that this layer composes with the editor: the bundles
+              # merge into one init, the packages build against one Emacs
+              # package set, and the whole activation resolves.
+              home-manager-module =
+                (inputs.home-manager.lib.homeManagerConfiguration {
+                  inherit pkgs;
+                  modules = [
+                    inputs.ch-emacs-config.modules.homeManager.emacs
+                    self.modules.homeManager.emacs
+                    self.modules.homeManager.claude-code
+                    self.modules.homeManager.emacs-integration
+                    {
+                      home.username = "tester";
+                      home.homeDirectory = "/home/tester";
+                      home.stateVersion = "25.05";
+                      programs.emacs.enable = true;
+                      ch-emacs-config.emacs.enable = true;
+                      ch-ai-workbench.emacs.enable = true;
+                      ch-ai-workbench.claude-code.enable = true;
+                      ch-ai-workbench.emacs-integration.enable = true;
+                    }
+                  ];
+                }).activationPackage;
+
+              ai-commit-ert = pkgs.runCommand "ai-commit-ert" { } ''
+                export HOME="$TMPDIR"
+                ${emacs}/bin/emacs --batch \
+                  -L ${aiCommitSrc} \
+                  -l ${aiCommitSrc}/tests/ai-commit-ert.el \
+                  -f ert-run-tests-batch-and-exit
+                touch $out
+              '';
+
+              # The semantic finder's server-free surface: slicing,
+              # staleness, response parsing, ranking, and the stale-OK
+              # on-demand indexing policy (requests mocked).
+              semantic-finder-ert = pkgs.runCommand "semantic-finder-ert" { } ''
+                export HOME="$TMPDIR"
+                ${emacs}/bin/emacs --batch \
+                  -L ${semanticFinderSrc} \
+                  -l ${semanticFinderSrc}/tests/semantic-finder-ert.el \
+                  -f ert-run-tests-batch-and-exit
+                touch $out
+              '';
+
+              # claude-queue requires semantic-finder: the agent finder
+              # ranks transcripts through its embedding client.
+              claude-queue-ert = pkgs.runCommand "claude-queue-ert" { } ''
+                export HOME="$TMPDIR"
+                ${emacs}/bin/emacs --batch \
+                  -L ${claudeQueueSrc} \
+                  -L ${semanticFinderSrc} \
+                  -l ${claudeQueueSrc}/tests/claude-queue-ert.el \
+                  -f ert-run-tests-batch-and-exit
+                touch $out
+              '';
+
+              claude-consent-ert = pkgs.runCommand "claude-consent-ert" { } ''
+                export HOME="$TMPDIR"
+                ${emacs}/bin/emacs --batch \
+                  -L ${claudeQueueSrc} \
+                  -l ${claudeQueueSrc}/tests/claude-consent-ert.el \
+                  -f ert-run-tests-batch-and-exit
+                touch $out
+              '';
+
+              # MCP agent tools against the full init: registration
+              # (which validates the tool docstring schemas), the non-LSP
+              # tools end to end, and clean tool errors from the
+              # LSP-backed ones.
+              mcp-tools-ert =
+                pkgs.runCommand "mcp-tools-ert"
+                  {
+                    # The mermaid tests skip without an mmdc on PATH; the
+                    # shim makes them exercise the real renderer.
+                    nativeBuildInputs = [ mermanMmdcShim ];
+                  }
+                  ''
+                    export HOME="$TMPDIR"
+                    ${emacs}/bin/emacs --batch \
+                      -l ${testsSrc}/mcp-tools-ert.el \
+                      -f ert-run-tests-batch-and-exit
+                    touch $out
+                  '';
+
+              # The collab-comments integration: the add-comment and
+              # list-comments MCP tools with their edit-contract anchor
+              # matching, and threads surviving present and transcript
+              # re-renders. The package's own suite runs in its
+              # repository (github:clhodapp/collab-comments).
+              collab-comments-ert = pkgs.runCommand "collab-comments-ert" { } ''
+                export HOME="$TMPDIR"
+                ${emacs}/bin/emacs --batch \
+                  -l ${testsSrc}/collab-comments-ert.el \
+                  -f ert-run-tests-batch-and-exit
+                touch $out
+              '';
+            };
+            treefmt.programs.nixfmt.enable = true;
+          };
+      };
+  };
+
+}

@@ -1,0 +1,36 @@
+# Build and test on every push and pull request.
+#
+# `nix flake check` builds the package and runs the smoke check that
+# drives the built binaries over the interfaces callers use. That is the
+# same command a contributor runs locally.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Run the flake checks
+        run: nix flake check --print-build-logs
