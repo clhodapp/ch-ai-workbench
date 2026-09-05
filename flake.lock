@@ -35,11 +35,11 @@
         "caisson": "caisson_2"
       },
       "locked": {
-        "lastModified": 1788432651,
-        "narHash": "sha256-sd+gx1stPk1+emqwaz0tGlaPUGXXPXA0gNw+AAnIptQ=",
+        "lastModified": 1788651720,
+        "narHash": "sha256-F/flEu/8y6NY5gY26F3H9wgwIZQ10RpzFgr5AObAQFE=",
         "owner": "clhodapp",
         "repo": "ch-nixpkgs",
-        "rev": "d1e008f338cdacdfe0afdd7d2aec2dbc31f6e222",
+        "rev": "b81c7a58fc3de22022764bc5b7ce16963b8e2627",
         "type": "github"
       },
       "original": {
