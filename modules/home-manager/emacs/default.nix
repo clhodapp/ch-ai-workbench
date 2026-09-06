@@ -45,6 +45,19 @@ in
 {
   options.ch-ai-workbench.emacs = {
     enable = lib.mkEnableOption "the Emacs half of the AI workbench";
+
+    extraInitContent = lib.mkOption {
+      type = lib.types.lines;
+      default = "";
+      description = ''
+        Additional Elisp for the agent layer, appended after this layer's
+        bundle inits. Use this rather than
+        `ch-emacs-config.emacs.extraInitContent` for anything naming a
+        symbol the bundles here define: the editor's option also feeds its
+        standalone init, which carries none of this layer's bundles, so a
+        reference to one of their symbols fails to compile there.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -64,6 +77,12 @@ in
     ];
 
     ch-emacs-config.emacs.localPackageOverlays = import ./local-packages.nix;
+
+    # This layer's own init hook, forwarded to the editor's only when the
+    # layer is enabled. mkAfter puts it past the bundle inits above, so it
+    # may name the symbols they define; being inside `mkIf cfg.enable` is
+    # what keeps it out of an editor configured without this layer.
+    ch-emacs-config.emacs.extraInitContent = lib.mkAfter cfg.extraInitContent;
 
     # `enable` is wrapped here rather than in the spec: the spec is also
     # read as plain data by the checks, where a priority wrapper is not
