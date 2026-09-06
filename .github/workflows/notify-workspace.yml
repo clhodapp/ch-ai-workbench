@@ -18,11 +18,7 @@ permissions: {}
 
 jobs:
   dispatch:
-    # The app credentials exist only on the upstream repo, so a fork
-    # pushing to its own main would fail this job rather than skip it.
-    if: >-
-      github.repository == 'clhodapp/ch-claude-code-config' &&
-      !startsWith(github.event.head_commit.message, 'maint: update flake pins')
+    if: "!startsWith(github.event.head_commit.message, 'maint: update flake pins')"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
