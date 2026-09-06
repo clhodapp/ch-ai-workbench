@@ -129,6 +129,19 @@ in
           set emacsclientPath to where emacsclient lives.
         '';
       }
+      # The skill documents the MCP server's tools and the session hooks
+      # drive claude-queue; both live in this flake's claude module, so
+      # unlike the render-dwim bundle above this can be checked rather
+      # than asked.
+      {
+        assertion =
+          (!cfg.skill.enable && !cfg.sessionHooks.enable) || (config.ch-ai-workbench.claude.enable or false);
+        message = ''
+          ch-ai-workbench.emacs-integration's skill and session hooks
+          need ch-ai-workbench.claude (the MCP server and claude-queue);
+          enable it, or switch skill.enable and sessionHooks.enable off.
+        '';
+      }
     ];
 
     ch-ai-workbench.claude-code.skills = lib.mkIf cfg.skill.enable {

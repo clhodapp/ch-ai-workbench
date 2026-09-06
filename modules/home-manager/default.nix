@@ -1,8 +1,16 @@
 # SPDX-License-Identifier: MIT
 { lib }:
 {
-  # The Emacs half: the bundles, their packages, and the MCP bridge.
+  # The Emacs half, in three modules that each define their bundles on
+  # the editor's own options.
+  # Vendor-neutral: comment threads, the semantic finder, parenting, the
+  # ACP agent shell, commit messages, the ghostel environment handoff.
   emacs = lib.caisson-core.mkModule "homeManager" ./emacs;
+  # gptel and gptel-agent, and the backend and model they start on.
+  gptel = lib.caisson-core.mkModule "homeManager" ./gptel;
+  # Claude Code in Emacs: claude-queue, the MCP server, and its stdio
+  # bridge. Needs `emacs`.
+  claude = lib.caisson-core.mkModule "homeManager" ./claude;
   # The agent half: hooks, skills, output styles, permissions, and the
   # LSP plugin manifest.
   claude-code = lib.caisson-core.mkModule "homeManager" ./claude-code;
