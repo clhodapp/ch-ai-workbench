@@ -131,6 +131,12 @@
                       programs.emacs.enable = true;
                       ch-emacs-config.emacs.enable = true;
                       ch-ai-workbench.emacs.enable = true;
+                      # Forces the gptel option types and the init append
+                      # through evaluation and the byte compiler.
+                      ch-ai-workbench.emacs.gptel = {
+                        backend = "fireworks";
+                        model = "accounts/fireworks/models/deepseek-v4-flash";
+                      };
                       ch-ai-workbench.claude-code.enable = true;
                       ch-ai-workbench.emacs-integration.enable = true;
                     }

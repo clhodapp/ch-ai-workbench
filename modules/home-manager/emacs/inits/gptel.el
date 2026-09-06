@@ -10,8 +10,19 @@
 (declare-function gptel-highlight-mode "gptel")
 (declare-function url-hexify-string "url-util")
 
+(defvar ch-emacs-config-gptel--anthropic-backend nil)
 (defvar ch-emacs-config-gptel--openrouter-backend nil)
 (defvar ch-emacs-config-gptel--fireworks-backend nil)
+
+;; The backend and model gptel starts on. Nil means the defaults in the
+;; `:config' block below (Claude); a configuration sets these through the
+;; `ch-ai-workbench.emacs.gptel' options, which append `setq' forms after
+;; this init. They are read when gptel loads, which is after this file,
+;; so a value set here at load time is what the deferred config sees.
+(defvar ch-emacs-config-gptel-default-backend nil
+  "One of `anthropic', `openrouter' or `fireworks', or nil for the default.")
+(defvar ch-emacs-config-gptel-default-model nil
+  "A model symbol the chosen backend lists, or nil for the default.")
 
 ;; OpenRouter: OpenAI-compatible format.
 ;; Response: {"data": [{"id": "..."}], "has_more": bool}
@@ -126,14 +137,13 @@
    gptel-menu)
 
   :config
-  (setq gptel-backend
+  (setq ch-emacs-config-gptel--anthropic-backend
         (gptel-make-anthropic "Claude"
           :stream t
           :key (lambda ()
                  (auth-source-pick-first-password
                   :host "api.anthropic.com"
                   :user "apikey"))))
-  (setq gptel-model 'claude-sonnet-4-6)
 
   (setq ch-emacs-config-gptel--openrouter-backend
         (gptel-make-openai "OpenRouter"
@@ -163,6 +173,13 @@
                     accounts/fireworks/models/kimi-k2p7-code
                     accounts/fireworks/models/minimax-m3
                     accounts/fireworks/models/nemotron-3-ultra-nvfp4)))
+
+  (setq gptel-backend
+        (pcase ch-emacs-config-gptel-default-backend
+          ('openrouter ch-emacs-config-gptel--openrouter-backend)
+          ('fireworks ch-emacs-config-gptel--fireworks-backend)
+          (_ ch-emacs-config-gptel--anthropic-backend)))
+  (setq gptel-model (or ch-emacs-config-gptel-default-model 'claude-sonnet-4-6))
 
   (ch-emacs-config-gptel-refresh-models)
 

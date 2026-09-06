@@ -46,17 +46,32 @@ in
   options.ch-ai-workbench.emacs = {
     enable = lib.mkEnableOption "the Emacs half of the AI workbench";
 
-    extraInitContent = lib.mkOption {
-      type = lib.types.lines;
-      default = "";
-      description = ''
-        Additional Elisp for the agent layer, appended after this layer's
-        bundle inits. Use this rather than
-        `ch-emacs-config.emacs.extraInitContent` for anything naming a
-        symbol the bundles here define: the editor's option also feeds its
-        standalone init, which carries none of this layer's bundles, so a
-        reference to one of their symbols fails to compile there.
-      '';
+    gptel = {
+      backend = lib.mkOption {
+        type = lib.types.nullOr (
+          lib.types.enum [
+            "anthropic"
+            "openrouter"
+            "fireworks"
+          ]
+        );
+        default = null;
+        description = ''
+          The backend gptel starts on, one of the three the gptel bundle
+          configures. Null keeps the bundle's default (Anthropic).
+        '';
+      };
+
+      model = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "[^[:space:]()'\"]+");
+        default = null;
+        example = "accounts/fireworks/models/deepseek-v4-flash";
+        description = ''
+          The model gptel starts on, as the symbol name gptel uses for it;
+          it should be one the chosen backend lists. Null keeps the
+          bundle's default.
+        '';
+      };
     };
   };
 
@@ -78,23 +93,33 @@ in
 
     ch-emacs-config.emacs.localPackageOverlays = import ./local-packages.nix;
 
-    # This layer's own init hook, forwarded to the editor's only when the
-    # layer is enabled. mkAfter puts it past the bundle inits above, so it
-    # may name the symbols they define; being inside `mkIf cfg.enable` is
-    # what keeps it out of an editor configured without this layer.
-    ch-emacs-config.emacs.extraInitContent = lib.mkAfter cfg.extraInitContent;
-
-    # `enable` is wrapped here rather than in the spec: the spec is also
-    # read as plain data by the checks, where a priority wrapper is not
-    # a boolean. mkDefault so a consumer can switch a bundle off.
-    ch-emacs-config.emacs.bundles =
-      lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
-        (
-          import ./bundles-spec.nix {
-            inherit lib merman;
-            readInit = name: builtins.readFile ./inits/${name};
-          }
+    ch-emacs-config.emacs.bundles = lib.mkMerge [
+      # `enable` is wrapped here rather than in the spec: the spec is also
+      # read as plain data by the checks, where a priority wrapper is not
+      # a boolean. mkDefault so a consumer can switch a bundle off.
+      (lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; }) (
+        import ./bundles-spec.nix {
+          inherit lib merman;
+          readInit = name: builtins.readFile ./inits/${name};
+        }
+      ))
+      # The gptel choices, set on the variables the gptel init declares
+      # for them. Appended to that bundle's own init, so they are in the
+      # same file as the declarations (the byte compiler sees them) and
+      # run at load, before gptel's deferred config reads them.
+      {
+        gptel.init = lib.mkAfter (
+          lib.concatStringsSep "\n" (
+            lib.optional (
+              cfg.gptel.backend != null
+            ) "(setq ch-emacs-config-gptel-default-backend '${cfg.gptel.backend})"
+            ++ lib.optional (
+              cfg.gptel.model != null
+            ) "(setq ch-emacs-config-gptel-default-model '${cfg.gptel.model})"
+          )
         );
+      }
+    ];
 
     home.packages = [ mcpStdioBridge ];
   };
