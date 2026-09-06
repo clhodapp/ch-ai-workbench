@@ -73,7 +73,7 @@
     gptel-agent = {
       enable = true;
       init = readInit "gptel-agent.el";
-      packages = epkgs: _: [ epkgs.gptel ];
+      packages = epkgs: _: [ epkgs.gptel-agent ];
     };
   };
 
