@@ -14,6 +14,8 @@
   caisson.modules.homeManager.exported = modules: {
     inherit (modules)
       emacs
+      gptel
+      claude
       claude-code
       emacs-integration
       zsh
@@ -95,13 +97,21 @@
             emacs = scope.emacs;
 
             # This layer's bundle spec and local packages, read from the
-            # module so the checks and a real configuration cannot drift.
-            workbenchBundles = import ../../../modules/home-manager/emacs/bundles-spec.nix {
-              inherit lib;
-              readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
-              merman = inputs.merman.packages.${system}.merman;
-            };
-            workbenchLocalPackages = import ../../../modules/home-manager/emacs/local-packages.nix;
+            # modules so the checks and a real configuration cannot
+            # drift. Every group at once: the ERT suites below need the
+            # whole layer in one Emacs.
+            workbenchBundles = lib.foldl' (acc: group: acc // group) { } (
+              lib.attrValues (
+                import ../../../modules/home-manager/emacs/bundles-spec.nix {
+                  inherit lib;
+                  readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
+                  merman = inputs.merman.packages.${system}.merman;
+                }
+              )
+            );
+            workbenchLocalPackages = lib.concatLists (
+              lib.attrValues (import ../../../modules/home-manager/emacs/local-packages.nix)
+            );
 
             aiCommitSrc = "${self}/modules/home-manager/emacs/packages/ai-commit";
             claudeQueueSrc = "${self}/modules/home-manager/emacs/packages/claude-queue";
@@ -122,6 +132,8 @@
                   modules = [
                     inputs.ch-emacs-config.modules.homeManager.emacs
                     self.modules.homeManager.emacs
+                    self.modules.homeManager.gptel
+                    self.modules.homeManager.claude
                     self.modules.homeManager.claude-code
                     self.modules.homeManager.emacs-integration
                     {
@@ -133,10 +145,12 @@
                       ch-ai-workbench.emacs.enable = true;
                       # Forces the gptel option types and the init append
                       # through evaluation and the byte compiler.
-                      ch-ai-workbench.emacs.gptel = {
+                      ch-ai-workbench.gptel = {
+                        enable = true;
                         backend = "fireworks";
                         model = "accounts/fireworks/models/deepseek-v4-flash";
                       };
+                      ch-ai-workbench.claude.enable = true;
                       ch-ai-workbench.claude-code.enable = true;
                       ch-ai-workbench.emacs-integration.enable = true;
                     }

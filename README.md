@@ -49,7 +49,9 @@ the MCP tools for the agent reading them.
 
   # in a Home Manager configuration, alongside the editor:
   #   ch-emacs-config.emacs.enable = true;
-  #   ch-ai-workbench.emacs.enable = true;
+  #   ch-ai-workbench.emacs.enable = true;     # vendor-neutral bundles
+  #   ch-ai-workbench.gptel.enable = true;     # gptel, plus .backend/.model
+  #   ch-ai-workbench.claude.enable = true;    # Claude Code in Emacs; needs .emacs
   #   ch-ai-workbench.claude-code.enable = true;
   #   ch-ai-workbench.emacs-integration.enable = true;
 }
