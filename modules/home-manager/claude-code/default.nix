@@ -108,6 +108,14 @@ let
   # lib/claude-tic-check-display-hook.sh.
   claudeTicCheckDisplayHook = import ./lib/claude-tic-check-display-hook.nix { inherit pkgs; };
 
+  # PreToolUse hook on Bash: a command that runs git push is denied
+  # once with a reminder to confirm that the branch's pull request,
+  # if it has one, is not already merged (GitHub keeps accepting
+  # pushes to a merged PR's head branch); the identical re-issue
+  # passes and consumes the marker, so every push costs one check
+  # (script: lib/claude-push-pr-check-hook.sh).
+  claudePushPrCheckHook = import ./lib/claude-push-pr-check-hook.nix { inherit pkgs; };
+
   enabledHooks = lib.filterAttrs (_name: hook: hook.enable) cfg.hooks;
 
   # The declaration as a store manifest: enabled hooks and the deny
@@ -381,7 +389,11 @@ in
         check's verdict lines ("tic-check: clean" / "tic-check: tic")
         as status lines on screen, and tic-check-edit, the PreToolUse
         hook that applies the same table to the text written by Edit,
-        Write, NotebookEdit, and the emacs server's edit verbs.
+        Write, NotebookEdit, and the emacs server's edit verbs. It
+        also seeds push-pr-check, the PreToolUse hook on Bash that
+        denies a command running git push once with a reminder to
+        confirm the branch's pull request is not already merged, and
+        lets the identical re-issue through.
       '';
     };
 
@@ -524,6 +536,12 @@ in
         matcher = "Edit|Write|NotebookEdit|mcp__emacs__edit-file|mcp__emacs__edit-buffer";
         command = "claude-tic-check-edit-hook";
         package = claudeTicCheckEditHook;
+      };
+      push-pr-check = {
+        event = "PreToolUse";
+        matcher = "Bash";
+        command = "claude-push-pr-check-hook";
+        package = claudePushPrCheckHook;
       };
     };
 
