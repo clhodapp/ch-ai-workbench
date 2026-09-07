@@ -1,0 +1,198 @@
+# SPDX-License-Identifier: MIT
+#
+# The pull request's own check: this file is the pull request's copy,
+# run in the pull request's context, where any cache it saves is
+# scoped to the request's merge ref and can be restored only by that
+# request's later runs, never by main.
+#
+# check.yml (main's copy, triggered by this run's completion) builds
+# every pull request that leaves the pipeline alone, so this run
+# succeeds at once for those. A request that changes .github/ is
+# exactly the one check.yml declines to build, and the only one whose
+# new pipeline needs exercising; it is built here, restoring main's
+# entry and saving under its own scope. Between the two files, each
+# push is built exactly once.
+#
+# The roots and the priority pruning are the same as in check.yml, with
+# one difference: this run's token cannot delete cache entries, so it
+# never touches another scope's and does not purge its own; entries in
+# a request's scope go when the request closes (cache-cleanup.yml) or
+# when GitHub expires them.
+
+name: check-pr
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: check-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Decide whether this run builds
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate \
+               --jq '.[].filename' | grep -q '^\.github/'; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "This pull request leaves the pipeline alone; check.yml builds it."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.guard.outputs.build == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        if: steps.guard.outputs.build == 'true'
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            sandbox = true
+
+      # Restores the newest entry this run can see (its own earlier one,
+      # else main's); saves under this request's scope, one entry per
+      # head commit. cache-cleanup.yml removes them all when the request
+      # closes. The cap of zero makes the pruning before the save remove
+      # every path the roots do not reach.
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        if: steps.guard.outputs.build == 'true'
+        with:
+          primary-key: nix-${{ runner.os }}-${{ github.event.pull_request.head.sha }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 0
+          purge: false
+
+      # Pull from the clhodapp cache; a public cache needs no credentials
+      # to read, and this run has none. Nothing is pushed from here.
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        if: steps.guard.outputs.build == 'true'
+        with:
+          name: clhodapp
+          skipPush: true
+          # The clhodapp cache's upstreams, which a user of it pulls
+          # from too.
+          extraPullNames: nix-community,numtide
+
+      - name: Run the flake checks
+        if: steps.guard.outputs.build == 'true'
+        run: nix flake check --print-build-logs
+
+      - name: Root this build and apply the cache priorities
+        if: steps.guard.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROOT_CLASS: pr
+          ROOT_ID: ${{ format('{0}/{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
+          CURRENT_MAIN: ${{ github.event.pull_request.base.sha }}
+          OWN_REF: ${{ github.ref }}
+          KEY_PREFIX: nix-${{ runner.os }}-
+          MAY_DELETE: "false"
+        run: |
+          set -euo pipefail
+          # The persistent root tree, under /nix but outside
+          # /nix/var/nix, which the cache action excludes apart from the
+          # database; mirrored into Nix's root directory at the end.
+          roots=/nix/ci-roots
+
+          # 1. Root what this run built.
+          own="$roots/$ROOT_CLASS/$ROOT_ID"
+          sudo rm -rf "$own"
+          sudo mkdir -p "$own"
+          # Checks and packages both: a check's output need not reference
+          # what it built, and the pruning keeps only what the roots reach.
+          # An output the flake does not provide (this one has no
+          # packages) is skipped; any other evaluation error fails.
+          for kind in checks packages; do
+            if ! names=$(nix eval --json ".#$kind.x86_64-linux" --apply builtins.attrNames 2>"$RUNNER_TEMP/eval.err"); then
+              grep -q 'does not provide attribute' "$RUNNER_TEMP/eval.err" || { cat "$RUNNER_TEMP/eval.err"; exit 1; }
+              continue
+            fi
+            for name in $(jq -r '.[]' <<<"$names"); do
+              out=$(nix build --no-link --print-out-paths ".#$kind.x86_64-linux.$name")
+              sudo ln -s "$out" "$own/$kind-$name"
+            done
+          done
+
+          # 2. Order every root directory, highest priority first.
+          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 500 --json number --jq '.[].number')
+          is_open() { grep -qx "$1" <<<"$open"; }
+          # Entry names under a directory, newest first by modification time.
+          newest_in() {
+            [[ -d "$1" ]] || return 0
+            find "$1" -mindepth 1 -maxdepth 1 -printf '%T@ %f\n' | sort -rn | awk '{print $2}'
+          }
+          ordered=()
+          [[ -d "$roots/main/$CURRENT_MAIN" ]] && ordered+=("$roots/main/$CURRENT_MAIN")
+          shopt -s nullglob
+          for prdir in "$roots"/pr/*/; do
+            n=$(basename "$prdir")
+            newest=$(newest_in "$prdir" | head -n1)
+            for sha in "$prdir"/*/; do
+              [[ "$(basename "$sha")" == "$newest" ]] || sudo rm -rf "$sha"
+            done
+            is_open "$n" && ordered+=("$prdir$newest")
+          done
+          for sha in $(newest_in "$roots/main"); do
+            [[ "$sha" == "$CURRENT_MAIN" ]] || ordered+=("$roots/main/$sha")
+          done
+          for prdir in "$roots"/pr/*/; do
+            n=$(basename "$prdir")
+            is_open "$n" || ordered+=("$prdir$(newest_in "$prdir" | head -n1)")
+          done
+
+          # 3. The budget, as in check.yml.
+          gib=$((1024 * 1024 * 1024))
+          caches=$(gh cache list --repo "$GITHUB_REPOSITORY" --limit 1000 --json key,ref,sizeInBytes)
+          used_by_own_scope=$(jq --arg ref "$OWN_REF" --arg p "$KEY_PREFIX" \
+            '[.[] | select(.ref == $ref and (.key | startswith($p))) | .sizeInBytes] | add // 0' <<<"$caches")
+          used_by_others=$(jq --arg ref "$OWN_REF" \
+            '[.[] | select(.ref != $ref) | .sizeInBytes] | add // 0' <<<"$caches")
+          budget=$((10 * gib - used_by_own_scope - used_by_others))
+          echo "Budget for this entry: $budget bytes ($used_by_others used by other scopes, $used_by_own_scope by this one)."
+
+          closure_size() {
+            local targets
+            targets=$(for d in "$@"; do find "$d" -maxdepth 1 -type l -exec readlink {} +; done)
+            [[ -n "$targets" ]] || { echo 0; return; }
+            # shellcheck disable=SC2086
+            nix path-info -r $targets | sort -u | xargs nix path-info -s | awk '{s += $2} END {print s + 0}'
+          }
+
+          # 4. Keep the highest-priority roots that fit, drop the rest.
+          #    This run deletes nothing outside its own scope; if not
+          #    even the current main fits, it is saved anyway and
+          #    GitHub's own eviction is the backstop.
+          kept=()
+          for d in "${ordered[@]}"; do
+            size=$(closure_size "${kept[@]}" "$d")
+            if (( size <= budget )) || (( ${#kept[@]} == 0 )); then
+              (( size <= budget )) || echo "::warning::The current main build ($size bytes) exceeds the cache budget ($budget bytes); saving it anyway."
+              kept+=("$d")
+              continue
+            fi
+            echo "Dropping roots $d (closure would be $size bytes, budget $budget)."
+            sudo rm -rf "$d"
+          done
+          echo "Kept roots:"
+          printf '  %s\n' "${kept[@]}"
+
+          # 5. Mirror the surviving tree into Nix's root directory so the
+          #    pruning before the save honours it.
+          sudo rm -rf /nix/var/nix/gcroots/ci
+          sudo cp -a "$roots" /nix/var/nix/gcroots/ci
