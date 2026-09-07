@@ -404,6 +404,21 @@ viewer/answerer over it.
   seen/`, so the identical re-issue abstains (legitimate use costs one
   retry) while a rewritten re-issue is a new hash and is checked on
   its own.
+- **A deny is also a checklist gate.** The same module's
+  `claude-push-pr-check-hook` (matcher `Bash`) denies a command that
+  appears to run `git push` (the word `git`, any global options such
+  as `-C dir`, then `push` as a word, anywhere on a line) once, with
+  a reason headed `push-pr-check: verify` that asks the model to
+  confirm the branch's pull request is not already merged (`gh pr
+  list --head <branch> --state all`) before re-issuing, since GitHub
+  keeps accepting pushes to a merged PR's head branch. The match is
+  textual, so a command that only mentions a push (`echo git push >>
+  script.sh`) is denied too; the reason says to re-issue such a
+  command unchanged. Same marker
+  scheme, under `$XDG_RUNTIME_DIR/claude-push-pr-check/seen/`, with
+  one difference: the identical re-issue consumes the marker instead
+  of leaving it, so the same push later in the session is checked
+  again (the PR may have been merged in between).
 
 ### Stop hooks (the finished-message check)
 

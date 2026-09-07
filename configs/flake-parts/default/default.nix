@@ -119,6 +119,14 @@
             testsSrc = "${self}/modules/home-manager/emacs/tests";
 
             mermanMmdcShim = pkgs.writeShellScriptBin "mmdc" ''exec ${lib.getExe merman} mmdc "$@"'';
+
+            # The hook package read from the module's lib, so the check
+            # below drives the same script a real configuration installs.
+            claudePushPrCheckHook =
+              import ../../../modules/home-manager/claude-code/lib/claude-push-pr-check-hook.nix
+                {
+                  inherit pkgs;
+                };
           in
           {
             checks = {
@@ -230,6 +238,45 @@
                   -f ert-run-tests-batch-and-exit
                 touch $out
               '';
+
+              # The git-push PR-state reminder: a deny headed
+              # "push-pr-check: verify" on a push (bare, through -C,
+              # after &&, with global and push options), pass-through
+              # on the identical re-issue and a fresh deny on the one
+              # after it (the marker is consumed), silence on git
+              # commands that are not a push, on non-git commands,
+              # without a runtime dir, and on non-JSON stdin.
+              claude-push-pr-check-hook =
+                pkgs.runCommand "claude-push-pr-check-hook"
+                  {
+                    nativeBuildInputs = [ pkgs.jq ];
+                  }
+                  ''
+                    hook=${lib.getExe claudePushPrCheckHook}
+                    export XDG_RUNTIME_DIR="$TMPDIR/run"
+                    mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    call() { jq -cn --arg c "$1" '{session_id: "0123456789abcdef", tool_name: "Bash", tool_input: {command: $c}}'; }
+                    deny() {
+                      res=$(call "$1" | "$hook")
+                      [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                      jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q '^push-pr-check: verify'
+                    }
+                    quiet() { [ -z "$(call "$1" | "$hook")" ]; }
+                    deny 'git push origin feat/topic'
+                    quiet 'git push origin feat/topic'
+                    deny 'git push origin feat/topic'
+                    deny 'git -C projects/foo push origin main'
+                    deny 'cd /tmp/x && git push --force-with-lease'
+                    deny 'git -c core.sshCommand=ssh push -u origin topic'
+                    deny 'git commit -m "x" && git push'
+                    quiet 'git commit -m "push later"'
+                    quiet 'git log --oneline | grep push'
+                    quiet 'git pushx'
+                    quiet 'ls'
+                    [ -z "$(call 'git push' | env -u XDG_RUNTIME_DIR "$hook")" ]
+                    [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
             };
             treefmt.programs.nixfmt.enable = true;
           };
