@@ -104,11 +104,11 @@
         "nixpkgs": "nixpkgs_3"
       },
       "locked": {
-        "lastModified": 1788778386,
-        "narHash": "sha256-BP6PyFWYF0u5fn/CRSQz1fQzhiW4LTZnGKBcLUis9Bs=",
+        "lastModified": 1788812505,
+        "narHash": "sha256-A8HdoLDQx9bOQGwhbay9d6mh4sRm8VCK6P9JhgVGb/8=",
         "owner": "clhodapp",
         "repo": "ch-zsh-config",
-        "rev": "c03db466927622cac6b6769950cdeccd38fcf9da",
+        "rev": "01bdd647c600b2c88866cca75b80cf0099211b20",
         "type": "github"
       },
       "original": {
