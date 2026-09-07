@@ -84,11 +84,11 @@
         "pr-review": "pr-review"
       },
       "locked": {
-        "lastModified": 1788770539,
-        "narHash": "sha256-IPsO0XLafMDDj+brgpod/BXqschcjJVT3iPUlGo21HE=",
+        "lastModified": 1788773699,
+        "narHash": "sha256-1rrF39ml5wFGtq+mVIEHf4PRkiI6+e2wOLucGUWXneU=",
         "owner": "clhodapp",
         "repo": "ch-emacs-config",
-        "rev": "27c1148b3b9b80b6c3b610f1b632099e352535a7",
+        "rev": "177488dbdaeb888669f015399776bf45e35cc731",
         "type": "github"
       },
       "original": {
