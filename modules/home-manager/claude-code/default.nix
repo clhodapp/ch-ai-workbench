@@ -108,8 +108,9 @@ let
   # lib/claude-tic-check-display-hook.sh.
   claudeTicCheckDisplayHook = import ./lib/claude-tic-check-display-hook.nix { inherit pkgs; };
 
-  # PreToolUse hook on Bash: a command that runs git push is denied
-  # once with a reminder to confirm that the branch's pull request,
+  # PreToolUse hook on Bash: a command that appears to run git push
+  # is denied once with a reminder to confirm that the branch's pull
+  # request,
   # if it has one, is not already merged (GitHub keeps accepting
   # pushes to a merged PR's head branch); the identical re-issue
   # passes and consumes the marker, so every push costs one check
@@ -391,7 +392,7 @@ in
         hook that applies the same table to the text written by Edit,
         Write, NotebookEdit, and the emacs server's edit verbs. It
         also seeds push-pr-check, the PreToolUse hook on Bash that
-        denies a command running git push once with a reminder to
+        denies a command that appears to run git push once with a reminder to
         confirm the branch's pull request is not already merged, and
         lets the identical re-issue through.
       '';

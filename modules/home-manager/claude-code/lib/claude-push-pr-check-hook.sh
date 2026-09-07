@@ -50,9 +50,9 @@ fi
 mkdir -p "$(dirname "$seen")" 2>/dev/null && : > "$seen" 2>/dev/null || exit 0
 
 reason="push-pr-check: verify
-This command runs git push. If the branch it pushes has a pull request, confirm that the pull request is not already merged before pushing: from inside that repository run
+This command appears to run git push. If it does, and the branch it pushes has a pull request, confirm that the pull request is not already merged before pushing: from inside that repository run
   gh pr list --head <branch> --state all --json number,state,url
-A merged pull request does not take new commits. If the state is MERGED, do not push to that branch: start a new branch from main, commit there, and open a new pull request. If the pull request is OPEN, or the branch has no pull request, re-issue this exact command unchanged; the identical re-issue passes."
+A merged pull request does not take new commits. If the state is MERGED, do not push to that branch: start a new branch from main, commit there, and open a new pull request. If the pull request is OPEN, if the branch has no pull request, or if the command does not actually push, re-issue this exact command unchanged; the identical re-issue passes."
 
 jq -cn --arg r "$reason" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse",
