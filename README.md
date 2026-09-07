@@ -88,6 +88,13 @@ sandbox CLI (its unittest suite runs in the build), plugin, and shim.
 
 `nix fmt` formats.
 
+Design notes live under [`docs/development/`](docs/development/):
+[`claude-cli.md`](docs/development/claude-cli.md) records what the
+`claude` CLI offers to tooling, and
+[`agent-elisp-isolation.md`](docs/development/agent-elisp-isolation.md)
+is the design for running agent elisp in a sandboxed child Emacs over a
+text-only mirror instead of gating it in the live session.
+
 ## Binary cache
 
 The check builds the editor, whose compiled package set
