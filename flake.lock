@@ -93,7 +93,6 @@
       },
       "original": {
         "owner": "clhodapp",
-        "ref": "feature/four-repo-shape",
         "repo": "ch-emacs-config",
         "type": "github"
       }
@@ -113,7 +112,6 @@
       },
       "original": {
         "owner": "clhodapp",
-        "ref": "feature/drop-workbench-half",
         "repo": "ch-zsh-config",
         "type": "github"
       }

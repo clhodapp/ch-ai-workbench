@@ -9,8 +9,7 @@
     # The editor this is a workbench in. Not an optional integration:
     # the bundles here are Emacs bundles and the hooks talk to a live
     # Emacs, so the dependency is what the thing is.
-    # Pinned to the branch until the four-repo shape lands on main.
-    ch-emacs-config.url = "github:clhodapp/ch-emacs-config/feature/four-repo-shape";
+    ch-emacs-config.url = "github:clhodapp/ch-emacs-config";
 
     # Emacs packages consumed as plain sources.
     collab-comments.url = "github:clhodapp/collab-comments";
@@ -19,7 +18,7 @@
     parenting.flake = false;
 
     # The shell this layer adds one function to.
-    ch-zsh-config.url = "github:clhodapp/ch-zsh-config/feature/drop-workbench-half";
+    ch-zsh-config.url = "github:clhodapp/ch-zsh-config";
 
     # The mermaid renderer behind the message-display hook.
     merman.url = "github:clhodapp/merman";
