@@ -65,10 +65,10 @@ so a bare `.git' directory suffices without a git binary."
     (should-not (gethash "edit" tools))))
 
 (ert-deftest ch-mcp-tools-eval-elisp ()
-  (should (equal "3" (ch-emacs-config-mcp--eval-elisp "(+ 1 2)"))))
+  (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)"))))
 
 (ert-deftest ch-mcp-tools-context-smoke ()
-  (let ((context (ch-emacs-config-mcp--context)))
+  (let ((context (ch-mcp-server--context)))
     (should (string-match-p "^buffer: " context))
     (should (string-match-p "^project: " context))
     (should (string-match-p "^region: " context))))
@@ -78,11 +78,11 @@ so a bare `.git' directory suffices without a git binary."
     (erase-buffer)
     (insert "l1\nl2\nl3\n"))
   (should (equal "l2\n"
-                 (ch-emacs-config-mcp--buffer-text "ch-mcp-tests-range" "2" "2")))
+                 (ch-mcp-server--buffer-text "ch-mcp-tests-range" "2" "2")))
   (should (equal "l1\nl2\nl3\n"
-                 (ch-emacs-config-mcp--buffer-text "ch-mcp-tests-range")))
+                 (ch-mcp-server--buffer-text "ch-mcp-tests-range")))
   (should (equal "l2\nl3\n"
-                 (ch-emacs-config-mcp--buffer-text "ch-mcp-tests-range" "2"))))
+                 (ch-mcp-server--buffer-text "ch-mcp-tests-range" "2"))))
 
 (ert-deftest ch-mcp-tools-auto-open-scope ()
   "Unvisited files outside the territory and every session project are
@@ -90,29 +90,29 @@ refused by default."
   (let ((file (ch-mcp-tests--temp-file "hello\n"))
         (elsewhere (make-temp-file "mcp-elsewhere" t)))
     (let ((default-directory (file-name-as-directory elsewhere)))
-      (should-error (ch-emacs-config-mcp--file-buffer file)
+      (should-error (ch-mcp-server--file-buffer file)
                     :type 'mcp-server-lib-tool-error)
-      (let ((ch-emacs-config-mcp-auto-open-scope 'any-project))
-        (should (buffer-live-p (ch-emacs-config-mcp--file-buffer file)))))))
+      (let ((ch-mcp-server-auto-open-scope 'any-project))
+        (should (buffer-live-p (ch-mcp-server--file-buffer file)))))))
 
 (ert-deftest ch-mcp-tools-auto-open-client-territory ()
   "Files under the client's own territory auto-open without any session
 buffer in their project — the agent-worktree case."
   (let ((file (ch-mcp-tests--temp-file "hello\n")))
     (ch-mcp-tests--in-territory
-      (should (buffer-live-p (ch-emacs-config-mcp--file-buffer file))))))
+      (should (buffer-live-p (ch-mcp-server--file-buffer file))))))
 
 (ert-deftest ch-mcp-tools-modified-buffers-and-diff ()
   (let* ((file (ch-mcp-tests--temp-file "one\ntwo\n"))
          (buffer (find-file-noselect file)))
-    (should (equal (ch-emacs-config-mcp--buffer-diff file)
+    (should (equal (ch-mcp-server--buffer-diff file)
                    "Buffer matches disk (no unsaved changes)"))
     (with-current-buffer buffer
       (goto-char (point-max))
       (insert "three\n"))
     (should (string-match-p (regexp-quote file)
-                            (ch-emacs-config-mcp--modified-buffers)))
-    (let ((diff (ch-emacs-config-mcp--buffer-diff file)))
+                            (ch-mcp-server--modified-buffers)))
+    (let ((diff (ch-mcp-server--buffer-diff file)))
       (should (string-match-p "^\\+three" diff))
       (should (string-match-p "(disk)" diff))
       (should (string-match-p "(buffer)" diff)))))
@@ -125,10 +125,10 @@ buffer in their project — the agent-worktree case."
     ;; hold is that the answer names its state instead of quietly lying.
     (should (string-match-p
              "No checker enabled\\|No diagnostics\\|not yet checked"
-             (ch-emacs-config-mcp--diagnostics file)))
+             (ch-mcp-server--diagnostics file)))
     ;; The sweep form runs and reports the summary counts.
     (should (string-match-p "buffers checked clean"
-                            (ch-emacs-config-mcp--diagnostics)))))
+                            (ch-mcp-server--diagnostics)))))
 
 (ert-deftest ch-mcp-tools-find-definition-elisp ()
   "The native elisp xref backend serves definition lookups in batch."
@@ -140,26 +140,26 @@ buffer in their project — the agent-worktree case."
          (buffer (find-file-noselect file)))
     (should buffer)
     (load file nil t)
-    (let ((result (ch-emacs-config-mcp--find-definition file "4" "4")))
+    (let ((result (ch-mcp-server--find-definition file "4" "4")))
       (should (string-match-p "ch-mcp-tests-target" result)))))
 
 (ert-deftest ch-mcp-tools-find-references-no-identifier ()
   (let* ((file (ch-mcp-tests--temp-file "   \n")))
     (find-file-noselect file)
-    (should-error (ch-emacs-config-mcp--find-references file "1" "1")
+    (should-error (ch-mcp-server--find-references file "1" "1")
                   :type 'mcp-server-lib-tool-error)))
 
 (ert-deftest ch-mcp-tools-position-past-eof ()
   (let* ((file (ch-mcp-tests--temp-file "short\n")))
     (find-file-noselect file)
-    (should-error (ch-emacs-config-mcp--find-definition file "99" "1")
+    (should-error (ch-mcp-server--find-definition file "99" "1")
                   :type 'mcp-server-lib-tool-error)))
 
 (ert-deftest ch-mcp-tools-symbol-info-no-server ()
   "LSP-backed hover degrades to a clean tool error without a server."
   (let* ((file (ch-mcp-tests--temp-file "words here\n")))
     (find-file-noselect file)
-    (should-error (ch-emacs-config-mcp--symbol-info file "1" "1")
+    (should-error (ch-mcp-server--symbol-info file "1" "1")
                   :type 'mcp-server-lib-tool-error)))
 
 (ert-deftest ch-mcp-tools-document-outline ()
@@ -168,27 +168,27 @@ buffer in their project — the agent-worktree case."
                         "(defvar ch-mcp-tests-outline-var nil)\n")
                 ".el")))
     (find-file-noselect file)
-    (let ((outline (ch-emacs-config-mcp--document-outline file)))
+    (let ((outline (ch-mcp-server--document-outline file)))
       (should (string-match-p "ch-mcp-tests-outline-one" outline))
       (should (string-match-p "^1: " outline)))))
 
 (ert-deftest ch-mcp-tools-present ()
-  (ch-emacs-config-mcp--present "ert-present" "# Title\n\nbody" nil "no")
+  (ch-mcp-server--present "ert-present" "# Title\n\nbody" nil "no")
   (with-current-buffer "*agent/ert-present*"
     (should (derived-mode-p 'markdown-ts-mode))
     (should visual-line-mode)
     (should (string-match-p "Title" (buffer-string)))
     (should-not (buffer-modified-p)))
-  (ch-emacs-config-mcp--present "ert-present" "a.el:1:1: hit" "locations" "no")
+  (ch-mcp-server--present "ert-present" "a.el:1:1: hit" "locations" "no")
   (with-current-buffer "*agent/ert-present*"
     (should (bound-and-true-p compilation-minor-mode))
     (should-not visual-line-mode))
-  (should-error (ch-emacs-config-mcp--present "ert-present" "x" "nonsense" "no")
+  (should-error (ch-mcp-server--present "ert-present" "x" "nonsense" "no")
                 :type 'mcp-server-lib-tool-error))
 
 (ert-deftest ch-mcp-tools-sidebar ()
   "A sidebar is soft-wrapped read-only markdown that `q' disposes of."
-  (ch-emacs-config-mcp--sidebar "ert-sidebar" "# Q\n\nA" "no")
+  (ch-mcp-server--sidebar "ert-sidebar" "# Q\n\nA" "no")
   (with-current-buffer "*agent/sidebar/ert-sidebar*"
     (should (derived-mode-p 'markdown-ts-mode))
     (should visual-line-mode)
@@ -197,7 +197,7 @@ buffer in their project — the agent-worktree case."
     (should (eq (lookup-key ch-emacs-config-sidebar-mode-map (kbd "q"))
                 #'ch-emacs-config-sidebar-quit))
     (should-not (buffer-modified-p)))
-  (ch-emacs-config-mcp--sidebar "ert-sidebar" "again" nil)
+  (ch-mcp-server--sidebar "ert-sidebar" "again" nil)
   (let ((window (get-buffer-window "*agent/sidebar/ert-sidebar*")))
     (should window)
     (should (eq (window-parameter window 'window-side) 'right))
@@ -209,7 +209,7 @@ buffer in their project — the agent-worktree case."
   "Without mmdc on PATH the error names the missing renderer."
   (cl-letf (((symbol-function 'executable-find) (lambda (_) nil)))
     (let ((err (should-error
-                (ch-emacs-config-mcp--present "ert-mermaid" "graph LR\n a --> b"
+                (ch-mcp-server--present "ert-mermaid" "graph LR\n a --> b"
                                               "mermaid" "no")
                 :type 'mcp-server-lib-tool-error)))
       (should (string-match-p "mmdc" (error-message-string err))))))
@@ -218,7 +218,7 @@ buffer in their project — the agent-worktree case."
   "A rendered diagram lands in the buffer: an image on capable displays,
 raw SVG text otherwise (the batch case)."
   (skip-unless (executable-find "mmdc"))
-  (ch-emacs-config-mcp--present "ert-mermaid" "graph LR\n a --> b" "mermaid" "no")
+  (ch-mcp-server--present "ert-mermaid" "graph LR\n a --> b" "mermaid" "no")
   (with-current-buffer "*agent/ert-mermaid*"
     (should-not (buffer-modified-p))
     (if (image-type-available-p 'svg)
@@ -228,9 +228,9 @@ raw SVG text otherwise (the batch case)."
 (ert-deftest ch-mcp-tools-present-mermaid-render-error-is-legible ()
   "Broken mermaid source comes back as a tool error, not a wiped buffer."
   (skip-unless (executable-find "mmdc"))
-  (ch-emacs-config-mcp--present "ert-mermaid-err" "kept" "markdown" "no")
+  (ch-mcp-server--present "ert-mermaid-err" "kept" "markdown" "no")
   (should-error
-   (ch-emacs-config-mcp--present "ert-mermaid-err" "graph LR\n a -->" "mermaid" "no")
+   (ch-mcp-server--present "ert-mermaid-err" "graph LR\n a -->" "mermaid" "no")
    :type 'mcp-server-lib-tool-error)
   (with-current-buffer "*agent/ert-mermaid-err*"
     (should (string-match-p "kept" (buffer-string)))))
@@ -240,7 +240,7 @@ raw SVG text otherwise (the batch case)."
 librsvg (Emacs's SVG renderer) silently drops foreignObject, producing a
 diagram whose every label is invisible — found live on first use."
   (skip-unless (executable-find "mmdc"))
-  (let ((svg (ch-emacs-config-mcp--render-mermaid
+  (let ((svg (ch-mcp-server--render-mermaid
               "graph LR\n a -->|edge label| b[node label]")))
     (should-not (string-match-p "foreignObject" svg))
     (should (string-match-p "<text" svg))))
@@ -250,10 +250,10 @@ diagram whose every label is invisible — found live on first use."
     (erase-buffer)
     (insert "l1\nl2\nl3\n"))
   (should (equal (format "%6d\tl2\n" 2)
-                 (ch-emacs-config-mcp--buffer-text
+                 (ch-mcp-server--buffer-text
                   "ch-mcp-tests-numbered" "2" "2" "yes")))
   (should (equal (concat (format "%6d\tl2\n" 2) (format "%6d\tl3\n" 3))
-                 (ch-emacs-config-mcp--buffer-text
+                 (ch-mcp-server--buffer-text
                   "ch-mcp-tests-numbered" "2" nil "yes"))))
 
 (ert-deftest ch-mcp-tools-edit-file-unique-match ()
@@ -261,7 +261,7 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\ngamma\n")))
       (find-file-noselect file)
-      (let ((diff (ch-emacs-config-mcp--edit-file "beta" "delta" file)))
+      (let ((diff (ch-mcp-server--edit-file "beta" "delta" file)))
         (should (string-match-p "^-beta" diff))
         (should (string-match-p "^\\+delta" diff)))
       (with-temp-buffer
@@ -273,7 +273,7 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
       (find-file-noselect file)
-      (should-error (ch-emacs-config-mcp--edit-file "missing" "x" file)
+      (should-error (ch-mcp-server--edit-file "missing" "x" file)
                     :type 'mcp-server-lib-tool-error))))
 
 (ert-deftest ch-mcp-tools-edit-file-non-unique-names-count ()
@@ -281,7 +281,7 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "dup\ndup\ndup\n")))
       (find-file-noselect file)
-      (let ((err (should-error (ch-emacs-config-mcp--edit-file "dup" "x" file)
+      (let ((err (should-error (ch-mcp-server--edit-file "dup" "x" file)
                                :type 'mcp-server-lib-tool-error)))
         (should (string-match-p "3 times" (error-message-string err))))
       ;; And the buffer was left untouched.
@@ -293,7 +293,7 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "dup one\ndup two\n")))
       (find-file-noselect file)
-      (ch-emacs-config-mcp--edit-file "dup" "rep" file "yes")
+      (ch-mcp-server--edit-file "dup" "rep" file "yes")
       (with-temp-buffer
         (insert-file-contents file)
         (should (equal (buffer-string) "rep one\nrep two\n"))))))
@@ -303,7 +303,7 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "a\n")))
       (find-file-noselect file)
-      (ch-emacs-config-mcp--edit-file "a" "aa" file "yes")
+      (ch-mcp-server--edit-file "a" "aa" file "yes")
       (with-temp-buffer
         (insert-file-contents file)
         (should (equal (buffer-string) "aa\n"))))))
@@ -312,11 +312,11 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
       (find-file-noselect file)
-      (should-error (ch-emacs-config-mcp--edit-file "alpha" "alpha" file)
+      (should-error (ch-mcp-server--edit-file "alpha" "alpha" file)
                     :type 'mcp-server-lib-tool-error))))
 
 (ert-deftest ch-mcp-tools-edit-buffer-no-such-buffer ()
-  (should-error (ch-emacs-config-mcp--edit-buffer "a" "b" "no-such-buffer")
+  (should-error (ch-mcp-server--edit-buffer "a" "b" "no-such-buffer")
                 :type 'mcp-server-lib-tool-error))
 
 (ert-deftest ch-mcp-tools-edit-buffer-non-file ()
@@ -324,7 +324,7 @@ diagram whose every label is invisible — found live on first use."
   (with-current-buffer (get-buffer-create "*agent/ert-edit*")
     (erase-buffer)
     (insert "shared state\n"))
-  (let ((diff (ch-emacs-config-mcp--edit-buffer "shared" "common"
+  (let ((diff (ch-mcp-server--edit-buffer "shared" "common"
                                                 "*agent/ert-edit*")))
     (should (string-match-p "^\\+common state" diff)))
   (with-current-buffer "*agent/ert-edit*"
@@ -335,7 +335,7 @@ diagram whose every label is invisible — found live on first use."
   "The only write path into a fresh buffer: empty OLD-STRING inserts."
   (with-current-buffer (get-buffer-create "*agent/ert-edit-empty*")
     (erase-buffer))
-  (let ((diff (ch-emacs-config-mcp--edit-buffer "" "a poem\n"
+  (let ((diff (ch-mcp-server--edit-buffer "" "a poem\n"
                                                 "*agent/ert-edit-empty*")))
     (should (string-match-p "^\\+a poem" diff)))
   (with-current-buffer "*agent/ert-edit-empty*"
@@ -346,7 +346,7 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "")))
       (find-file-noselect file)
-      (ch-emacs-config-mcp--edit-file "" "content\n" file)
+      (ch-mcp-server--edit-file "" "content\n" file)
       (with-temp-buffer
         (insert-file-contents file)
         (should (equal (buffer-string) "content\n"))))))
@@ -356,7 +356,7 @@ diagram whose every label is invisible — found live on first use."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
       (find-file-noselect file)
-      (let ((err (should-error (ch-emacs-config-mcp--edit-file "" "x" file)
+      (let ((err (should-error (ch-mcp-server--edit-file "" "x" file)
                                :type 'mcp-server-lib-tool-error)))
         (should (string-match-p "empty buffer" (error-message-string err)))))))
 
@@ -368,7 +368,7 @@ diagram whose every label is invisible — found live on first use."
       (with-current-buffer buffer
         (goto-char (point-max))
         (insert "user edit\n"))
-      (let ((err (should-error (ch-emacs-config-mcp--edit-file "alpha" "beta" file)
+      (let ((err (should-error (ch-mcp-server--edit-file "alpha" "beta" file)
                                :type 'mcp-server-lib-tool-error)))
         (should (string-match-p "edit-buffer" (error-message-string err))))
       ;; Neither disk nor the buffer moved.
@@ -385,7 +385,7 @@ change stays as a staged (modified, unsaved) edit for the user."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
            (buffer (find-file-noselect file)))
-      (ch-emacs-config-mcp--edit-buffer "alpha" "beta" (buffer-name buffer))
+      (ch-mcp-server--edit-buffer "alpha" "beta" (buffer-name buffer))
       (should (buffer-modified-p buffer))
       (with-temp-buffer
         (insert-file-contents file)
@@ -401,7 +401,7 @@ reach disk from here."
       (with-current-buffer buffer
         (goto-char (point-max))
         (insert "user edit\n"))
-      (let ((diff (ch-emacs-config-mcp--edit-buffer "user edit" "user edit, corrected"
+      (let ((diff (ch-mcp-server--edit-buffer "user edit" "user edit, corrected"
                                                     (buffer-name buffer))))
         (should (string-match-p "^\\+user edit, corrected" diff)))
       (should (buffer-modified-p buffer))
@@ -413,7 +413,7 @@ reach disk from here."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n")))
       (find-file-noselect file)
-      (let ((diff (ch-emacs-config-mcp--transform
+      (let ((diff (ch-mcp-server--transform
                    file
                    (concat "(goto-char (point-min))"
                            "(while (re-search-forward \"beta\" nil t)"
@@ -430,7 +430,7 @@ reach disk from here."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
       (find-file-noselect file)
-      (let ((diff (ch-emacs-config-mcp--transform
+      (let ((diff (ch-mcp-server--transform
                    file
                    "(goto-char (point-max)) (insert \"omega\\n\")"
                    "no")))
@@ -447,14 +447,14 @@ reach disk from here."
       (with-current-buffer buffer
         (goto-char (point-max))
         (insert "user edit\n"))
-      (should-error (ch-emacs-config-mcp--transform file "(ignore)")
+      (should-error (ch-mcp-server--transform file "(ignore)")
                     :type 'mcp-server-lib-tool-error))))
 
 (ert-deftest ch-mcp-tools-transform-restores-on-error ()
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
            (buffer (find-file-noselect file)))
-      (should-error (ch-emacs-config-mcp--transform
+      (should-error (ch-mcp-server--transform
                      file
                      "(goto-char (point-max)) (insert \"junk\") (error \"boom\")")
                     :type 'mcp-server-lib-tool-error)
@@ -468,7 +468,7 @@ reach disk from here."
     (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
       (find-file-noselect file)
       (should (equal "No changes"
-                     (ch-emacs-config-mcp--transform file "(ignore)"))))))
+                     (ch-mcp-server--transform file "(ignore)"))))))
 
 ;;; Security filters: client-territory write scope
 
@@ -482,7 +482,7 @@ project root, not project identity."
     (with-temp-file file (insert "alpha\n"))
     (let ((default-directory ws))
       (should (string-match-p "^\\+beta"
-                              (ch-emacs-config-mcp--edit-file
+                              (ch-mcp-server--edit-file
                                "alpha" "beta" file))))))
 
 (ert-deftest ch-mcp-tools-write-scope-blocks-outside-territory ()
@@ -495,10 +495,10 @@ parent's files; the error names the territory."
     (find-file-noselect outer)
     (let ((default-directory sub))
       (let ((err (should-error
-                  (ch-emacs-config-mcp--edit-file "alpha" "beta" outer)
+                  (ch-mcp-server--edit-file "alpha" "beta" outer)
                   :type 'mcp-server-lib-tool-error)))
         (should (string-match-p "territory" (error-message-string err))))
-      (should-error (ch-emacs-config-mcp--transform
+      (should-error (ch-mcp-server--transform
                      outer "(goto-char (point-min)) (insert \"x\")")
                     :type 'mcp-server-lib-tool-error))
     ;; Nothing reached disk.
@@ -517,10 +517,10 @@ confined to it: the main checkout's files are out of territory."
     (with-temp-file wt-file (insert "alpha\n"))
     (find-file-noselect main-file)
     (let ((default-directory wt))
-      (should-error (ch-emacs-config-mcp--edit-file "alpha" "beta" main-file)
+      (should-error (ch-mcp-server--edit-file "alpha" "beta" main-file)
                     :type 'mcp-server-lib-tool-error)
       (should (string-match-p "^\\+beta"
-                              (ch-emacs-config-mcp--edit-file
+                              (ch-mcp-server--edit-file
                                "alpha" "beta" wt-file))))))
 
 (ert-deftest ch-mcp-tools-write-scope-edit-buffer-file-backed ()
@@ -530,14 +530,14 @@ though it never writes disk; non-file buffers stay editable."
          (file (ch-mcp-tests--temp-file "alpha\n"))
          (buffer (find-file-noselect file)))
     (let ((default-directory ws))
-      (should-error (ch-emacs-config-mcp--edit-buffer
+      (should-error (ch-mcp-server--edit-buffer
                      "alpha" "beta" (buffer-name buffer))
                     :type 'mcp-server-lib-tool-error)
       (with-current-buffer (get-buffer-create "*agent/ert-territory*")
         (erase-buffer)
         (insert "alpha\n"))
       (should (string-match-p "^\\+beta"
-                              (ch-emacs-config-mcp--edit-buffer
+                              (ch-mcp-server--edit-buffer
                                "alpha" "beta" "*agent/ert-territory*"))))))
 
 (ert-deftest ch-mcp-tools-write-scope-unrestricted-knob ()
@@ -546,18 +546,18 @@ though it never writes disk; non-file buffers stay editable."
          (file (ch-mcp-tests--temp-file "alpha\n")))
     (find-file-noselect file)
     (let ((default-directory ws)
-          (ch-emacs-config-mcp-write-scope 'unrestricted))
+          (ch-mcp-server-write-scope 'unrestricted))
       (should (string-match-p "^\\+beta"
-                              (ch-emacs-config-mcp--edit-file
+                              (ch-mcp-server--edit-file
                                "alpha" "beta" file))))))
 
 ;;; Security filters: the agent-safe elisp gate
 
 (ert-deftest ch-mcp-tools-eval-elisp-gate-allows-reads ()
   "The read surface stays open: session inspection is the tool's job."
-  (should (equal "3" (ch-emacs-config-mcp--eval-elisp "(+ 1 2)")))
-  (should (stringp (ch-emacs-config-mcp--eval-elisp "(buffer-name)")))
-  (should (ch-emacs-config-mcp--eval-elisp
+  (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)")))
+  (should (stringp (ch-mcp-server--eval-elisp "(buffer-name)")))
+  (should (ch-mcp-server--eval-elisp
            "(let ((n 0)) (dolist (b (buffer-list) n) (setq n (1+ n))))")))
 
 (ert-deftest ch-mcp-tools-eval-elisp-gate-blocks-side-effects ()
@@ -569,34 +569,34 @@ naming the offender."
                  "(eval '(delete-file \"/tmp/x\"))"
                  "(shell-command \"true\")"
                  "(insert \"x\")"))
-    (let ((err (should-error (ch-emacs-config-mcp--eval-elisp bad)
+    (let ((err (should-error (ch-mcp-server--eval-elisp bad)
                              :type 'mcp-server-lib-tool-error)))
       (should (string-match-p "unsafe" (error-message-string err))))))
 
 (ert-deftest ch-mcp-tools-eval-elisp-gate-protects-its-own-knobs ()
   "Gated elisp can neither set nor bind the filter configuration."
-  (dolist (bad '("(setq ch-emacs-config-mcp-elisp-scope 'unrestricted)"
-                 "(let ((ch-emacs-config-mcp-elisp-scope 'unrestricted)) (eval '(+ 1 2)))"
-                 "(setq ch-emacs-config-mcp-write-scope 'unrestricted)"
-                 "(push 'shell-command ch-emacs-config-mcp-agent-safe-functions)"))
-    (should-error (ch-emacs-config-mcp--eval-elisp bad)
+  (dolist (bad '("(setq ch-mcp-server-elisp-scope 'unrestricted)"
+                 "(let ((ch-mcp-server-elisp-scope 'unrestricted)) (eval '(+ 1 2)))"
+                 "(setq ch-mcp-server-write-scope 'unrestricted)"
+                 "(push 'shell-command ch-mcp-server-agent-safe-functions)"))
+    (should-error (ch-mcp-server--eval-elisp bad)
                   :type 'mcp-server-lib-tool-error)))
 
 (ert-deftest ch-mcp-tools-eval-elisp-agent-safe-registry ()
   "The user-extensible registry admits functions unsafep does not know."
   (defun ch-mcp-tests--blessed () "blessed")
-  (should-error (ch-emacs-config-mcp--eval-elisp "(ch-mcp-tests--blessed)")
+  (should-error (ch-mcp-server--eval-elisp "(ch-mcp-tests--blessed)")
                 :type 'mcp-server-lib-tool-error)
-  (let ((ch-emacs-config-mcp-agent-safe-functions
-         (cons 'ch-mcp-tests--blessed ch-emacs-config-mcp-agent-safe-functions)))
+  (let ((ch-mcp-server-agent-safe-functions
+         (cons 'ch-mcp-tests--blessed ch-mcp-server-agent-safe-functions)))
     (should (equal "\"blessed\""
-                   (ch-emacs-config-mcp--eval-elisp "(ch-mcp-tests--blessed)")))))
+                   (ch-mcp-server--eval-elisp "(ch-mcp-tests--blessed)")))))
 
 (ert-deftest ch-mcp-tools-eval-elisp-unrestricted-knob ()
   "The resident user's say-so path: `unrestricted' scope evaluates
 stateful elisp again."
-  (let ((ch-emacs-config-mcp-elisp-scope 'unrestricted))
-    (should (equal "42" (ch-emacs-config-mcp--eval-elisp
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (should (equal "42" (ch-mcp-server--eval-elisp
                          "(with-temp-buffer (insert \"42\") (string-to-number (buffer-string)))")))))
 
 (ert-deftest ch-mcp-tools-transform-gate-blocks-escapes ()
@@ -613,7 +613,7 @@ embedded elisp), no kill ring."
                      "(kill-region (point-min) (point-max))"
                      "(save-buffer)"
                      "(write-region (point-min) (point-max) \"/tmp/out\")"))
-        (let ((err (should-error (ch-emacs-config-mcp--transform file bad)
+        (let ((err (should-error (ch-mcp-server--transform file bad)
                                  :type 'mcp-server-lib-tool-error)))
           (should (string-match-p "unsafe" (error-message-string err)))))
       ;; And the buffer never moved.
@@ -624,10 +624,10 @@ embedded elisp), no kill ring."
 (ert-deftest ch-mcp-tools-knobs-are-risky ()
   "The filter knobs and registries carry `risky-local-variable', the
 property unsafep keys its binding refusals on."
-  (dolist (var '(ch-emacs-config-mcp-write-scope
-                 ch-emacs-config-mcp-elisp-scope
-                 ch-emacs-config-mcp-agent-safe-functions
-                 ch-emacs-config-mcp-agent-safe-editing-functions))
+  (dolist (var '(ch-mcp-server-write-scope
+                 ch-mcp-server-elisp-scope
+                 ch-mcp-server-agent-safe-functions
+                 ch-mcp-server-agent-safe-editing-functions))
     (should (get var 'risky-local-variable))))
 
 (ert-deftest ch-mcp-tools-present-refuses-file-buffers ()
@@ -638,7 +638,7 @@ buffer squatting on the name is refused, not erased."
       (rename-buffer "*agent/ert-squatter*"))
     (unwind-protect
         (progn
-          (should-error (ch-emacs-config-mcp--present
+          (should-error (ch-mcp-server--present
                          "ert-squatter" "new content" nil "no")
                         :type 'mcp-server-lib-tool-error)
           (with-current-buffer "*agent/ert-squatter*"

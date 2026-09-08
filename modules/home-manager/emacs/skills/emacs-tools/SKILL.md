@@ -59,7 +59,7 @@ Tools that take a `file` resolve it to a buffer: existing buffer
 boots LSP via the normal mode hooks. Auto-open covers files in your
 session's own territory unconditionally (worktree checkouts included),
 plus files under a project that already has buffers in the session
-(`ch-emacs-config-mcp-auto-open-scope`, default `session-projects`;
+(`ch-mcp-server-auto-open-scope`, default `session-projects`;
 `any-project` opens anything readable).
 
 To deliberately open a file — including booting a project's eglot
@@ -168,7 +168,7 @@ layout. It accepts only elisp the server can prove side-effect-free,
 so it is structurally not an editing interface; mutation belongs to
 the edit verbs and transform. If a legitimately innocuous function is
 rejected, the user can add it to
-`ch-emacs-config-mcp-agent-safe-functions`.
+`ch-mcp-server-agent-safe-functions`.
 
 ## add-comment / list-comments: the margin, not the page
 
