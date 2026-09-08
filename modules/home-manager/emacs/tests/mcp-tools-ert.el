@@ -23,6 +23,14 @@
 
 (require 'mcp-server-lib)
 
+;; The debug-leak knobs the latch watches.  Declaring them special here
+;; makes `let'/`setq' in the latch tests bind the dynamic global the
+;; watcher and `symbol-value' actually observe, whether or not the owning
+;; library (url, auth-source, tramp) has loaded in this batch session.
+(defvar url-debug)
+(defvar auth-source-debug)
+(defvar tramp-verbose)
+
 (defun ch-mcp-tests--temp-file (content &optional suffix)
   "Create a temp file holding CONTENT (optionally with SUFFIX)."
   (let ((file (make-temp-file "mcp-tools-test" nil (or suffix ".txt"))))
@@ -627,7 +635,9 @@ property unsafep keys its binding refusals on."
   (dolist (var '(ch-mcp-server-write-scope
                  ch-mcp-server-elisp-scope
                  ch-mcp-server-agent-safe-functions
-                 ch-mcp-server-agent-safe-editing-functions))
+                 ch-mcp-server-agent-safe-editing-functions
+                 ch-mcp-server-hidden-buffer-names
+                 ch-mcp-server-debug-leak-knobs))
     (should (get var 'risky-local-variable))))
 
 (ert-deftest ch-mcp-tools-present-refuses-file-buffers ()
@@ -644,5 +654,163 @@ buffer squatting on the name is refused, not erased."
           (with-current-buffer "*agent/ert-squatter*"
             (should (string-match-p "keep" (buffer-string)))))
       (kill-buffer buffer))))
+
+;;; Read scope: the buffer-readability predicate
+
+(ert-deftest ch-mcp-tools-buffer-readable-file-in-territory ()
+  "A file-visiting buffer in scope is readable; one outside scope is not."
+  (let* ((file (ch-mcp-tests--temp-file "hello\n"))
+         (buffer (find-file-noselect file))
+         (elsewhere (make-temp-file "mcp-readable-elsewhere" t)))
+    (ch-mcp-tests--in-territory
+      (should (ch-mcp-server--buffer-readable-p buffer)))
+    (let ((default-directory (file-name-as-directory elsewhere)))
+      ;; No session buffer in the temp file's own project, and the client
+      ;; sits elsewhere, so the default session-projects scope hides it.
+      (should-not (ch-mcp-server--buffer-readable-p buffer))
+      (let ((ch-mcp-server-auto-open-scope 'any-project))
+        (should (ch-mcp-server--buffer-readable-p buffer))))))
+
+(ert-deftest ch-mcp-tools-buffer-readable-non-file ()
+  "A normal no-file buffer is readable; internal and hidden names are not."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-normal")
+    (should (ch-mcp-server--buffer-readable-p (current-buffer))))
+  (with-current-buffer (get-buffer-create " ch-mcp-tests-internal")
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer))))
+  (with-current-buffer (get-buffer-create "*gptel-log*")
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer))))
+  ;; The hidden list is honoured dynamically.
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-secret")
+    (let ((ch-mcp-server-hidden-buffer-names
+           '("\\`ch-mcp-tests-secret\\'")))
+      (should-not (ch-mcp-server--buffer-readable-p (current-buffer))))))
+
+(ert-deftest ch-mcp-tools-buffer-text-refuses-unreadable ()
+  "buffer-text throws on an out-of-scope file buffer, and still throws the
+missing-buffer error for a name with no buffer."
+  (let* ((file (ch-mcp-tests--temp-file "secret\n"))
+         (buffer (find-file-noselect file))
+         (elsewhere (make-temp-file "mcp-bt-elsewhere" t)))
+    (let ((default-directory (file-name-as-directory elsewhere)))
+      (let ((err (should-error
+                  (ch-mcp-server--buffer-text (buffer-name buffer))
+                  :type 'mcp-server-lib-tool-error)))
+        (should (string-match-p "not readable" (error-message-string err)))))
+    (let ((err (should-error
+                (ch-mcp-server--buffer-text "ch-mcp-tests-no-such")
+                :type 'mcp-server-lib-tool-error)))
+      (should (string-match-p "No buffer named" (error-message-string err))))))
+
+(ert-deftest ch-mcp-tools-list-buffers-omits-unreadable ()
+  "list-buffers omits an out-of-scope file buffer and a hidden buffer."
+  (let* ((file (ch-mcp-tests--temp-file "secret\n"))
+         (buffer (find-file-noselect file))
+         (elsewhere (make-temp-file "mcp-lb-elsewhere" t)))
+    (get-buffer-create "*gptel-log*")
+    (get-buffer-create "ch-mcp-tests-visible")
+    (let ((default-directory (file-name-as-directory elsewhere)))
+      (let ((listing (ch-mcp-server--list-buffers)))
+        (should (string-match-p "ch-mcp-tests-visible" listing))
+        (should-not (string-match-p "gptel-log" listing))
+        (should-not (string-match-p (regexp-quote (buffer-name buffer))
+                                    listing))))))
+
+;;; Read scope: the debug-knob latch
+
+(defmacro ch-mcp-tests--with-clean-latch (&rest body)
+  "Run BODY with the log-taint hash saved and restored, then cleared.
+The latch keeps module-level markers; tests must not leak them."
+  (declare (indent 0))
+  `(let ((saved (copy-hash-table ch-mcp-server--log-taint)))
+     (unwind-protect
+         (progn (clrhash ch-mcp-server--log-taint) ,@body)
+       (setq ch-mcp-server--log-taint saved))))
+
+(ert-deftest ch-mcp-tools-latch-off-is-not-blocked ()
+  "With every knob off a log buffer is not blocked."
+  (ch-mcp-tests--with-clean-latch
+    (with-current-buffer (get-buffer-create "*Messages*")
+      (should-not (ch-mcp-server--log-buffer-blocked-p (current-buffer))))))
+
+(ert-deftest ch-mcp-tools-latch-blocks-then-clears ()
+  "Text written while a knob is on blocks the buffer; erasing clears it."
+  (ch-mcp-tests--with-clean-latch
+    (let ((messages (get-buffer-create "*Messages*")))
+      (with-current-buffer messages
+        (let ((inhibit-read-only t)) (erase-buffer)))
+      ;; The watcher must fire on the global change, so setq/restore.
+      (unwind-protect
+          (progn
+            (setq url-debug t)
+            (with-current-buffer messages
+              (let ((inhibit-read-only t))
+                (goto-char (point-max))
+                (insert "tainted line\n")))
+            (should (eq 'url-debug
+                        (ch-mcp-server--log-buffer-blocked-p messages)))
+            ;; Erasing empties the tainted region: the marker collapses to
+            ;; point-max and the latch clears.
+            (with-current-buffer messages
+              (let ((inhibit-read-only t)) (erase-buffer)))
+            (should-not (ch-mcp-server--log-buffer-blocked-p messages)))
+        (setq url-debug nil)))))
+
+(ert-deftest ch-mcp-tools-latch-tramp-verbose-threshold ()
+  "tramp-verbose at the ceiling is off; above it is on."
+  (ch-mcp-tests--with-clean-latch
+    (let ((tramp-verbose 3))
+      (should-not (ch-mcp-server--knob-on-p 'tramp-verbose)))
+    (let ((tramp-verbose 4))
+      (should (ch-mcp-server--knob-on-p 'tramp-verbose)))))
+
+(ert-deftest ch-mcp-tools-buffer-text-refuses-blocked-log-buffer ()
+  "buffer-text throws for a blocked log buffer, naming the knob."
+  (ch-mcp-tests--with-clean-latch
+    (let ((warnings (get-buffer-create "*Warnings*")))
+      (with-current-buffer warnings
+        (let ((inhibit-read-only t)) (erase-buffer)))
+      (unwind-protect
+          (progn
+            (setq auth-source-debug t)
+            (with-current-buffer warnings
+              (let ((inhibit-read-only t))
+                (goto-char (point-max))
+                (insert "secret in a warning\n")))
+            (let ((err (should-error
+                        (ch-mcp-server--buffer-text "*Warnings*")
+                        :type 'mcp-server-lib-tool-error)))
+              (should (string-match-p "auth-source-debug"
+                                      (error-message-string err)))
+              (should (string-match-p "withheld"
+                                      (error-message-string err)))))
+        (setq auth-source-debug nil)))))
+
+(ert-deftest ch-mcp-tools-list-buffers-omits-blocked-log-buffer ()
+  "list-buffers omits a blocked log buffer."
+  (ch-mcp-tests--with-clean-latch
+    (let ((backtrace (get-buffer-create "*Backtrace*")))
+      (with-current-buffer backtrace
+        (let ((inhibit-read-only t)) (erase-buffer)))
+      (unwind-protect
+          (progn
+            (setq url-debug t)
+            (with-current-buffer backtrace
+              (let ((inhibit-read-only t))
+                (goto-char (point-max))
+                (insert "verbose\n")))
+            (should-not (string-match-p "Backtrace"
+                                        (ch-mcp-server--list-buffers))))
+        (setq url-debug nil)))))
+
+(ert-deftest ch-mcp-tools-log-watchers-idempotent ()
+  "Re-installing the watchers leaves exactly one per knob (no double-fire)."
+  (ch-mcp-server--install-log-watchers)
+  (ch-mcp-server--install-log-watchers)
+  (dolist (cell ch-mcp-server-debug-leak-knobs)
+    (let ((watchers (get-variable-watchers (car cell))))
+      (should (= 1 (seq-count
+                    (lambda (w)
+                      (eq w #'ch-mcp-server--log-knob-watcher))
+                    watchers))))))
 
 ;;; mcp-tools-ert.el ends here

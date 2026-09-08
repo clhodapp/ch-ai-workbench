@@ -127,6 +127,39 @@ bypassing this gate).  Extended by the resident user; gated elisp
 cannot grow it.")
 (put 'ch-mcp-server-agent-safe-editing-functions 'risky-local-variable t)
 
+(defvar ch-mcp-server-hidden-buffer-names '("\\`\\*gptel-log\\*\\'")
+  "Regexps for non-file buffer names the MCP read tools must never expose.
+The read scope predicate (`ch-mcp-server--buffer-readable-p') hides
+a buffer whose name matches any entry here, on top of Emacs's own
+convention that a leading space marks an internal buffer.  Seeded with
+`*gptel-log*', which logs full prompt/response traffic.  Extended by the
+resident user; gated elisp cannot reach it.")
+(put 'ch-mcp-server-hidden-buffer-names 'risky-local-variable t)
+
+(defvar ch-mcp-server-debug-leak-knobs
+  '((url-debug . nil)
+    (auth-source-debug . nil)
+    (gptel-log-level . nil)
+    (debug-on-error . nil)
+    (smtpmail-debug-info . nil)
+    (tramp-verbose . 3))
+  "Variables that make libraries print secrets, each paired with its off value.
+The debug-knob latch (`ch-mcp-server--log-buffer-blocked-p') refuses
+the log buffers while any of these is on, since verbose debug output
+routinely carries tokens, passwords, and full request bodies.  Off means
+`equal' to the listed value for every knob EXCEPT `tramp-verbose', whose
+off value is a threshold: a value greater than the listed number counts
+as on (tramp escalates verbosity numerically).  Extended by the resident
+user; gated elisp cannot reach it.")
+(put 'ch-mcp-server-debug-leak-knobs 'risky-local-variable t)
+
+(defvar ch-mcp-server-log-buffer-names
+  '("*Messages*" "*Warnings*" "*Backtrace*")
+  "Log buffers the debug-knob latch guards.
+These accumulate whatever libraries print, so text written while a
+`ch-mcp-server-debug-leak-knobs' variable is on is treated as
+tainted until it clears.")
+
 (defvar ch-mcp-server-lsp-timeout 5
   "Seconds before a synchronous LSP request degrades to a tool error.
 Every LSP call runs inside the interactive session; the timeout keeps a
@@ -241,6 +274,17 @@ on disk (e.g. after the agent's own native edits)."
                (not (verify-visited-file-modtime (current-buffer))))
       (revert-buffer :ignore-auto :noconfirm))))
 
+(defun ch-mcp-server--file-in-scope-p (file)
+  "Whether FILE passes the auto-open read scope.
+The single rule tying read scope to open scope: any file under
+`any-project', else one in the calling client's territory or a session
+project.  Applied both when opening an unvisited file
+\(`ch-mcp-server--file-buffer') and when deciding whether an
+already-visiting buffer may be read (`ch-mcp-server--buffer-readable-p')."
+  (or (eq ch-mcp-server-auto-open-scope 'any-project)
+      (ch-mcp-server--territory-file-p file)
+      (ch-mcp-server--session-file-p file)))
+
 (defun ch-mcp-server--file-buffer (file)
   "Live buffer visiting FILE; stale unmodified buffers are reverted first.
 Unvisited files are opened (booting LSP via the usual mode hooks) when
@@ -253,14 +297,152 @@ Unvisited files are opened (booting LSP via the usual mode hooks) when
       buffer)
      ((not (file-readable-p file))
       (mcp-server-lib-tool-throw (format "No readable file %s" file)))
-     ((or (eq ch-mcp-server-auto-open-scope 'any-project)
-          (ch-mcp-server--territory-file-p file)
-          (ch-mcp-server--session-file-p file))
+     ((ch-mcp-server--file-in-scope-p file)
       (find-file-noselect file))
      (t
       (mcp-server-lib-tool-throw
        (format "%s is not visited and lies outside the client territory and every session project (auto-open scope: %s)"
                file ch-mcp-server-auto-open-scope))))))
+
+;;; Buffer read scope: readability predicate plus the debug-knob latch
+
+(defun ch-mcp-server--buffer-readable-p (buffer)
+  "Whether the agent may read BUFFER's contents or see it in a listing.
+A file-visiting buffer is readable exactly when its file passes the
+auto-open read scope (`ch-mcp-server--file-in-scope-p'), tying read
+scope to open scope through one rule.  A buffer without a file is readable
+unless its name marks it internal (a leading space, Emacs's own
+convention, and where the HTTP response buffers live) or matches
+`ch-mcp-server-hidden-buffer-names'.  Terminals stay visible."
+  (let ((file (buffer-file-name buffer)))
+    (if file
+        (ch-mcp-server--file-in-scope-p file)
+      (let ((name (buffer-name buffer)))
+        (not (or (null name)
+                 (string-prefix-p " " name)
+                 (seq-some (lambda (re) (string-match-p re name))
+                           ch-mcp-server-hidden-buffer-names)))))))
+
+;; The debug-knob latch.  Each guarded log buffer carries a taint-start
+;; marker: the position of the earliest still-present text written while a
+;; leak knob was on, or nil when the buffer holds no tainted text.  A
+;; variable watcher on every knob drops the marker when the first knob
+;; turns on, whatever else is happening, so the region is recorded even
+;; with no sync in progress.  The marker is stored in a module-level hash
+;; keyed by buffer name, so a killed-and-reborn buffer starts clean, and
+;; it lives in the buffer itself (an insertion marker), so ordinary
+;; `message-log-max' rolling, `erase-buffer', and killing all empty the
+;; region without the latch doing anything: once the marker reaches
+;; `point-max' there is no tainted text left to withhold.
+
+(defvar ch-mcp-server--log-taint (make-hash-table :test 'equal)
+  "Hash of log buffer name -> taint-start marker (or nil).
+See `ch-mcp-server--log-buffer-blocked-p'.")
+
+(defvar ch-mcp-server--log-watchers-installed nil
+  "Non-nil once the debug-knob variable watchers are installed.
+Guards `ch-mcp-server--install-log-watchers' against stacking
+watchers when this file is re-evaluated.")
+
+(defun ch-mcp-server--knob-value-on-p (knob value)
+  "Whether VALUE counts as on for debug leak KNOB (a symbol).
+Off is `equal' to the value paired with KNOB in
+`ch-mcp-server-debug-leak-knobs', except `tramp-verbose', whose
+paired value is a ceiling: a number above it counts as on."
+  (let ((off (cdr (assq knob ch-mcp-server-debug-leak-knobs))))
+    (if (eq knob 'tramp-verbose)
+        (and (numberp value) (numberp off) (> value off))
+      (not (equal value off)))))
+
+(defun ch-mcp-server--knob-on-p (knob)
+  "Whether debug leak KNOB (a symbol) is currently on, by its live value."
+  (and (boundp knob)
+       (ch-mcp-server--knob-value-on-p knob (symbol-value knob))))
+
+(defun ch-mcp-server--any-knob-on-p ()
+  "Whether any `ch-mcp-server-debug-leak-knobs' variable is on."
+  (seq-some (lambda (cell) (ch-mcp-server--knob-on-p (car cell)))
+            ch-mcp-server-debug-leak-knobs))
+
+(defun ch-mcp-server--taint-log-buffers ()
+  "Record a taint-start marker in each existing log buffer that lacks one.
+Called when a knob turns on: the marker sits at `point-max', a
+non-inserting marker so appended text lands after it and falls inside the
+tainted region."
+  (dolist (name ch-mcp-server-log-buffer-names)
+    (let ((buffer (get-buffer name)))
+      (when (and buffer (not (gethash name ch-mcp-server--log-taint)))
+        (with-current-buffer buffer
+          (puthash name (copy-marker (point-max) nil)
+                   ch-mcp-server--log-taint))))))
+
+(defun ch-mcp-server--log-knob-watcher (symbol newval &rest _)
+  "Variable-watcher body: drop taint markers when a knob turns on.
+The watcher fires while SYMBOL still holds its old value, so the
+transition is read from the incoming NEWVAL for SYMBOL and the live
+values for the rest.  When any knob is (about to be) on, ensure every log
+buffer has a marker.  Markers are cleared lazily by
+`ch-mcp-server--log-buffer-blocked-p' once the tainted text drains,
+so the off transition needs no work here."
+  (when (or (ch-mcp-server--knob-value-on-p symbol newval)
+            (ch-mcp-server--any-knob-on-p))
+    (ch-mcp-server--taint-log-buffers)))
+
+(defun ch-mcp-server--install-log-watchers ()
+  "Install idempotent variable watchers on the debug leak knobs.
+Any existing watcher for a knob is removed first, so re-evaluating this
+file never stacks watchers."
+  (dolist (cell ch-mcp-server-debug-leak-knobs)
+    (let ((knob (car cell)))
+      (remove-variable-watcher knob #'ch-mcp-server--log-knob-watcher)
+      (add-variable-watcher knob #'ch-mcp-server--log-knob-watcher)))
+  (setq ch-mcp-server--log-watchers-installed t))
+
+(defun ch-mcp-server--log-buffer-blocked-p (buffer)
+  "The offending knob symbol when BUFFER is a log buffer with tainted text.
+Returns nil when BUFFER is not a guarded log buffer, when no knob is on,
+or when the tainted region has drained.  The marker is stored at
+`point-max' when a knob turns on; text written since then sits after it.
+Once the marker has reached `point-max' again (through `message-log-max'
+rolling, `erase-buffer', or a kill) the region is empty and cleared, so
+the buffer unblocks itself."
+  (let* ((name (buffer-name buffer))
+         (marker (and (member name ch-mcp-server-log-buffer-names)
+                      (gethash name ch-mcp-server--log-taint))))
+    (when marker
+      (if (and (marker-buffer marker)
+               (eq (marker-buffer marker) buffer)
+               (< (marker-position marker)
+                  (with-current-buffer buffer (point-max))))
+          ;; Tainted text remains.  Name the first knob still on; if every
+          ;; knob is now off but the region has not drained, keep
+          ;; withholding under the first declared knob until it does.
+          (or (seq-find #'ch-mcp-server--knob-on-p
+                        (mapcar #'car ch-mcp-server-debug-leak-knobs))
+              (car (car ch-mcp-server-debug-leak-knobs)))
+        ;; Region drained (or marker detached): clear the latch.
+        (remhash name ch-mcp-server--log-taint)
+        nil))))
+
+(defun ch-mcp-server--buffer-accessible-p (buffer)
+  "Whether the agent may read BUFFER: readable in scope AND not latched.
+The two gates are independent; a buffer must pass both."
+  (and (ch-mcp-server--buffer-readable-p buffer)
+       (not (ch-mcp-server--log-buffer-blocked-p buffer))))
+
+(defun ch-mcp-server--buffer-accessible-or-throw (buffer)
+  "Throw a tool error unless the agent may read BUFFER; else return BUFFER.
+For the by-name resolvers: an out-of-scope or hidden buffer and a
+latched log buffer are both refused, each with its own message."
+  (unless (ch-mcp-server--buffer-readable-p buffer)
+    (mcp-server-lib-tool-throw
+     (format "Buffer %s is not readable (outside scope)" (buffer-name buffer))))
+  (let ((knob (ch-mcp-server--log-buffer-blocked-p buffer)))
+    (when knob
+      (mcp-server-lib-tool-throw
+       (format "Buffer %s withheld: %s is enabled (verbose debug output may contain secrets); clear the buffer to unblock"
+               (buffer-name buffer) knob))))
+  buffer)
 
 (defun ch-mcp-server--call-at (file line col fn)
   "Call FN with FILE's buffer current and point at LINE:COL (1-based)."
@@ -377,7 +559,10 @@ MCP Parameters:"
                            (buffer-name)
                            major-mode
                            (or buffer-file-name ""))))
-               (buffer-list)
+               ;; Omit buffers the agent may not read: out-of-scope files,
+               ;; hidden internal buffers, and latched log buffers.
+               (seq-filter #'ch-mcp-server--buffer-accessible-p
+                           (buffer-list))
                "\n")))
 
 (defun ch-mcp-server--buffer-text (name &optional start-line end-line numbered)
@@ -400,6 +585,7 @@ MCP Parameters:
           (end-line (ch-mcp-server--opt end-line)))
       (unless buffer
         (mcp-server-lib-tool-throw (format "No buffer named %s" name)))
+      (ch-mcp-server--buffer-accessible-or-throw buffer)
       (with-current-buffer buffer
         (save-excursion
           (save-restriction
@@ -476,7 +662,11 @@ symbol describing why there are no results (e.g. `no-checker')."
   "Diagnostics report over all file-visiting buffers, capped at LIMIT lines."
   (let ((lines nil) (pending nil) (clean 0) (no-checker 0))
     (dolist (buffer (buffer-list))
-      (when (buffer-file-name buffer)
+      ;; Only file-visiting buffers carry diagnostics, and only those the
+      ;; agent could read anyway: an out-of-scope file's path and check
+      ;; results are as much a disclosure as its text.
+      (when (and (buffer-file-name buffer)
+                 (ch-mcp-server--buffer-accessible-p buffer))
         (ch-mcp-server--maybe-revert buffer)
         (let* ((state (ch-mcp-server--buffer-diagnostic-state buffer))
                (status (car state))
@@ -680,7 +870,10 @@ MCP Parameters:"
     (let (files)
       (dolist (buffer (buffer-list))
         (with-current-buffer buffer
-          (when (and buffer-file-name (buffer-modified-p))
+          ;; A modified out-of-scope file's path is a disclosure like its
+          ;; text; only report buffers the agent could read.
+          (when (and buffer-file-name (buffer-modified-p)
+                     (ch-mcp-server--buffer-accessible-p buffer))
             (push buffer-file-name files))))
       (if files
           (mapconcat #'identity (nreverse files) "\n")
@@ -1061,9 +1254,13 @@ MCP Parameters:
                         (format "No buffer named %s" buffer))))
            (file (buffer-file-name (or (buffer-base-buffer target) target))))
       ;; A buffer backed by a file is that file's staging area even
-      ;; when the mutation never writes disk; territory applies.
-      (when file
-        (ch-mcp-server--check-file-write file))
+      ;; when the mutation never writes disk; territory applies.  A
+      ;; non-file buffer carries no territory, so the read predicate is
+      ;; the only scope check standing between this verb and an internal
+      ;; or hidden buffer resolved by name.
+      (if file
+          (ch-mcp-server--check-file-write file)
+        (ch-mcp-server--buffer-accessible-or-throw target))
       (with-current-buffer target
         (ch-mcp-server--replace-literal
          buffer old-string new-string (equal replace-all "yes"))))))
@@ -1154,9 +1351,10 @@ MCP Parameters:
           (mcp-server-lib-tool-throw "Provide exactly one of file or buffer"))
         (let ((target (if file
                           (ch-mcp-server--file-buffer file)
-                        (or (get-buffer buffer-name)
-                            (mcp-server-lib-tool-throw
-                             (format "No buffer named %s" buffer-name)))))
+                        (ch-mcp-server--buffer-accessible-or-throw
+                         (or (get-buffer buffer-name)
+                             (mcp-server-lib-tool-throw
+                              (format "No buffer named %s" buffer-name))))))
               (label (or file buffer-name)))
           (with-current-buffer target
             (save-excursion
@@ -1203,9 +1401,10 @@ MCP Parameters:
                     (format "No buffer is visiting %s" file)))))
              (buffer-name
               (collab-comments-threads
-               (or (get-buffer buffer-name)
-                   (mcp-server-lib-tool-throw
-                    (format "No buffer named %s" buffer-name)))))
+               (ch-mcp-server--buffer-accessible-or-throw
+                (or (get-buffer buffer-name)
+                    (mcp-server-lib-tool-throw
+                     (format "No buffer named %s" buffer-name))))))
              (t (collab-comments-all-threads)))))
       (if (null threads)
           "No comment threads"
@@ -1221,6 +1420,11 @@ the others."
   (unless (bound-and-true-p mcp-server-lib--running)
     (mcp-server-lib-start))
   t)
+
+;; Watch the debug-leak knobs so the log-buffer latch records a tainted
+;; region the moment a knob turns on, whether or not a tool is running.
+;; Idempotent, so re-evaluating this file never stacks watchers.
+(ch-mcp-server--install-log-watchers)
 
 (use-package mcp-server-lib
   :demand t
