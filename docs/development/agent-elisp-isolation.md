@@ -176,12 +176,19 @@ buffer before any other test, so no buffer-read tool returns it, no
 mirror file is written for it, it is omitted from listings, and neither
 transform mode can reach it.
 
-**The default is by kind.** A terminal (`ghostel-mode`, and the other
-terminal modes: `comint-mode` and what derives from it, `term-mode`,
-`vterm-mode`, `eshell-mode`, a declared list) shows whatever ran in it,
-an echoed password, a token in a command line, the output of `env`, so
-its default is sensitive. Every other buffer's default is not.
-Terminals are the sole kind that starts withheld.
+**The default is computed, not stamped.** A buffer is sensitive by
+default when it is a terminal or visits a secret-named file. A terminal
+(`ghostel-mode`, and the other terminal modes: `comint-mode` and what
+derives from it, `term-mode`, `vterm-mode`, `eshell-mode`, a declared
+list) shows whatever ran in it, an echoed password, a token in a
+command line, the output of `env`. A secret-named file is one matching
+`ch-mcp-server-sensitive-file-patterns` (seed: `~/.authinfo*`, `*.gpg`,
+`*.age`, `.env` and `.env.*`, and a project's declared secrets file).
+Every other buffer's default is readable. Because the default is a
+computation over the buffer's mode and file name rather than a mark
+stamped at open time, it needs no hook and holds however the buffer
+came to visit the file; `.env` and a terminal are the same case,
+withheld with the state still unset.
 
 **One toggle, for any buffer.** `ch-mcp-server-toggle-buffer-sensitive`
 (bound to `<leader> a t`) flips the effective state of the current
@@ -192,23 +199,14 @@ the quick per-buffer override of the defaults, and it is the same
 command everywhere; terminals are not a special case of the toggle,
 only of the default.
 
-Two more ways to set `sensitive`, both on open so the buffer never
-exists readable with the secret in it:
-
-- **By command.** `ch-mcp-server-visit-sensitive` reads a file name and
-  visits it already marked, for the case the user knows is sensitive
-  and no pattern anticipated.
-- **By pattern.** A declared list
-  (`ch-mcp-server-sensitive-file-patterns`, seed: `~/.authinfo*`,
-  `*.gpg`, `*.age`, `.env` and `.env.*`, and a project's declared
-  secrets file) marks any buffer visiting a match from
-  `find-file-hook`, so routine sensitive files need no thought.
-
-Marking a buffer that already holds a secret still withholds it going
-forward, but that is the fallback; the point of the on-open paths is to
-mark before the content arrives. A file cannot set this variable
-through a file-local: only nil is accepted, so a file can never expose
-itself.
+For a file the user knows is sensitive and no pattern anticipated,
+`ch-mcp-server-visit-sensitive` reads a file name and visits it with the
+state already `sensitive`, so the buffer never exists readable with the
+secret in it. Toggling a buffer that already holds a secret still
+withholds it going forward, but that is the fallback; the patterns and
+the visit command exist so the common cases are withheld before the
+content arrives. A file cannot set this variable through a file-local:
+only nil is accepted, so a file can never expose itself.
 
 This flag governs the buffer surfaces (the read tools and the mirror).
 It does not reach a file the agent's own CLI opens inside the sandbox;
@@ -386,10 +384,11 @@ print a secret into a log.
   scan; the mark is set before the secret arrives (on open, by command
   or by pattern), and the scan is not trusted to catch what the user
   already knows is sensitive.
-- Sensitivity is one per-buffer state with a default by kind: terminals
-  start sensitive, everything else starts readable, and one generic
-  toggle flips any buffer either way. Terminals are a special case of
-  the default, not of the toggle.
+- Sensitivity is one per-buffer state with a computed default:
+  terminals and secret-named files start sensitive, everything else
+  starts readable, and one generic toggle flips any buffer either way.
+  Terminals and `.env` are special cases of the default, not of the
+  toggle.
 - Every tool result that reaches the agent's context is scanned and
   redacted, `Read` and `Bash` alike (a shell command's output is a tool
   result, so `cat` is covered). `Read` and the MCP tools mark the spans
@@ -438,11 +437,11 @@ print a secret into a log.
    narrows the tools that stay in the parent regardless. (Landed.)
 1b. Buffer sensitivity: the buffer-local
    `ch-mcp-server-buffer-sensitivity` (unset, `sensitive`, `exposed`),
-   the predicate refusing the effective state first, terminal modes
-   sensitive by default, the generic `ch-mcp-server-toggle-buffer-sensitive`
-   on `<leader> a t`, the `ch-mcp-server-visit-sensitive` command, the
-   `find-file-hook` marking from `ch-mcp-server-sensitive-file-patterns`,
-   and the `ghostel-terminals` skill adopted into the workbench with
+   the predicate refusing the effective state first, a computed default
+   (terminal modes and `ch-mcp-server-sensitive-file-patterns` matches
+   start sensitive), the generic `ch-mcp-server-toggle-buffer-sensitive`
+   on `<leader> a t`, the `ch-mcp-server-visit-sensitive` command, and
+   the `ghostel-terminals` skill adopted into the workbench with
    matching text. Parent-side and independent of the child, so it lands
    next to phase 1; the mirror in phase 3 already refuses through the
    same predicate.
