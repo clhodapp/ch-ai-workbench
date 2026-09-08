@@ -66,16 +66,16 @@
   (let ((name "ert-collab-present"))
     (unwind-protect
         (progn
-          (ch-emacs-config-mcp--present name "alpha beta gamma\n" nil "no")
+          (ch-mcp-server--present name "alpha beta gamma\n" nil "no")
           (with-current-buffer (format "*agent/%s*" name)
             (let ((overlay (ch-collab-tests--thread-on "beta" "draft note")))
-              (ch-emacs-config-mcp--present
+              (ch-mcp-server--present
                name "# Revised\n\nalpha beta gamma\n\nmore\n" nil "no")
               (should (equal "beta" (ch-collab-tests--anchor overlay)))
-              (ch-emacs-config-mcp--edit-buffer
+              (ch-mcp-server--edit-buffer
                "beta gamma" "beta delta" (buffer-name))
               (should (equal "beta" (ch-collab-tests--anchor overlay)))
-              (ch-emacs-config-mcp--edit-buffer
+              (ch-mcp-server--edit-buffer
                "alpha beta delta" "rewritten entirely" (buffer-name))
               (should (= (overlay-start overlay) (overlay-end overlay)))
               (should-not (= (overlay-end overlay) (point-max))))))
@@ -96,11 +96,11 @@ to its buffer, not merely anchored somewhere."
   (let ((name "ert-collab-mode"))
     (unwind-protect
         (progn
-          (ch-emacs-config-mcp--present name "alpha beta gamma\n" nil "no")
+          (ch-mcp-server--present name "alpha beta gamma\n" nil "no")
           (with-current-buffer (format "*agent/%s*" name)
             (let ((mode major-mode)
                   (overlay (ch-collab-tests--thread-on "beta" "draft note")))
-              (ch-emacs-config-mcp--present name "alpha beta gamma\n" nil "no")
+              (ch-mcp-server--present name "alpha beta gamma\n" nil "no")
               (should (eq major-mode mode))
               (should (overlay-buffer overlay))
               (should (equal "beta" (ch-collab-tests--anchor overlay))))))
@@ -152,16 +152,16 @@ restores from the store, re-anchoring against the appended text."
   (ch-collab-tests--with-buffer "alpha beta gamma\nbeta again\n"
     (let ((name (buffer-name)))
       ;; Ambiguous anchor: named with its count, nothing created.
-      (should-error (ch-emacs-config-mcp--add-comment
+      (should-error (ch-mcp-server--add-comment
                      "note" nil name "beta" nil)
                     :type 'mcp-server-lib-tool-error)
       (should-not (collab-comments-threads))
       ;; Missing anchor.
-      (should-error (ch-emacs-config-mcp--add-comment
+      (should-error (ch-mcp-server--add-comment
                      "note" nil name "missing text" nil)
                     :type 'mcp-server-lib-tool-error)
       ;; Unique anchor: thread created, rendering returned.
-      (let ((result (ch-emacs-config-mcp--add-comment
+      (let ((result (ch-mcp-server--add-comment
                      "note" nil name "gamma" nil)))
         (should (string-match-p "\"gamma\"" result))
         (should (string-match-p "^  claude" result))
@@ -171,7 +171,7 @@ restores from the store, re-anchoring against the appended text."
   (ch-collab-tests--with-buffer "alpha beta gamma\n"
     (let* ((overlay (ch-collab-tests--thread-on "beta" "user note"))
            (id (collab-comments-thread-id overlay))
-           (result (ch-emacs-config-mcp--add-comment
+           (result (ch-mcp-server--add-comment
                     "agent reply" nil nil nil (number-to-string id))))
       (should (string-match-p "^  tester" result))
       (should (string-match-p "^    agent reply" result))
@@ -181,35 +181,35 @@ restores from the store, re-anchoring against the appended text."
   (ch-collab-tests--with-buffer "alpha\n"
     (let ((name (buffer-name)))
       ;; thread and anchor together
-      (should-error (ch-emacs-config-mcp--add-comment
+      (should-error (ch-mcp-server--add-comment
                      "note" nil name "alpha" "1")
                     :type 'mcp-server-lib-tool-error)
       ;; unknown thread id
-      (should-error (ch-emacs-config-mcp--add-comment
+      (should-error (ch-mcp-server--add-comment
                      "note" nil nil nil "999999")
                     :type 'mcp-server-lib-tool-error)
       ;; neither anchor nor thread
-      (should-error (ch-emacs-config-mcp--add-comment "note" nil name nil nil)
+      (should-error (ch-mcp-server--add-comment "note" nil name nil nil)
                     :type 'mcp-server-lib-tool-error)
       ;; empty body
-      (should-error (ch-emacs-config-mcp--add-comment "  " nil name "alpha" nil)
+      (should-error (ch-mcp-server--add-comment "  " nil name "alpha" nil)
                     :type 'mcp-server-lib-tool-error))))
 
 (ert-deftest ch-collab-mcp-list-comments ()
   (ch-collab-tests--with-buffer "alpha beta gamma\n"
     (let ((name (buffer-name)))
       (should (equal "No comment threads"
-                     (ch-emacs-config-mcp--list-comments nil name)))
+                     (ch-mcp-server--list-comments nil name)))
       (ch-collab-tests--thread-on "alpha" "one")
       (ch-collab-tests--thread-on "gamma" "two")
-      (let ((result (ch-emacs-config-mcp--list-comments nil name)))
+      (let ((result (ch-mcp-server--list-comments nil name)))
         (should (string-match-p "\"alpha\"" result))
         (should (string-match-p "\"gamma\"" result))
         (should (string-match-p "^    one" result)))
       ;; The unfiltered sweep includes this buffer's threads too.
       (should (string-match-p "\"alpha\""
-                              (ch-emacs-config-mcp--list-comments)))
-      (should-error (ch-emacs-config-mcp--list-comments nil "no such buffer")
+                              (ch-mcp-server--list-comments)))
+      (should-error (ch-mcp-server--list-comments nil "no such buffer")
                     :type 'mcp-server-lib-tool-error))))
 
 (ert-deftest ch-collab-mcp-add-comment-on-file ()
@@ -220,12 +220,12 @@ restores from the store, re-anchoring against the appended text."
         (progn
           (with-temp-file file (insert "one two three\n"))
           (setq buffer (find-file-noselect file))
-          (let ((result (ch-emacs-config-mcp--add-comment
+          (let ((result (ch-mcp-server--add-comment
                          "file note" file nil "two" nil)))
             (should (string-match-p "\"two\"" result))
             (should (= 1 (length (collab-comments-threads buffer)))))
           (should (string-match-p
-                   "\"two\"" (ch-emacs-config-mcp--list-comments file))))
+                   "\"two\"" (ch-mcp-server--list-comments file))))
       (when buffer
         (mapc #'collab-comments-dismiss-thread
               (collab-comments-threads buffer))

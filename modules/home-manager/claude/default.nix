@@ -43,7 +43,7 @@ let
     text = ''
       bridge=(${editorScope.epkgs.mcp-server-lib}/share/emacs/site-lisp/elpa/mcp-server-lib-*/emacs-mcp-stdio.sh)
       exec bash "''${bridge[0]}" \
-        --init-function=ch-emacs-config-mcp-server-start \
+        --init-function=ch-mcp-server-start \
         --server-id=emacs \
         "$@"
     '';

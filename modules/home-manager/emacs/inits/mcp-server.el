@@ -63,34 +63,34 @@
 (declare-function unsafep "unsafep")
 (defvar safe-functions)
 
-(defvar ch-emacs-config-mcp-auto-open-scope 'session-projects
+(defvar ch-mcp-server-auto-open-scope 'session-projects
   "Scope of files the MCP tools may open into new buffers.
 `session-projects' allows only files under a project that already has
 file-visiting buffers in this session; `any-project' allows any readable
 file.  Files under the calling client's own territory (see
-`ch-emacs-config-mcp--client-territory') and files already visited by a
+`ch-mcp-server--client-territory') and files already visited by a
 buffer are always in scope.")
 
-(defvar ch-emacs-config-mcp-write-scope 'client-project
+(defvar ch-mcp-server-write-scope 'client-project
   "Which files the MCP write verbs may touch.
 `client-project' (the default) confines `edit-file', `transform', and
 `edit-buffer' on file-visiting buffers to the calling client's
 territory — the project containing the client session's launch
-directory (see `ch-emacs-config-mcp--client-territory').
+directory (see `ch-mcp-server--client-territory').
 `unrestricted' disables the check.  Set by the resident user only;
 gated elisp cannot reach it.")
-(put 'ch-emacs-config-mcp-write-scope 'risky-local-variable t)
+(put 'ch-mcp-server-write-scope 'risky-local-variable t)
 
-(defvar ch-emacs-config-mcp-elisp-scope 'agent-safe
+(defvar ch-mcp-server-elisp-scope 'agent-safe
   "Which elisp the MCP elisp-taking tools will evaluate.
 `agent-safe' (the default) accepts only forms `unsafep' proves free of
-side effects, extended by `ch-emacs-config-mcp-agent-safe-functions'
-(and, for `transform', `ch-emacs-config-mcp-agent-safe-editing-functions').
+side effects, extended by `ch-mcp-server-agent-safe-functions'
+(and, for `transform', `ch-mcp-server-agent-safe-editing-functions').
 `unrestricted' disables the gate — the resident user's explicit say-so
 for a stateful co-driving session; gated elisp cannot reach it.")
-(put 'ch-emacs-config-mcp-elisp-scope 'risky-local-variable t)
+(put 'ch-mcp-server-elisp-scope 'risky-local-variable t)
 
-(defvar ch-emacs-config-mcp-agent-safe-functions '(error ignore)
+(defvar ch-mcp-server-agent-safe-functions '(error ignore)
   "Functions the elisp gate accepts beyond Emacs's own safety metadata.
 `unsafep' already admits everything marked `pure', `side-effect-free',
 or `safe-function'; list here functions that are innocuous for agents
@@ -98,9 +98,9 @@ to call but carry no such marking.  Seeds: `error' so gated code can
 signal validation failures, `ignore' as the no-op it is.  Extended by
 the resident user (or by modes declaring their own functions); gated
 elisp cannot grow it.")
-(put 'ch-emacs-config-mcp-agent-safe-functions 'risky-local-variable t)
+(put 'ch-mcp-server-agent-safe-functions 'risky-local-variable t)
 
-(defvar ch-emacs-config-mcp-agent-safe-editing-functions
+(defvar ch-mcp-server-agent-safe-editing-functions
   '(save-excursion save-restriction widen narrow-to-region
     goto-char move-to-column
     forward-char backward-char forward-line forward-word backward-word
@@ -125,23 +125,23 @@ clipboard; use `delete-region'), and the `replace-regexp' family
 (their replacement strings evaluate embedded `\\,(...)' elisp,
 bypassing this gate).  Extended by the resident user; gated elisp
 cannot grow it.")
-(put 'ch-emacs-config-mcp-agent-safe-editing-functions 'risky-local-variable t)
+(put 'ch-mcp-server-agent-safe-editing-functions 'risky-local-variable t)
 
-(defvar ch-emacs-config-mcp-lsp-timeout 5
+(defvar ch-mcp-server-lsp-timeout 5
   "Seconds before a synchronous LSP request degrades to a tool error.
 Every LSP call runs inside the interactive session; the timeout keeps a
 hung server from freezing both Emacs and the MCP bridge.")
 
-(defvar ch-emacs-config-mcp-result-limit 100
+(defvar ch-mcp-server-result-limit 100
   "Default cap on result lines the MCP tools return inline.")
 
 ;;; Shared helpers
 
-(defun ch-emacs-config-mcp--opt (value)
+(defun ch-mcp-server--opt (value)
   "VALUE, with the empty string normalized to nil (an omitted parameter)."
   (and value (not (equal value "")) value))
 
-(defun ch-emacs-config-mcp--as-number (value name)
+(defun ch-mcp-server--as-number (value name)
   "VALUE as a number; throw a tool error naming NAME when it is not one."
   (cond ((numberp value) value)
         ((and (stringp value) (string-match-p "\\`[0-9]+\\'" value))
@@ -149,17 +149,17 @@ hung server from freezing both Emacs and the MCP bridge.")
         (t (mcp-server-lib-tool-throw
             (format "%s must be a positive integer, got %S" name value)))))
 
-(defun ch-emacs-config-mcp--capped (lines limit what)
+(defun ch-mcp-server--capped (lines limit what)
   "Join LINES up to LIMIT, appending the true total of WHAT when truncated."
   (let ((total (length lines))
-        (limit (or limit ch-emacs-config-mcp-result-limit)))
+        (limit (or limit ch-mcp-server-result-limit)))
     (if (<= total limit)
         (mapconcat #'identity lines "\n")
       (concat (mapconcat #'identity (seq-take lines limit) "\n")
               (format "\n... %d more (%d %s total)"
                       (- total limit) total what)))))
 
-(defun ch-emacs-config-mcp--session-file-p (file)
+(defun ch-mcp-server--session-file-p (file)
   "Whether FILE lies in a project that already has buffers in this session."
   (when-let* ((project (project-current nil (file-name-directory file)))
               (root (expand-file-name (project-root project))))
@@ -168,7 +168,7 @@ hung server from freezing both Emacs and the MCP bridge.")
                   (string-prefix-p root (expand-file-name name))))
               (buffer-list))))
 
-(defun ch-emacs-config-mcp--client-territory ()
+(defun ch-mcp-server--client-territory ()
   "Territory root of the calling MCP client, as a truename directory.
 Each request reaches Emacs through emacsclient, which binds
 `default-directory' to the stdio bridge process's working directory —
@@ -187,50 +187,50 @@ rebinds the current buffer."
          (file-truename (expand-file-name (project-root project)))
        dir))))
 
-(defun ch-emacs-config-mcp--territory-file-p (file)
+(defun ch-mcp-server--territory-file-p (file)
   "Whether FILE lies inside the calling client's territory."
-  (string-prefix-p (ch-emacs-config-mcp--client-territory)
+  (string-prefix-p (ch-mcp-server--client-territory)
                    (file-truename (expand-file-name file))))
 
-(defun ch-emacs-config-mcp--check-file-write (file)
+(defun ch-mcp-server--check-file-write (file)
   "Throw a tool error when FILE is outside the calling client's territory.
-The write-scope filter (`ch-emacs-config-mcp-write-scope'): the write
+The write-scope filter (`ch-mcp-server-write-scope'): the write
 verbs only touch files under the client's own project, mirroring the
 CLI-side workdir sandbox the MCP server would otherwise bypass."
-  (when (and (eq ch-emacs-config-mcp-write-scope 'client-project)
-             (not (ch-emacs-config-mcp--territory-file-p file)))
+  (when (and (eq ch-mcp-server-write-scope 'client-project)
+             (not (ch-mcp-server--territory-file-p file)))
     (mcp-server-lib-tool-throw
-     (format "%s is outside this session's territory %s (the project of the client's launch directory); MCP writes are confined to it (ch-emacs-config-mcp-write-scope)"
-             file (ch-emacs-config-mcp--client-territory)))))
+     (format "%s is outside this session's territory %s (the project of the client's launch directory); MCP writes are confined to it (ch-mcp-server-write-scope)"
+             file (ch-mcp-server--client-territory)))))
 
-(defun ch-emacs-config-mcp--gate-elisp (form what editing)
+(defun ch-mcp-server--gate-elisp (form what editing)
   "Throw a tool error unless FORM passes the agent elisp safety gate.
 WHAT names the tool for the error message.  With EDITING, the
 buffer-editing registry is allowed too (the `transform' case).
-The gate (`ch-emacs-config-mcp-elisp-scope') accepts only forms
+The gate (`ch-mcp-server-elisp-scope') accepts only forms
 `unsafep' proves harmless given Emacs's own safety metadata plus the
 agent-safe registries; everything else — mutation, I/O, indirect
 calls — is rejected before evaluation."
-  (when (eq ch-emacs-config-mcp-elisp-scope 'agent-safe)
+  (when (eq ch-mcp-server-elisp-scope 'agent-safe)
     (require 'unsafep)
     (let* ((safe-functions
             (if (eq safe-functions t)
                 t
-              (append ch-emacs-config-mcp-agent-safe-functions
+              (append ch-mcp-server-agent-safe-functions
                       (and editing
-                           ch-emacs-config-mcp-agent-safe-editing-functions)
+                           ch-mcp-server-agent-safe-editing-functions)
                       safe-functions)))
            (reason (unsafep form)))
       (when reason
         (mcp-server-lib-tool-throw
-         (format "%s rejected as unsafe: %S. In agent-safe scope only elisp provably free of side effects runs (unsafep over Emacs's safety metadata plus the ch-emacs-config-mcp-agent-safe%s registries). %s"
+         (format "%s rejected as unsafe: %S. In agent-safe scope only elisp provably free of side effects runs (unsafep over Emacs's safety metadata plus the ch-mcp-server-agent-safe%s registries). %s"
                  what reason
                  (if editing "(-editing)" "")
                  (if editing
                      "Stick to motion, search, and current-buffer editing functions; anything else is the resident user's to allow."
                    "Reads are fine; for edits use edit-file, edit-buffer, or transform.")))))))
 
-(defun ch-emacs-config-mcp--maybe-revert (buffer)
+(defun ch-mcp-server--maybe-revert (buffer)
   "Revert BUFFER when it is unmodified but stale against its file.
 Without this, tools reading buffer state quietly lie after files change
 on disk (e.g. after the agent's own native edits)."
@@ -241,32 +241,32 @@ on disk (e.g. after the agent's own native edits)."
                (not (verify-visited-file-modtime (current-buffer))))
       (revert-buffer :ignore-auto :noconfirm))))
 
-(defun ch-emacs-config-mcp--file-buffer (file)
+(defun ch-mcp-server--file-buffer (file)
   "Live buffer visiting FILE; stale unmodified buffers are reverted first.
 Unvisited files are opened (booting LSP via the usual mode hooks) when
-`ch-emacs-config-mcp-auto-open-scope' allows it; otherwise this throws."
+`ch-mcp-server-auto-open-scope' allows it; otherwise this throws."
   (let* ((file (expand-file-name file))
          (buffer (find-buffer-visiting file)))
     (cond
      (buffer
-      (ch-emacs-config-mcp--maybe-revert buffer)
+      (ch-mcp-server--maybe-revert buffer)
       buffer)
      ((not (file-readable-p file))
       (mcp-server-lib-tool-throw (format "No readable file %s" file)))
-     ((or (eq ch-emacs-config-mcp-auto-open-scope 'any-project)
-          (ch-emacs-config-mcp--territory-file-p file)
-          (ch-emacs-config-mcp--session-file-p file))
+     ((or (eq ch-mcp-server-auto-open-scope 'any-project)
+          (ch-mcp-server--territory-file-p file)
+          (ch-mcp-server--session-file-p file))
       (find-file-noselect file))
      (t
       (mcp-server-lib-tool-throw
        (format "%s is not visited and lies outside the client territory and every session project (auto-open scope: %s)"
-               file ch-emacs-config-mcp-auto-open-scope))))))
+               file ch-mcp-server-auto-open-scope))))))
 
-(defun ch-emacs-config-mcp--call-at (file line col fn)
+(defun ch-mcp-server--call-at (file line col fn)
   "Call FN with FILE's buffer current and point at LINE:COL (1-based)."
-  (let ((line (ch-emacs-config-mcp--as-number line "line"))
-        (col (ch-emacs-config-mcp--as-number col "col")))
-    (with-current-buffer (ch-emacs-config-mcp--file-buffer file)
+  (let ((line (ch-mcp-server--as-number line "line"))
+        (col (ch-mcp-server--as-number col "col")))
+    (with-current-buffer (ch-mcp-server--file-buffer file)
       (save-excursion
         (save-restriction
           (widen)
@@ -280,7 +280,7 @@ Unvisited files are opened (booting LSP via the usual mode hooks) when
           (move-to-column (max 0 (1- col)))
           (funcall fn))))))
 
-(defun ch-emacs-config-mcp--unified-diff (old-file new-file old-label new-label)
+(defun ch-mcp-server--unified-diff (old-file new-file old-label new-label)
   "Unified diff of OLD-FILE against NEW-FILE, labelled OLD-LABEL/NEW-LABEL."
   (with-temp-buffer
     (let ((status (call-process "diff" nil t nil "-u"
@@ -291,7 +291,7 @@ Unvisited files are opened (booting LSP via the usual mode hooks) when
             (t (mcp-server-lib-tool-throw
                 (format "diff failed (%s): %s" status (buffer-string))))))))
 
-(defun ch-emacs-config-mcp--text-diff (old new old-label new-label)
+(defun ch-mcp-server--text-diff (old new old-label new-label)
   "Unified diff between the strings OLD and NEW."
   (let ((old-file (make-temp-file "mcp-diff-old"))
         (new-file (make-temp-file "mcp-diff-new")))
@@ -299,18 +299,18 @@ Unvisited files are opened (booting LSP via the usual mode hooks) when
         (let ((coding-system-for-write 'utf-8-unix))
           (write-region old nil old-file nil 'silent)
           (write-region new nil new-file nil 'silent)
-          (ch-emacs-config-mcp--unified-diff
+          (ch-mcp-server--unified-diff
            old-file new-file old-label new-label))
       (delete-file old-file)
       (delete-file new-file))))
 
 ;;; Original tools
 
-(defun ch-emacs-config-mcp--eval-elisp (elisp)
+(defun ch-mcp-server--eval-elisp (elisp)
   "Evaluate ELISP and return the value of the last form, printed with %S.
 
 Gated: in the default `agent-safe' scope only elisp provably free of
-side effects is accepted (see `ch-emacs-config-mcp--gate-elisp'), so
+side effects is accepted (see `ch-mcp-server--gate-elisp'), so
 this is a read-only escape hatch — inspecting variables, buffer state,
 and session facts the dedicated tools don't cover.  Mutation belongs
 to the edit verbs and `transform'.
@@ -319,10 +319,10 @@ MCP Parameters:
   elisp - Emacs Lisp source text; multiple forms allowed, evaluated in order"
   (mcp-server-lib-with-error-handling
     (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)")))))
-      (ch-emacs-config-mcp--gate-elisp form "eval-elisp" nil)
+      (ch-mcp-server--gate-elisp form "eval-elisp" nil)
       (format "%S" (eval form t)))))
 
-(defun ch-emacs-config-mcp--context ()
+(defun ch-mcp-server--context ()
   "Summarize the state of the interactive Emacs session.
 
 MCP Parameters:"
@@ -366,7 +366,7 @@ MCP Parameters:"
                               region))
                   "region: none"))))))
 
-(defun ch-emacs-config-mcp--list-buffers ()
+(defun ch-mcp-server--list-buffers ()
   "List live buffers, one per line: name | major mode | file.
 
 MCP Parameters:"
@@ -380,7 +380,7 @@ MCP Parameters:"
                (buffer-list)
                "\n")))
 
-(defun ch-emacs-config-mcp--buffer-text (name &optional start-line end-line numbered)
+(defun ch-mcp-server--buffer-text (name &optional start-line end-line numbered)
   "Return the text of the buffer named NAME, without properties.
 
 Optionally limited to the 1-based inclusive line range
@@ -396,8 +396,8 @@ MCP Parameters:
   numbered - yes to prefix each line with its 1-based buffer line number"
   (mcp-server-lib-with-error-handling
     (let ((buffer (get-buffer name))
-          (start-line (ch-emacs-config-mcp--opt start-line))
-          (end-line (ch-emacs-config-mcp--opt end-line)))
+          (start-line (ch-mcp-server--opt start-line))
+          (end-line (ch-mcp-server--opt end-line)))
       (unless buffer
         (mcp-server-lib-tool-throw (format "No buffer named %s" name)))
       (with-current-buffer buffer
@@ -405,7 +405,7 @@ MCP Parameters:
           (save-restriction
             (widen)
             (let* ((from (if start-line
-                             (ch-emacs-config-mcp--as-number start-line "start-line")
+                             (ch-mcp-server--as-number start-line "start-line")
                            1))
                    (start (progn (goto-char (point-min))
                                  (forward-line (1- from))
@@ -413,7 +413,7 @@ MCP Parameters:
                    (end (if end-line
                             (progn (goto-char (point-min))
                                    (forward-line
-                                    (ch-emacs-config-mcp--as-number end-line "end-line"))
+                                    (ch-mcp-server--as-number end-line "end-line"))
                                    (point))
                           (point-max)))
                    (text (buffer-substring-no-properties start end)))
@@ -431,7 +431,7 @@ MCP Parameters:
 
 ;;; Diagnostics
 
-(defun ch-emacs-config-mcp--buffer-diagnostic-state (buffer)
+(defun ch-mcp-server--buffer-diagnostic-state (buffer)
   "Diagnostic state of BUFFER as (STATUS . LINES).
 STATUS is `checked', `pending' (a check is running or has not run), or a
 symbol describing why there are no results (e.g. `no-checker')."
@@ -456,14 +456,14 @@ symbol describing why there are no results (e.g. `no-checker')."
                         (flymake-diagnostics))))))
      (t (cons 'no-checker nil)))))
 
-(defun ch-emacs-config-mcp--file-diagnostics (file limit)
+(defun ch-mcp-server--file-diagnostics (file limit)
   "Diagnostics report for FILE's buffer, capped at LIMIT lines."
-  (let* ((state (ch-emacs-config-mcp--buffer-diagnostic-state
-                 (ch-emacs-config-mcp--file-buffer file)))
+  (let* ((state (ch-mcp-server--buffer-diagnostic-state
+                 (ch-mcp-server--file-buffer file)))
          (status (car state))
          (lines (cdr state))
          (body (and lines
-                    (ch-emacs-config-mcp--capped lines limit "diagnostics"))))
+                    (ch-mcp-server--capped lines limit "diagnostics"))))
     (pcase status
       ('checked (or body "No diagnostics (check finished)"))
       ('pending (concat (or body "No diagnostics yet")
@@ -472,13 +472,13 @@ symbol describing why there are no results (e.g. `no-checker')."
       (other (concat (or body "No diagnostics")
                      (format "\n(checker status: %s)" other))))))
 
-(defun ch-emacs-config-mcp--all-diagnostics (limit)
+(defun ch-mcp-server--all-diagnostics (limit)
   "Diagnostics report over all file-visiting buffers, capped at LIMIT lines."
   (let ((lines nil) (pending nil) (clean 0) (no-checker 0))
     (dolist (buffer (buffer-list))
       (when (buffer-file-name buffer)
-        (ch-emacs-config-mcp--maybe-revert buffer)
-        (let* ((state (ch-emacs-config-mcp--buffer-diagnostic-state buffer))
+        (ch-mcp-server--maybe-revert buffer)
+        (let* ((state (ch-mcp-server--buffer-diagnostic-state buffer))
                (status (car state))
                (buffer-lines (cdr state)))
           (setq lines (nconc lines buffer-lines))
@@ -489,7 +489,7 @@ symbol describing why there are no results (e.g. `no-checker')."
             (_ nil)))))
     (concat
      (if lines
-         (ch-emacs-config-mcp--capped lines limit "diagnostics")
+         (ch-mcp-server--capped lines limit "diagnostics")
        "No diagnostics")
      (format "\n(%d buffers checked clean, %d without a checker)"
              clean no-checker)
@@ -497,7 +497,7 @@ symbol describing why there are no results (e.g. `no-checker')."
        (concat "\nStill checking (results incomplete): "
                (mapconcat #'identity (nreverse pending) ", "))))))
 
-(defun ch-emacs-config-mcp--diagnostics (&optional file limit)
+(defun ch-mcp-server--diagnostics (&optional file limit)
   "Current diagnostics as \"path:line:col: severity: message\" lines.
 
 Covers FILE's buffer, or every file-visiting buffer when FILE is
@@ -509,16 +509,16 @@ MCP Parameters:
   file - absolute path; omit to sweep all file-visiting buffers
   limit - max diagnostic lines returned inline (default 100)"
   (mcp-server-lib-with-error-handling
-    (let ((file (ch-emacs-config-mcp--opt file))
-          (limit (when-let* ((raw (ch-emacs-config-mcp--opt limit)))
-                   (ch-emacs-config-mcp--as-number raw "limit"))))
+    (let ((file (ch-mcp-server--opt file))
+          (limit (when-let* ((raw (ch-mcp-server--opt limit)))
+                   (ch-mcp-server--as-number raw "limit"))))
       (if file
-          (ch-emacs-config-mcp--file-diagnostics file limit)
-        (ch-emacs-config-mcp--all-diagnostics limit)))))
+          (ch-mcp-server--file-diagnostics file limit)
+        (ch-mcp-server--all-diagnostics limit)))))
 
 ;;; Xref-backed navigation
 
-(defun ch-emacs-config-mcp--xref-line (item)
+(defun ch-mcp-server--xref-line (item)
   "Render xref ITEM as a grep-format \"path:line:col: summary\" line."
   (let* ((location (xref-item-location item))
          (line (or (xref-location-line location) 0))
@@ -530,9 +530,9 @@ MCP Parameters:
             line col
             (string-trim (or (xref-item-summary item) "")))))
 
-(defun ch-emacs-config-mcp--xref-items (kind file line col)
+(defun ch-mcp-server--xref-items (kind file line col)
   "Xref items of KIND (`references' or `definitions') at FILE:LINE:COL."
-  (ch-emacs-config-mcp--call-at
+  (ch-mcp-server--call-at
    file line col
    (lambda ()
      (require 'xref)
@@ -549,15 +549,15 @@ MCP Parameters:
          (mcp-server-lib-tool-throw
           (format "No identifier at %s:%s:%s (xref backend: %s)"
                   file line col backend)))
-       (with-timeout (ch-emacs-config-mcp-lsp-timeout
+       (with-timeout (ch-mcp-server-lsp-timeout
                       (mcp-server-lib-tool-throw
                        (format "%s lookup timed out after %ds"
-                               kind ch-emacs-config-mcp-lsp-timeout)))
+                               kind ch-mcp-server-lsp-timeout)))
          (if (eq kind 'references)
              (xref-backend-references backend identifier)
            (xref-backend-definitions backend identifier)))))))
 
-(defun ch-emacs-config-mcp--find-references (file line col &optional limit)
+(defun ch-mcp-server--find-references (file line col &optional limit)
   "References to the symbol at FILE:LINE:COL, one grep-format line each.
 
 MCP Parameters:
@@ -566,16 +566,16 @@ MCP Parameters:
   col - 1-based column of the symbol, as in grep line:col output
   limit - max lines returned inline (default 100)"
   (mcp-server-lib-with-error-handling
-    (let ((items (ch-emacs-config-mcp--xref-items 'references file line col))
-          (limit (when-let* ((raw (ch-emacs-config-mcp--opt limit)))
-                   (ch-emacs-config-mcp--as-number raw "limit"))))
+    (let ((items (ch-mcp-server--xref-items 'references file line col))
+          (limit (when-let* ((raw (ch-mcp-server--opt limit)))
+                   (ch-mcp-server--as-number raw "limit"))))
       (if (null items)
           "No references found"
-        (ch-emacs-config-mcp--capped
-         (mapcar #'ch-emacs-config-mcp--xref-line items)
+        (ch-mcp-server--capped
+         (mapcar #'ch-mcp-server--xref-line items)
          limit "references")))))
 
-(defun ch-emacs-config-mcp--find-definition (file line col)
+(defun ch-mcp-server--find-definition (file line col)
   "Definition(s) of the symbol at FILE:LINE:COL, one grep-format line each.
 
 MCP Parameters:
@@ -583,26 +583,26 @@ MCP Parameters:
   line - 1-based line number of the symbol
   col - 1-based column of the symbol, as in grep line:col output"
   (mcp-server-lib-with-error-handling
-    (let ((items (ch-emacs-config-mcp--xref-items 'definitions file line col)))
+    (let ((items (ch-mcp-server--xref-items 'definitions file line col)))
       (if (null items)
           "No definition found"
-        (ch-emacs-config-mcp--capped
-         (mapcar #'ch-emacs-config-mcp--xref-line items)
+        (ch-mcp-server--capped
+         (mapcar #'ch-mcp-server--xref-line items)
          nil "definitions")))))
 
 ;;; LSP hover
 
-(defun ch-emacs-config-mcp--hover-string (contents)
+(defun ch-mcp-server--hover-string (contents)
   "Flatten LSP hover CONTENTS (MarkupContent, MarkedString, or list)."
   (cond
    ((null contents) "")
    ((stringp contents) contents)
    ((vectorp contents)
-    (mapconcat #'ch-emacs-config-mcp--hover-string contents "\n"))
+    (mapconcat #'ch-mcp-server--hover-string contents "\n"))
    ((plistp contents) (or (plist-get contents :value) ""))
    (t (format "%S" contents))))
 
-(defun ch-emacs-config-mcp--symbol-info (file line col)
+(defun ch-mcp-server--symbol-info (file line col)
   "LSP hover (type signature and docs) for the symbol at FILE:LINE:COL.
 
 MCP Parameters:
@@ -610,7 +610,7 @@ MCP Parameters:
   line - 1-based line number of the symbol
   col - 1-based column of the symbol"
   (mcp-server-lib-with-error-handling
-    (ch-emacs-config-mcp--call-at
+    (ch-mcp-server--call-at
      file line col
      (lambda ()
        (let ((server (and (featurep 'eglot) (eglot-current-server))))
@@ -620,8 +620,8 @@ MCP Parameters:
          (let* ((response (jsonrpc-request
                            server :textDocument/hover
                            (eglot--TextDocumentPositionParams)
-                           :timeout ch-emacs-config-mcp-lsp-timeout))
-                (text (ch-emacs-config-mcp--hover-string
+                           :timeout ch-mcp-server-lsp-timeout))
+                (text (ch-mcp-server--hover-string
                        (and response (plist-get response :contents)))))
            (if (string-empty-p text)
                "No hover information at this position"
@@ -629,7 +629,7 @@ MCP Parameters:
 
 ;;; Document outline
 
-(defun ch-emacs-config-mcp--outline-lines (items depth)
+(defun ch-mcp-server--outline-lines (items depth)
   "Flatten imenu ITEMS into indented \"line: name\" strings at DEPTH."
   (let ((indent (make-string (* 2 depth) ?\s)))
     (mapcan
@@ -645,17 +645,17 @@ MCP Parameters:
                          (line-number-at-pos (car tail) t) name)))
           ((and tail (listp tail))
            (cons (format "%s%s:" indent name)
-                 (ch-emacs-config-mcp--outline-lines tail (1+ depth))))
+                 (ch-mcp-server--outline-lines tail (1+ depth))))
           (t nil))))
      items)))
 
-(defun ch-emacs-config-mcp--document-outline (file)
+(defun ch-mcp-server--document-outline (file)
   "Outline of FILE (imenu / LSP documentSymbol) as a \"line: name\" tree.
 
 MCP Parameters:
   file - absolute path of the file"
   (mcp-server-lib-with-error-handling
-    (with-current-buffer (ch-emacs-config-mcp--file-buffer file)
+    (with-current-buffer (ch-mcp-server--file-buffer file)
       (require 'imenu)
       (let* ((imenu-auto-rescan t)
              (imenu-auto-rescan-maxout most-positive-fixnum)
@@ -665,14 +665,14 @@ MCP Parameters:
                         (error (mcp-server-lib-tool-throw
                                 (format "No outline for %s: %s" file
                                         (error-message-string err)))))))
-             (lines (ch-emacs-config-mcp--outline-lines index 0)))
+             (lines (ch-mcp-server--outline-lines index 0)))
         (if lines
-            (ch-emacs-config-mcp--capped lines nil "entries")
+            (ch-mcp-server--capped lines nil "entries")
           (format "No outline entries in %s" file))))))
 
 ;;; Unsaved buffer state
 
-(defun ch-emacs-config-mcp--modified-buffers ()
+(defun ch-mcp-server--modified-buffers ()
   "File-visiting buffers whose content differs from disk, one path per line.
 
 MCP Parameters:"
@@ -686,7 +686,7 @@ MCP Parameters:"
           (mapconcat #'identity (nreverse files) "\n")
         "No file-visiting buffers have unsaved changes"))))
 
-(defun ch-emacs-config-mcp--buffer-diff (file)
+(defun ch-mcp-server--buffer-diff (file)
   "Unified diff of FILE's unsaved buffer state against the file on disk.
 
 MCP Parameters:
@@ -705,7 +705,7 @@ MCP Parameters:
                   (save-restriction
                     (widen)
                     (write-region (point-min) (point-max) temp nil 'silent))
-                  (let ((diff (ch-emacs-config-mcp--unified-diff
+                  (let ((diff (ch-mcp-server--unified-diff
                                file temp
                                (concat file " (disk)")
                                (concat file " (buffer)"))))
@@ -716,26 +716,26 @@ MCP Parameters:
 
 ;;; Presenting to the user
 
-(defvar ch-emacs-config-mcp-mermaid-timeout 30
+(defvar ch-mcp-server-mermaid-timeout 30
   "Seconds before a mermaid render is killed and reported as a tool error.
 A hung renderer must not freeze the interactive session.")
 
-(defvar ch-emacs-config-mcp-mermaid-command '("mmdc")
+(defvar ch-mcp-server-mermaid-command '("mmdc")
   "Command list prefix for an mmdc-compatible mermaid renderer.
 Input, output, and rendering flags are appended.  The home-manager
 module points this at the nix-installed merman (the same drv the
 language-server table spawns); the bare-name default only works when
 an mmdc is on PATH.")
 
-(defun ch-emacs-config-mcp--render-mermaid (source)
+(defun ch-mcp-server--render-mermaid (source)
   "Render mermaid SOURCE to an SVG data string via the mmdc CLI.
 The theme follows the selected frame's background mode.  Render errors
 carry the renderer's own message, so the agent can fix the diagram
 source from the tool error alone."
-  (unless (executable-find (car ch-emacs-config-mcp-mermaid-command))
+  (unless (executable-find (car ch-mcp-server-mermaid-command))
     (mcp-server-lib-tool-throw
      (format "%s (mmdc-compatible mermaid renderer) not found on PATH; cannot render mermaid"
-             (car ch-emacs-config-mcp-mermaid-command))))
+             (car ch-mcp-server-mermaid-command))))
   (let* ((dark (eq (frame-parameter nil 'background-mode) 'dark))
          (in (make-temp-file "mcp-mermaid" nil ".mmd" source))
          (out (make-temp-file "mcp-mermaid" nil ".svg"))
@@ -751,7 +751,7 @@ source from the tool error alone."
     (unwind-protect
         (let ((process (make-process
                         :name "mcp-mermaid"
-                        :command (append ch-emacs-config-mcp-mermaid-command
+                        :command (append ch-mcp-server-mermaid-command
                                          (list "-i" in "-o" out "-q"
                                                "-c" config
                                                "-t" (if dark "dark" "default")
@@ -759,14 +759,14 @@ source from the tool error alone."
                         :buffer log
                         :stderr log
                         :noquery t))
-              (deadline (+ (float-time) ch-emacs-config-mcp-mermaid-timeout)))
+              (deadline (+ (float-time) ch-mcp-server-mermaid-timeout)))
           (while (and (process-live-p process) (< (float-time) deadline))
             (accept-process-output process 0.2))
           (when (process-live-p process)
             (delete-process process)
             (mcp-server-lib-tool-throw
              (format "mermaid render timed out after %ds"
-                     ch-emacs-config-mcp-mermaid-timeout)))
+                     ch-mcp-server-mermaid-timeout)))
           (unless (eq (process-exit-status process) 0)
             (mcp-server-lib-tool-throw
              (format "mermaid render failed:\n%s"
@@ -780,7 +780,7 @@ source from the tool error alone."
       (delete-file config)
       (when (file-exists-p out) (delete-file out)))))
 
-(defun ch-emacs-config-mcp--set-major-mode (mode)
+(defun ch-mcp-server--set-major-mode (mode)
   "Put the current buffer in major MODE unless it is already in it.
 Re-invoking the major mode a buffer already has is not a no-op: the
 mode function runs `change-major-mode-hook', and a mode that keeps
@@ -792,7 +792,7 @@ mode it has already set alone."
   (unless (eq major-mode mode)
     (funcall mode)))
 
-(defun ch-emacs-config-mcp--present (name content &optional mode display)
+(defun ch-mcp-server--present (name content &optional mode display)
   "Show CONTENT to the user in the buffer *agent/NAME*.
 
 The buffer is (re)written and displayed without stealing focus, so
@@ -810,13 +810,13 @@ MCP Parameters:
       lines), or mermaid (rendered diagram)
   display - no to write the buffer without raising a window"
   (mcp-server-lib-with-error-handling
-    (let ((mode (or (ch-emacs-config-mcp--opt mode) "markdown")))
+    (let ((mode (or (ch-mcp-server--opt mode) "markdown")))
       (unless (member mode '("markdown" "diff" "locations" "mermaid"))
         (mcp-server-lib-tool-throw
          (format "Unknown mode %s (expected markdown, diff, locations, or mermaid)"
                  mode)))
       (let ((svg (and (equal mode "mermaid")
-                      (ch-emacs-config-mcp--render-mermaid content)))
+                      (ch-mcp-server--render-mermaid content)))
             (buffer (get-buffer-create (format "*agent/%s*" name))))
         (when (buffer-file-name buffer)
           (mcp-server-lib-tool-throw
@@ -836,14 +836,14 @@ MCP Parameters:
             ;; other modes carry line-structured content (hunks,
             ;; file:line hits, an image) and keep hard lines.
             ("markdown"
-             (ch-emacs-config-mcp--set-major-mode #'markdown-ts-mode)
+             (ch-mcp-server--set-major-mode #'markdown-ts-mode)
              (visual-line-mode 1))
-            ("diff" (ch-emacs-config-mcp--set-major-mode #'diff-mode))
+            ("diff" (ch-mcp-server--set-major-mode #'diff-mode))
             ("locations"
-             (ch-emacs-config-mcp--set-major-mode #'fundamental-mode)
+             (ch-mcp-server--set-major-mode #'fundamental-mode)
              (compilation-minor-mode 1))
             ("mermaid"
-             (ch-emacs-config-mcp--set-major-mode #'fundamental-mode)))
+             (ch-mcp-server--set-major-mode #'fundamental-mode)))
           (set-buffer-modified-p nil)
           (goto-char (point-min)))
         (if (equal display "no")
@@ -853,7 +853,7 @@ MCP Parameters:
 
 ;;; Sidebars
 
-(defcustom ch-emacs-config-mcp-sidebar-width 0.2
+(defcustom ch-mcp-server-sidebar-width 0.2
   "Width of an agent sidebar window as a fraction of the frame."
   :type 'number
   :group 'ch-emacs-config)
@@ -886,7 +886,7 @@ disposes of it; re-running the tool under the same name recreates it."
   (evil-define-key 'normal 'ch-emacs-config-sidebar-mode
     (kbd "q") #'ch-emacs-config-sidebar-quit))
 
-(defun ch-emacs-config-mcp--sidebar (name content &optional display)
+(defun ch-mcp-server--sidebar (name content &optional display)
   "Show CONTENT beside the user's work in a right-hand sidebar window.
 
 A sidebar is for material the user reads once alongside the main
@@ -894,7 +894,7 @@ reply — anticipated questions with answers, a glossary, a checklist —
 not for an artifact they will keep open (use `present' for that).  The
 buffer *agent/sidebar/NAME* holds CONTENT as soft-wrapped, read-only
 markdown and is shown in a side window on the frame's right edge at
-`ch-emacs-config-mcp-sidebar-width' of the frame width; `q' in it closes
+`ch-mcp-server-sidebar-width' of the frame width; `q' in it closes
 the window and kills the buffer, like a help viewer.  Write paragraphs
 as single long lines: hard wraps reflow raggedly under soft wrap.
 
@@ -908,7 +908,7 @@ MCP Parameters:
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert content))
-        (ch-emacs-config-mcp--set-major-mode #'markdown-ts-mode)
+        (ch-mcp-server--set-major-mode #'markdown-ts-mode)
         (visual-line-mode 1)
         (ch-emacs-config-sidebar-mode 1)
         (set-buffer-modified-p nil)
@@ -919,21 +919,21 @@ MCP Parameters:
                         `((display-buffer-in-side-window)
                           (side . right)
                           (slot . 0)
-                          (window-width . ,ch-emacs-config-mcp-sidebar-width)))
+                          (window-width . ,ch-mcp-server-sidebar-width)))
         (format "Presented %s in a sidebar" (buffer-name buffer))))))
 
 ;;; The editing engine
 
-(defun ch-emacs-config-mcp--transform (file elisp &optional save)
+(defun ch-mcp-server--transform (file elisp &optional save)
   "Run ELISP with FILE's buffer current; return a unified diff of the change.
 
 For bulk/structural edits where one form beats many single edits:
 computed replacements, sexp-aware transforms, mode-canonical
 `indent-region'.  Gated twice: FILE must lie in the calling client's
-territory (`ch-emacs-config-mcp--check-file-write'), and ELISP must
+territory (`ch-mcp-server--check-file-write'), and ELISP must
 pass the agent-safe gate with the buffer-editing registry allowed
 (motion, search, current-buffer mutation — see
-`ch-emacs-config-mcp-agent-safe-editing-functions').  Refuses buffers
+`ch-mcp-server-agent-safe-editing-functions').  Refuses buffers
 holding unsaved user modifications.  Begin with (goto-char
 \(point-min)) — point is wherever the user left it.  On error the
 buffer is restored untouched.  Saves unless SAVE is no.
@@ -944,10 +944,10 @@ MCP Parameters:
       directly via buffer functions
   save - no to leave the change unsaved in the buffer (default: save)"
   (mcp-server-lib-with-error-handling
-    (ch-emacs-config-mcp--check-file-write file)
+    (ch-mcp-server--check-file-write file)
     (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)")))))
-      (ch-emacs-config-mcp--gate-elisp form "transform" t)
-      (with-current-buffer (ch-emacs-config-mcp--file-buffer file)
+      (ch-mcp-server--gate-elisp form "transform" t)
+      (with-current-buffer (ch-mcp-server--file-buffer file)
         (when (buffer-modified-p)
           (mcp-server-lib-tool-throw
            (format "%s has unsaved modifications; refusing to transform (see buffer-diff)"
@@ -970,7 +970,7 @@ MCP Parameters:
                 (if (equal old new)
                     (progn (set-buffer-modified-p nil)
                            "No changes")
-                  (let ((diff (ch-emacs-config-mcp--text-diff
+                  (let ((diff (ch-mcp-server--text-diff
                                old new
                                (concat file " (before)")
                                (concat file " (after)"))))
@@ -978,7 +978,7 @@ MCP Parameters:
                       (save-buffer))
                     diff))))))))))
 
-(defun ch-emacs-config-mcp--replace-literal (label old-string new-string replace-all)
+(defun ch-mcp-server--replace-literal (label old-string new-string replace-all)
   "Replace OLD-STRING with NEW-STRING in the current buffer; diff back.
 The engine shared by the edit verbs: OLD-STRING is matched literally
 \(no regex), must be found, and must be unique unless REPLACE-ALL (a
@@ -1021,21 +1021,21 @@ empty buffer only.  Returns a unified diff labeled with LABEL."
           (while (search-forward old-string nil t)
             (replace-match new-string t t)
             (unless replace-all (goto-char (point-max)))))
-        (ch-emacs-config-mcp--text-diff
+        (ch-mcp-server--text-diff
          old
          (buffer-substring-no-properties (point-min) (point-max))
          (concat label " (before)")
          (concat label " (after)"))))))
 
-(defun ch-emacs-config-mcp--edit-buffer (old-string new-string buffer &optional replace-all)
+(defun ch-mcp-server--edit-buffer (old-string new-string buffer &optional replace-all)
   "Replace OLD-STRING with NEW-STRING in live BUFFER, exactly once by default.
 
 The buffer-target editing verb: buffer mutation only, never a disk
-write — the disk half lives in `ch-emacs-config-mcp--edit-file', a
+write — the disk half lives in `ch-mcp-server--edit-file', a
 separate tool name so restricted dispatch profiles can withhold disk
 writing structurally (consent-gate.md).  The contract mirrors the
 agent's native Edit tool so its editing instincts transfer (see
-`ch-emacs-config-mcp--replace-literal'), and the unified diff returned
+`ch-mcp-server--replace-literal'), and the unified diff returned
 is the verification step.  Non-file buffers (e.g. *agent/...*
 collaboration buffers) are edited in place; a file-visiting buffer is
 left modified — a staged edit the user reviews and saves.  Unsaved
@@ -1043,7 +1043,7 @@ user modifications are therefore workable state here, not an error:
 the change stays in the buffer under the user's eyes, and the
 uniqueness rule is the drift guard against their concurrent editing.
 A buffer backed by a file outside the calling client's territory is
-refused (`ch-emacs-config-mcp--check-file-write'); buffers without a
+refused (`ch-mcp-server--check-file-write'); buffers without a
 file (the co-drafting surface) are always editable.  As the only
 write path into a fresh buffer, an empty OLD-STRING inserts
 NEW-STRING into an *empty* buffer (and is an error when the buffer
@@ -1063,21 +1063,21 @@ MCP Parameters:
       ;; A buffer backed by a file is that file's staging area even
       ;; when the mutation never writes disk; territory applies.
       (when file
-        (ch-emacs-config-mcp--check-file-write file))
+        (ch-mcp-server--check-file-write file))
       (with-current-buffer target
-        (ch-emacs-config-mcp--replace-literal
+        (ch-mcp-server--replace-literal
          buffer old-string new-string (equal replace-all "yes"))))))
 
-(defun ch-emacs-config-mcp--edit-file (old-string new-string file &optional replace-all)
+(defun ch-mcp-server--edit-file (old-string new-string file &optional replace-all)
   "Replace OLD-STRING with NEW-STRING in FILE and save, exactly once by default.
 
 The file-target editing verb — the one that writes disk, a separate
-tool name from `ch-emacs-config-mcp--edit-buffer' so restricted
+tool name from `ch-mcp-server--edit-buffer' so restricted
 dispatch profiles can withhold disk writing structurally
 \(consent-gate.md).  Same native-Edit contract (see
-`ch-emacs-config-mcp--replace-literal'); returns the unified diff.
+`ch-mcp-server--replace-literal'); returns the unified diff.
 FILE must lie in the calling client's territory
-\(`ch-emacs-config-mcp--check-file-write').
+\(`ch-mcp-server--check-file-write').
 Edits the file's buffer (opening it within the auto-open scope) and
 always saves — staging an unsaved change is edit-buffer's job.  A
 buffer holding unsaved user modifications is refused: writing disk
@@ -1092,19 +1092,19 @@ MCP Parameters:
   file - absolute path of the file to edit
   replace-all - yes to replace every occurrence of old-string"
   (mcp-server-lib-with-error-handling
-    (ch-emacs-config-mcp--check-file-write file)
-    (with-current-buffer (ch-emacs-config-mcp--file-buffer file)
+    (ch-mcp-server--check-file-write file)
+    (with-current-buffer (ch-mcp-server--file-buffer file)
       (when (buffer-modified-p)
         (mcp-server-lib-tool-throw
          (format "%s has unsaved modifications; refusing to write disk over newer buffer state (see buffer-diff, or stage the change with edit-buffer)"
                  file)))
-      (prog1 (ch-emacs-config-mcp--replace-literal
+      (prog1 (ch-mcp-server--replace-literal
               file old-string new-string (equal replace-all "yes"))
         (save-buffer)))))
 
 ;;; Comment threads (collab-comments)
 
-(defun ch-emacs-config-mcp--add-comment (text &optional file buffer anchor thread)
+(defun ch-mcp-server--add-comment (text &optional file buffer anchor thread)
   "Comment on buffer text as the agent: start a thread or reply to one.
 
 Comments are overlays — never text writes — so the territory write
@@ -1128,10 +1128,10 @@ MCP Parameters:
       file/buffer/anchor)"
   (mcp-server-lib-with-error-handling
     (require 'collab-comments)
-    (let ((file (ch-emacs-config-mcp--opt file))
-          (buffer-name (ch-emacs-config-mcp--opt buffer))
-          (anchor (ch-emacs-config-mcp--opt anchor))
-          (thread (ch-emacs-config-mcp--opt thread)))
+    (let ((file (ch-mcp-server--opt file))
+          (buffer-name (ch-mcp-server--opt buffer))
+          (anchor (ch-mcp-server--opt anchor))
+          (thread (ch-mcp-server--opt thread)))
       (when (string-empty-p (string-trim text))
         (mcp-server-lib-tool-throw "text must be non-empty"))
       (cond
@@ -1139,7 +1139,7 @@ MCP Parameters:
         (when (or file buffer-name anchor)
           (mcp-server-lib-tool-throw
            "Pass thread alone (reply) or file/buffer with anchor (new thread)"))
-        (let* ((id (ch-emacs-config-mcp--as-number thread "thread"))
+        (let* ((id (ch-mcp-server--as-number thread "thread"))
                (overlay (or (collab-comments-find id)
                             (mcp-server-lib-tool-throw
                              (format "No live comment thread %d (see list-comments)"
@@ -1153,7 +1153,7 @@ MCP Parameters:
         (when (eq (null file) (null buffer-name))
           (mcp-server-lib-tool-throw "Provide exactly one of file or buffer"))
         (let ((target (if file
-                          (ch-emacs-config-mcp--file-buffer file)
+                          (ch-mcp-server--file-buffer file)
                         (or (get-buffer buffer-name)
                             (mcp-server-lib-tool-throw
                              (format "No buffer named %s" buffer-name)))))
@@ -1180,7 +1180,7 @@ MCP Parameters:
                   (collab-comments-render-thread
                    (collab-comments-add-thread beg end "claude" text))))))))))))
 
-(defun ch-emacs-config-mcp--list-comments (&optional file buffer)
+(defun ch-mcp-server--list-comments (&optional file buffer)
   "Comment threads with their ids, anchors, authors, and bodies.
 
 Covers the buffer named by FILE or BUFFER, or every buffer when both
@@ -1192,8 +1192,8 @@ MCP Parameters:
   buffer - buffer name; only threads in that buffer"
   (mcp-server-lib-with-error-handling
     (require 'collab-comments)
-    (let* ((file (ch-emacs-config-mcp--opt file))
-           (buffer-name (ch-emacs-config-mcp--opt buffer))
+    (let* ((file (ch-mcp-server--opt file))
+           (buffer-name (ch-mcp-server--opt buffer))
            (threads
             (cond
              (file
@@ -1213,7 +1213,7 @@ MCP Parameters:
 
 ;;; Server lifecycle and registration
 
-(defun ch-emacs-config-mcp-server-start ()
+(defun ch-mcp-server-start ()
   "Start handling MCP requests.  Idempotent: concurrent MCP clients each
 call this via the stdio bridge's --init-function, and the first one wins.
 No paired stop function is wired up, so one client exiting cannot stall
@@ -1250,83 +1250,83 @@ the others."
            "session's own project.")
    :tools
    (list
-    (list #'ch-emacs-config-mcp--eval-elisp
+    (list #'ch-mcp-server--eval-elisp
           :id "eval-elisp"
           :description
           "Evaluate side-effect-free Emacs Lisp in the running Emacs and return the result (mutation is rejected; use the edit tools)")
-    (list #'ch-emacs-config-mcp--context
+    (list #'ch-mcp-server--context
           :id "context"
           :description
           "Where the user is: buffer, file, project, defun, region, visible windows"
           :read-only t)
-    (list #'ch-emacs-config-mcp--list-buffers
+    (list #'ch-mcp-server--list-buffers
           :id "list-buffers"
           :description "List live buffers with their major modes and files"
           :read-only t)
-    (list #'ch-emacs-config-mcp--buffer-text
+    (list #'ch-mcp-server--buffer-text
           :id "buffer-text"
           :description "Text of a named buffer, optionally a 1-based line range"
           :read-only t)
-    (list #'ch-emacs-config-mcp--diagnostics
+    (list #'ch-mcp-server--diagnostics
           :id "diagnostics"
           :description
           "Current errors/warnings from the session's checkers, as path:line:col lines"
           :read-only t)
-    (list #'ch-emacs-config-mcp--find-references
+    (list #'ch-mcp-server--find-references
           :id "find-references"
           :description
           "References to the symbol at file:line:col (LSP/xref), grep-format lines"
           :read-only t)
-    (list #'ch-emacs-config-mcp--find-definition
+    (list #'ch-mcp-server--find-definition
           :id "find-definition"
           :description
           "Definition of the symbol at file:line:col (LSP/xref), grep-format lines"
           :read-only t)
-    (list #'ch-emacs-config-mcp--symbol-info
+    (list #'ch-mcp-server--symbol-info
           :id "symbol-info"
           :description
           "Type signature and docs (LSP hover) for the symbol at file:line:col"
           :read-only t)
-    (list #'ch-emacs-config-mcp--document-outline
+    (list #'ch-mcp-server--document-outline
           :id "document-outline"
           :description
           "Outline of a file (imenu/LSP) as an indented line: name tree"
           :read-only t)
-    (list #'ch-emacs-config-mcp--modified-buffers
+    (list #'ch-mcp-server--modified-buffers
           :id "modified-buffers"
           :description
           "Files with unsaved buffer changes; check before editing near the user"
           :read-only t)
-    (list #'ch-emacs-config-mcp--buffer-diff
+    (list #'ch-mcp-server--buffer-diff
           :id "buffer-diff"
           :description
           "Unified diff of a file's unsaved buffer state vs the file on disk"
           :read-only t)
-    (list #'ch-emacs-config-mcp--present
+    (list #'ch-mcp-server--present
           :id "present"
           :description
           "Present content to the user in an *agent/...* Emacs buffer (markdown, diff, clickable locations, or a rendered mermaid diagram)")
-    (list #'ch-emacs-config-mcp--sidebar
+    (list #'ch-mcp-server--sidebar
           :id "sidebar"
           :description
           "Show read-once markdown (anticipated questions, a glossary, a checklist) in a right-hand sidebar window the user dismisses with q")
-    (list #'ch-emacs-config-mcp--edit-buffer
+    (list #'ch-mcp-server--edit-buffer
           :id "edit-buffer"
           :description
           "Replace a literal string in a live buffer, never writing disk (must match exactly once unless replace-all=yes); returns a unified diff")
-    (list #'ch-emacs-config-mcp--edit-file
+    (list #'ch-mcp-server--edit-file
           :id "edit-file"
           :description
           "Replace a literal string in a file and save it (must match exactly once unless replace-all=yes); returns a unified diff")
-    (list #'ch-emacs-config-mcp--transform
+    (list #'ch-mcp-server--transform
           :id "transform"
           :description
           "Eval buffer-editing elisp (motion/search/current-buffer mutation only) in a file's buffer for bulk/structural edits; returns a unified diff; saves unless save=no")
-    (list #'ch-emacs-config-mcp--add-comment
+    (list #'ch-mcp-server--add-comment
           :id "add-comment"
           :description
           "Comment on buffer text: start a thread on a unique literal anchor, or reply to a thread id; never modifies the text")
-    (list #'ch-emacs-config-mcp--list-comments
+    (list #'ch-mcp-server--list-comments
           :id "list-comments"
           :description
           "Comment threads (ids, anchors, authors, bodies) in one buffer or everywhere"

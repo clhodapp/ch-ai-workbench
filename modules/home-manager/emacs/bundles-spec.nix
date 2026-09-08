@@ -96,7 +96,7 @@
       # something else installed one.
       init = readInit "mcp-server.el" + ''
 
-        (setq ch-emacs-config-mcp-mermaid-command
+        (setq ch-mcp-server-mermaid-command
               (list "${lib.getExe merman}" "mmdc"))
       '';
       packages = epkgs: _: [ epkgs.mcp-server-lib ];
