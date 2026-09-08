@@ -257,52 +257,62 @@ state, which is why those tools exist rather than an escape hatch.
 
 The gitleaks scan runs on every path by which content reaches the
 agent's context, not only the mirror, and including the CLI's own
-built-in read tools, not only the MCP tools. Any read that would put
-bytes in the agent's context is scanned first; on a hit the content is
-returned redacted and the agent is told the redaction happened and
-which rule fired (see "Redact, tell, resubmit"). A buffer's text
-reaches the agent through the mirror (buffer-read tools, the file in the
-mirror directory) and is scanned there. A file's content reaches the
-agent through the MCP file-reading tools and through the CLI's own reads
-inside the sandbox; both are scanned, or they are the bypass that makes
-redacting the mirror pointless (reading `~/.env` directly would defeat a
-redacted mirror of it).
+built-in tools (`Read` and `Bash` alike), not only the MCP tools. Any
+tool result that would put bytes in the agent's context is scanned
+first; on a hit the content is returned redacted, with the matched
+spans marked in place so the agent can see the redaction (`Bash` output
+gets a slightly more explicit treatment, see "Bash output: a visible
+redaction artifact"). A buffer's text reaches the agent
+through the mirror
+(buffer-read tools, the file in the mirror directory) and is scanned
+there. A file's content reaches the agent through the MCP file-reading
+tools, the CLI's `Read`, and the output of a shell command run through
+`Bash`; all are scanned, or they are the bypass that makes redacting the
+mirror pointless (reading `~/.env` directly, or `cat`-ing it, would
+defeat a redacted mirror of it).
 
 There are two enforcement points, in two repos. The MCP server scans
-its own reads before returning them (workbench). The CLI's built-in
-reads are scanned by a read hook in the `claude-code` module (a
-`PreToolUse`-shaped interception on Read and the file-reading tools);
-this is the point that makes "built-in tools" real rather than aspira-
-tional, and it lives where the CLI's hooks live, not in the MCP server.
-One gap is named honestly: a raw shell read (`cat` of a bound file) is
-not a tool call the hook sees, so it is covered only insofar as the
-bound content was itself scanned or the bytes are a mirror file already
-scanned; a secret in an unscanned bound directory that the agent
-`cat`s is out of reach of this mechanism and stays a matter for the
-sandbox bind list, which is the actual boundary.
+its own reads before returning them and redacts the matched spans in
+place (workbench). The CLI's built-in tools are handled by a hook in
+the `claude-code` module, and this covers `Bash` as well as `Read`: a
+shell command's output is a tool result before it reaches context, so
+the hook receives its stdout and stderr and scans them the same way. So
+a `cat` of a bound file is covered after all: it is a `Bash` result,
+and it is scanned. The distinction that matters is not tool-read versus
+shell-read; it is whether the bytes pass through the harness at all.
 
-### Redact, tell, resubmit
+What genuinely escapes is only what never becomes a tool result: a
+subprocess the agent's own code spawns whose output the harness does
+not capture, or a byte stream routed around the tool channel entirely.
+That is a narrow residue, and it is the sandbox bind list's to cover,
+not the scan's: a secret in a directory never bound into the jail
+cannot be reached by any means, tool or not.
 
-A scan hit does not fail the read. The content comes back with the
-matched spans redacted, and the tool result carries a note: a redaction
-occurred, on rule X, at these positions. The agent proceeds on the
-redacted text, which is the common case (it wanted the file, not the
-secret in it).
+### Bash output: a visible redaction artifact, no unredact
 
-When the agent genuinely needs the real bytes, it resubmits the same
-read. The second submission of an identical read is what asks for the
-unredacted content, and it raises a prompt to the user; the real bytes
-cross only on approval, and a denial returns the redacted text again.
-The resubmit is recognized as the same read by an idempotency key over
-the request (tool, target, range), so a later unrelated read of the
-same path is a first submission and is redacted afresh, not silently
-approved by a stale key. The key is single-use: one approval clears one
-resubmitted read, not a standing exemption for the path. This keeps the
-default safe (every read redacts, no content leaks without a user in
-the loop) while leaving a deliberate, logged path to the real value
-when the work needs it, which is the same consent posture as the rest
-of the design: routine reads are automatic, the one that crosses a
-sensitive boundary is the user's to allow.
+`Read` and the MCP file tools return their content with the matched
+spans redacted in place, the placeholder naming the rule
+(`[REDACTED:github-pat]`); the redaction rides in the result the agent
+already reads.
+
+`Bash` output is handled a step more explicitly, because a shell stream
+has no file the agent is holding to see marked. Its stdout and stderr
+are captured to a temp file, run through a `gitleaks_redact` step (which
+is just the scanner writing the marked, redacted copy), and that copy is
+what the agent receives. The agent sees a distinct redacted artifact,
+so it is evident the stream was filtered and where, rather than getting
+bytes that silently differ from what the command printed. And there is
+no unredact path for it: a `Bash` result carries no retry-for-raw
+option. This is deliberate, and cleaner than a resubmit handshake would
+have been, since "the identical read" has no clean meaning for a command
+whose output varies run to run (a live tail, a timestamped listing).
+
+The confidentiality rule stays flat across both: reads are redacted,
+and the only way the agent sees a real secret is a deliberate user
+action outside the read path, exposing a buffer, binding a path, or
+handing over the value. That is the same isolation-is-the-boundary
+principle the rest of the design rests on: the scan does not decide who
+may see a secret, the user does, by what is exposed in the first place.
 
 The scan is accident-prevention, not access control, and edit is why it
 cannot be more, in two ways. First, an edit verb that reports whether an
@@ -359,12 +369,13 @@ print a secret into a log.
 - Terminals are the one buffer kind sensitive by default, withheld
   until the user toggles a given one visible; every other kind is
   visible unless marked.
-- Every read into the agent's context is scanned and redacted by
-  default, the CLI's built-in reads included; the unredacted bytes
-  cross only when the agent resubmits the identical read and the user
-  approves that resubmission. Redaction is the default, de-redaction is
-  user-gated, and a raw shell `cat` of an unscanned bound path is the
-  named gap the sandbox bind list covers instead.
+- Every tool result that reaches the agent's context is scanned and
+  redacted, `Read` and `Bash` alike (a shell command's output is a tool
+  result, so `cat` is covered). `Read` and the MCP tools mark the spans
+  in place; `Bash` output goes through `gitleaks_redact` into a distinct
+  redacted artifact and has no unredact path. The agent sees a real
+  secret only by a deliberate user action outside the read path
+  (exposing a buffer, binding a path, handing over the value).
 
 ## Dependencies
 
@@ -388,10 +399,12 @@ print a secret into a log.
   toggled it visible, and must not assume otherwise. A cross-repo change,
   landing with phase 1b.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
-- **The `claude-code` module** gains the read hook that scans and
-  redacts the CLI's built-in reads and implements the resubmit-to-prompt
-  flow. It lives with the CLI's other hooks, not in the MCP server, and
-  is the second of the two enforcement points above.
+- **The `claude-code` module** gains the hook that scans the CLI's
+  built-in tool results before they reach context: `Read` redacted in
+  place, `Bash` output through `gitleaks_redact` into a distinct
+  artifact with no unredact path. It lives with the CLI's other hooks,
+  not in the MCP server, and is the second of the two enforcement points
+  above.
 
 ## Phases
 
@@ -416,11 +429,11 @@ print a secret into a log.
    and the CLI one; the gated live evaluation is deleted; named tools
    replace it for session facts. The MCP read tools scan and redact
    here.
-4. The CLI-side read hook in the `claude-code` module: scan and redact
-   the built-in reads, with the redact-tell-resubmit-prompt flow.
-   Depends on the scan existing (phase 3) and on the sandbox bind list
-   (phase 2), and completes "every read into context is scanned" for
-   the CLI's own tools.
+4. The CLI-side hook in the `claude-code` module: `Read` redacted in
+   place and `Bash` output through `gitleaks_redact` into a distinct
+   artifact with no unredact path. Depends on the scan existing
+   (phase 3) and on the sandbox bind list (phase 2), and completes
+   "every tool result into context is scanned" for the CLI's own tools.
 
 The `parenting` `:sandbox` work can precede phase 2 or land alongside
 it.
