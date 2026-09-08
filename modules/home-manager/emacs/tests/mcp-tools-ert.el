@@ -685,6 +685,94 @@ buffer squatting on the name is refused, not erased."
            '("\\`ch-mcp-tests-secret\\'")))
       (should-not (ch-mcp-server--buffer-readable-p (current-buffer))))))
 
+;;; Read scope: the sensitive-buffer mark and the terminal default
+
+(ert-deftest ch-mcp-tools-buffer-sensitive-flag ()
+  "A normal buffer is readable; setting the sensitive flag withholds it."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-sensitive")
+    (should (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (setq ch-mcp-server-buffer-sensitive t)
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (should (ch-mcp-server--buffer-sensitive-p (current-buffer)))))
+
+(ert-deftest ch-mcp-tools-terminal-sensitive-by-default ()
+  "A ghostel terminal is withheld by default; the toggle exposes and re-hides."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-terminal")
+    ;; `derived-mode-p' reads the buffer-local `major-mode', so setting it
+    ;; makes the buffer look like a terminal without the package.
+    (setq-local major-mode 'ghostel-mode)
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (should (ch-mcp-server--buffer-sensitive-p (current-buffer)))
+    (ch-mcp-server-toggle-terminal-visible)
+    (should ch-mcp-server-terminal-exposed)
+    (should (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (ch-mcp-server-toggle-terminal-visible)
+    (should-not ch-mcp-server-terminal-exposed)
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))))
+
+(ert-deftest ch-mcp-tools-toggle-terminal-visible-outside-terminal-errors ()
+  "The terminal toggle refuses a non-terminal buffer."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-not-terminal")
+    (should-error (ch-mcp-server-toggle-terminal-visible)
+                  :type 'user-error)))
+
+(ert-deftest ch-mcp-tools-maybe-mark-sensitive-matches-pattern ()
+  "The find-file-hook function marks a buffer visiting a matching name."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-authinfo")
+    (setq ch-mcp-server-buffer-sensitive nil)
+    (let ((buffer-file-name (expand-file-name ".authinfo" temporary-file-directory)))
+      (ch-mcp-server--maybe-mark-sensitive)
+      (should ch-mcp-server-buffer-sensitive)))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-env")
+    (setq ch-mcp-server-buffer-sensitive nil)
+    (let ((buffer-file-name (expand-file-name ".env.local" temporary-file-directory)))
+      (ch-mcp-server--maybe-mark-sensitive)
+      (should ch-mcp-server-buffer-sensitive)))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-plain")
+    (setq ch-mcp-server-buffer-sensitive nil)
+    (let ((buffer-file-name (expand-file-name "notes.txt" temporary-file-directory)))
+      (ch-mcp-server--maybe-mark-sensitive)
+      (should-not ch-mcp-server-buffer-sensitive))))
+
+(ert-deftest ch-mcp-tools-buffer-sensitive-safe-local-variable ()
+  "A file cannot clear or set the flag via a file-local variable: the
+`safe-local-variable' guard admits only nil."
+  (should (eq (get 'ch-mcp-server-buffer-sensitive 'safe-local-variable)
+              #'null))
+  (should (safe-local-variable-p 'ch-mcp-server-buffer-sensitive nil))
+  (should-not (safe-local-variable-p 'ch-mcp-server-buffer-sensitive t)))
+
+(ert-deftest ch-mcp-tools-buffer-text-refuses-sensitive ()
+  "buffer-text throws for a flagged buffer and for a default terminal."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-bt-sensitive")
+    (erase-buffer)
+    (insert "secret\n")
+    (setq ch-mcp-server-buffer-sensitive t))
+  (let ((err (should-error
+              (ch-mcp-server--buffer-text "ch-mcp-tests-bt-sensitive")
+              :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err))))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-bt-terminal")
+    (erase-buffer)
+    (insert "prompt$\n")
+    (setq-local major-mode 'ghostel-mode))
+  (let ((err (should-error
+              (ch-mcp-server--buffer-text "ch-mcp-tests-bt-terminal")
+              :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-list-buffers-omits-sensitive ()
+  "list-buffers omits a flagged buffer and a default terminal."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-lb-sensitive")
+    (setq ch-mcp-server-buffer-sensitive t))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-lb-terminal")
+    (setq-local major-mode 'ghostel-mode))
+  (get-buffer-create "ch-mcp-tests-lb-visible")
+  (let ((listing (ch-mcp-server--list-buffers)))
+    (should (string-match-p "ch-mcp-tests-lb-visible" listing))
+    (should-not (string-match-p "ch-mcp-tests-lb-sensitive" listing))
+    (should-not (string-match-p "ch-mcp-tests-lb-terminal" listing))))
+
 (ert-deftest ch-mcp-tools-buffer-text-refuses-unreadable ()
   "buffer-text throws on an out-of-scope file buffer, and still throws the
 missing-buffer error for a name with no buffer."

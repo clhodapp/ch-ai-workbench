@@ -304,24 +304,123 @@ Unvisited files are opened (booting LSP via the usual mode hooks) when
        (format "%s is not visited and lies outside the client territory and every session project (auto-open scope: %s)"
                file ch-mcp-server-auto-open-scope))))))
 
+;;; Buffer sensitivity: the per-buffer mark and the terminal default
+
+(defvar ch-mcp-server-buffer-sensitive nil
+  "Non-nil marks the current buffer as sensitive: withheld from the agent.
+The buffer read predicate (`ch-mcp-server--buffer-sensitive-p')
+refuses a buffer carrying this before any other test, so no read tool
+returns it and it is omitted from listings.  Buffer-local and set by
+command or hook (`ch-mcp-server-visit-sensitive',
+`ch-mcp-server--maybe-mark-sensitive'), before the sensitive content
+arrives, never by a file-local variable, so a file being read cannot
+mark itself non-sensitive or clear the flag.")
+(make-variable-buffer-local 'ch-mcp-server-buffer-sensitive)
+;; A file may not set this via a file-local: `null' is the only accepted
+;; value, so a file can at most re-assert nil, never mark itself
+;; non-sensitive after the flag is set nor (the real risk) set a value
+;; that a lax reader might treat as trustworthy.
+(put 'ch-mcp-server-buffer-sensitive 'safe-local-variable #'null)
+
+(defvar ch-mcp-server-terminal-exposed nil
+  "Non-nil exposes THIS terminal buffer to the agent (a per-buffer override).
+Terminals (`ghostel-mode') are sensitive by default (their text is
+whatever ran in them, including echoed secrets), so
+`ch-mcp-server--buffer-sensitive-p' withholds one unless this
+buffer-local flag is set.  Flipped by
+`ch-mcp-server-toggle-terminal-visible'.  Ignored in non-terminal
+buffers.")
+(make-variable-buffer-local 'ch-mcp-server-terminal-exposed)
+
+(defvar ch-mcp-server-sensitive-file-patterns
+  '("/\\.authinfo\\(?:\\.gpg\\)?\\'"
+    "\\.gpg\\'"
+    "\\.age\\'"
+    "/\\.env\\(?:\\.[^/]*\\)?\\'")
+  "Regexps for file names whose buffers auto-mark sensitive on open.
+`find-file-hook' runs `ch-mcp-server--maybe-mark-sensitive', which
+sets `ch-mcp-server-buffer-sensitive' when the visited file's name
+matches any entry here, so routine sensitive files need no thought.
+Each regexp is matched against the full file name (so the leading `/'
+anchors on a path segment boundary, `\\'' on the end).  Seeds:
+`.authinfo' and `.authinfo.gpg', any `.gpg' or `.age' file, and `.env'
+and `.env.*'.  Extended by the resident user; gated elisp cannot reach
+it.")
+(put 'ch-mcp-server-sensitive-file-patterns 'risky-local-variable t)
+
+(defun ch-mcp-server--buffer-sensitive-p (buffer)
+  "Whether BUFFER must be withheld from the agent as sensitive.
+Non-nil when the buffer-local `ch-mcp-server-buffer-sensitive' is set,
+or when BUFFER is a terminal (`ghostel-mode') that the user has not
+explicitly exposed (`ch-mcp-server-terminal-exposed').  Terminals are
+sensitive by default; every other buffer is sensitive only if its flag
+is set."
+  (with-current-buffer buffer
+    (or ch-mcp-server-buffer-sensitive
+        (and (derived-mode-p 'ghostel-mode)
+             (not ch-mcp-server-terminal-exposed)))))
+
+(defun ch-mcp-server-visit-sensitive (filename)
+  "Visit FILENAME with its buffer marked sensitive before its content shows.
+Like `find-file', but sets `ch-mcp-server-buffer-sensitive' in the
+resulting buffer, so the buffer is withheld from the agent the moment it
+exists, for a file the user knows is sensitive and no pattern in
+`ch-mcp-server-sensitive-file-patterns' anticipated."
+  (interactive "FVisit sensitive file: ")
+  (let ((buffer (find-file filename)))
+    (with-current-buffer buffer
+      (setq ch-mcp-server-buffer-sensitive t))
+    buffer))
+
+(defun ch-mcp-server--maybe-mark-sensitive ()
+  "Mark the current buffer sensitive when its file matches a pattern.
+A `find-file-hook' function: sets `ch-mcp-server-buffer-sensitive' when
+`buffer-file-name' matches any `ch-mcp-server-sensitive-file-patterns'
+entry, so routine sensitive files are withheld without a command."
+  (when (and buffer-file-name
+             (seq-some (lambda (re) (string-match-p re buffer-file-name))
+                       ch-mcp-server-sensitive-file-patterns))
+    (setq ch-mcp-server-buffer-sensitive t)))
+
+;; `add-hook' de-dups by identity, so re-evaluating this file never
+;; stacks the hook.
+(add-hook 'find-file-hook #'ch-mcp-server--maybe-mark-sensitive)
+
+(defun ch-mcp-server-toggle-terminal-visible ()
+  "Toggle whether the agent may read this terminal buffer.
+Flips `ch-mcp-server-terminal-exposed' in the current `ghostel-mode'
+buffer, the quick per-terminal override of the terminals-are-sensitive
+default.  Errors outside a terminal buffer."
+  (interactive)
+  (unless (derived-mode-p 'ghostel-mode)
+    (user-error "Not a terminal (ghostel-mode) buffer"))
+  (setq ch-mcp-server-terminal-exposed
+        (not ch-mcp-server-terminal-exposed))
+  (message "Terminal %s to the agent"
+           (if ch-mcp-server-terminal-exposed "exposed" "withheld")))
+
 ;;; Buffer read scope: readability predicate plus the debug-knob latch
 
 (defun ch-mcp-server--buffer-readable-p (buffer)
   "Whether the agent may read BUFFER's contents or see it in a listing.
-A file-visiting buffer is readable exactly when its file passes the
-auto-open read scope (`ch-mcp-server--file-in-scope-p'), tying read
-scope to open scope through one rule.  A buffer without a file is readable
-unless its name marks it internal (a leading space, Emacs's own
-convention, and where the HTTP response buffers live) or matches
-`ch-mcp-server-hidden-buffer-names'.  Terminals stay visible."
-  (let ((file (buffer-file-name buffer)))
-    (if file
-        (ch-mcp-server--file-in-scope-p file)
-      (let ((name (buffer-name buffer)))
-        (not (or (null name)
-                 (string-prefix-p " " name)
-                 (seq-some (lambda (re) (string-match-p re name))
-                           ch-mcp-server-hidden-buffer-names)))))))
+A sensitive buffer (`ch-mcp-server--buffer-sensitive-p': the
+per-buffer mark, or a terminal not explicitly exposed) is never
+readable, before any other test.  Otherwise a file-visiting buffer is
+readable exactly when its file passes the auto-open read scope
+(`ch-mcp-server--file-in-scope-p'), tying read scope to open scope
+through one rule.  A buffer without a file is readable unless its name
+marks it internal (a leading space, Emacs's own convention, and where
+the HTTP response buffers live) or matches
+`ch-mcp-server-hidden-buffer-names'."
+  (and (not (ch-mcp-server--buffer-sensitive-p buffer))
+       (let ((file (buffer-file-name buffer)))
+         (if file
+             (ch-mcp-server--file-in-scope-p file)
+           (let ((name (buffer-name buffer)))
+             (not (or (null name)
+                      (string-prefix-p " " name)
+                      (seq-some (lambda (re) (string-match-p re name))
+                                ch-mcp-server-hidden-buffer-names))))))))
 
 ;; The debug-knob latch.  Each guarded log buffer carries a taint-start
 ;; marker: the position of the earliest still-present text written while a
@@ -434,6 +533,9 @@ The two gates are independent; a buffer must pass both."
   "Throw a tool error unless the agent may read BUFFER; else return BUFFER.
 For the by-name resolvers: an out-of-scope or hidden buffer and a
 latched log buffer are both refused, each with its own message."
+  (when (ch-mcp-server--buffer-sensitive-p buffer)
+    (mcp-server-lib-tool-throw
+     (format "Buffer %s is withheld as sensitive" (buffer-name buffer))))
   (unless (ch-mcp-server--buffer-readable-p buffer)
     (mcp-server-lib-tool-throw
      (format "Buffer %s is not readable (outside scope)" (buffer-name buffer))))
