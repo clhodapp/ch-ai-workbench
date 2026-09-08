@@ -29,9 +29,11 @@ hidden and becomes readable only when the user says so.
 ## Getting access
 
 - The user exposes a terminal they judge safe with
-  `ch-mcp-server-toggle-terminal-visible`, run in that terminal; running
-  it again re-hides it. Exposure is per-terminal and per-buffer: one
-  terminal being visible says nothing about another.
+  `ch-mcp-server-toggle-buffer-sensitive` (bound to `<leader> a t`), run
+  in that terminal; running it again withholds it. The same toggle flips
+  any buffer's sensitive state; terminals are just the kind that starts
+  sensitive. Exposure is per-buffer: one terminal being visible says
+  nothing about another.
 - If you need to see a terminal that is withheld, **ask the user to
   expose it** (naming what you need to check), rather than trying to
   resolve it by mode or working around the read tools. There is no agent
