@@ -219,16 +219,25 @@ view, which holds the mirror and the bound project directories, so what
 it can open is the scanned set.
 
 The scan is accident-prevention, not access control, and edit is why it
-cannot be more. An edit verb that reports whether an `old_string`
-matched is an oracle: an agent can recover a secret it cannot read by
-proposing replacements and extending the confirmed prefix one
-match-or-no-match at a time, never reading the value. Redacting reads
-does nothing against this, and the matching cannot be redacted without
-breaking edit. So the scan stops a secret from landing in the agent's
-context by being read or shown; it does not stop a determined agent
-from extracting one it knows is there. The confidentiality boundary is
-isolation, what is never mirrored in and what the sandbox's filesystem
-view withholds, not the scan.
+cannot be more, in two ways. First, an edit verb that reports whether an
+`old_string` matched is an oracle: an agent can recover a secret it
+cannot read by proposing replacements and extending the confirmed
+prefix one match-or-no-match at a time, never reading the value.
+Second, and worse, a landed edit lets the agent move the secret past
+the scan in one step: the scan matches known token shapes, so an edit
+that breaks the shape (split the token across lines, insert a character
+mid-token, base64 or reverse it) makes the next scan pass, and the
+mutated text comes back in full on the next read. This needs no
+guessing; it is one edit and one read, and the mutation space is
+unbounded, so no better scan closes it. Redacting reads does nothing
+against either, and the matching cannot be redacted without breaking
+edit. So the scan stops a secret from landing in the agent's context by
+being read or shown; it does not stop a determined agent from
+extracting one it can already edit. Both attacks need the secret to be
+in a file the agent can edit, which means already inside the sandbox's
+view, so the confidentiality boundary is isolation, what is never
+mirrored in and what the sandbox's filesystem view withholds, not the
+scan.
 
 ## Residual accepted surface
 
