@@ -324,13 +324,33 @@ mark itself non-sensitive or clear the flag.")
 
 (defvar ch-mcp-server-terminal-exposed nil
   "Non-nil exposes THIS terminal buffer to the agent (a per-buffer override).
-Terminals (`ghostel-mode') are sensitive by default (their text is
-whatever ran in them, including echoed secrets), so
+Terminals (see `ch-mcp-server-terminal-modes') are sensitive by default
+(their text is whatever ran in them, including echoed secrets), so
 `ch-mcp-server--buffer-sensitive-p' withholds one unless this
 buffer-local flag is set.  Flipped by
 `ch-mcp-server-toggle-terminal-visible'.  Ignored in non-terminal
 buffers.")
 (make-variable-buffer-local 'ch-mcp-server-terminal-exposed)
+
+(defvar ch-mcp-server-terminal-modes
+  '(ghostel-mode comint-mode term-mode vterm-mode eshell-mode)
+  "Major modes whose buffers are terminals, sensitive by default.
+A buffer whose major mode derives from any of these is withheld from
+the agent unless `ch-mcp-server-terminal-exposed' is set for it, since
+a terminal's text is whatever ran in it and may include echoed secrets.
+`comint-mode' is the base of `shell-mode' and many REPLs, so matching
+by `derived-mode-p' covers those without listing each.  The user runs
+terminals in ghostel; the rest are here so a stray `shell'/`term'/
+`eshell'/`vterm' is gated the same way rather than left readable.
+Extended by the resident user; gated elisp cannot reach it.")
+(put 'ch-mcp-server-terminal-modes 'risky-local-variable t)
+
+(defun ch-mcp-server--terminal-p (&optional buffer)
+  "Whether BUFFER (default current) is a terminal.
+A terminal is a buffer whose major mode derives from one in
+`ch-mcp-server-terminal-modes'."
+  (with-current-buffer (or buffer (current-buffer))
+    (apply #'derived-mode-p ch-mcp-server-terminal-modes)))
 
 (defvar ch-mcp-server-sensitive-file-patterns
   '("/\\.authinfo\\(?:\\.gpg\\)?\\'"
@@ -351,13 +371,13 @@ it.")
 (defun ch-mcp-server--buffer-sensitive-p (buffer)
   "Whether BUFFER must be withheld from the agent as sensitive.
 Non-nil when the buffer-local `ch-mcp-server-buffer-sensitive' is set,
-or when BUFFER is a terminal (`ghostel-mode') that the user has not
-explicitly exposed (`ch-mcp-server-terminal-exposed').  Terminals are
-sensitive by default; every other buffer is sensitive only if its flag
-is set."
+or when BUFFER is a terminal (`ch-mcp-server-terminal-modes') that the
+user has not explicitly exposed (`ch-mcp-server-terminal-exposed').
+Terminals are sensitive by default; every other buffer is sensitive
+only if its flag is set."
   (with-current-buffer buffer
     (or ch-mcp-server-buffer-sensitive
-        (and (derived-mode-p 'ghostel-mode)
+        (and (ch-mcp-server--terminal-p)
              (not ch-mcp-server-terminal-exposed)))))
 
 (defun ch-mcp-server-visit-sensitive (filename)
@@ -388,12 +408,12 @@ entry, so routine sensitive files are withheld without a command."
 
 (defun ch-mcp-server-toggle-terminal-visible ()
   "Toggle whether the agent may read this terminal buffer.
-Flips `ch-mcp-server-terminal-exposed' in the current `ghostel-mode'
-buffer, the quick per-terminal override of the terminals-are-sensitive
-default.  Errors outside a terminal buffer."
+Flips `ch-mcp-server-terminal-exposed' in the current terminal buffer
+(`ch-mcp-server-terminal-modes'), the quick per-terminal override of
+the terminals-are-sensitive default.  Errors outside a terminal buffer."
   (interactive)
-  (unless (derived-mode-p 'ghostel-mode)
-    (user-error "Not a terminal (ghostel-mode) buffer"))
+  (unless (ch-mcp-server--terminal-p)
+    (user-error "Not a terminal buffer (see ch-mcp-server-terminal-modes)"))
   (setq ch-mcp-server-terminal-exposed
         (not ch-mcp-server-terminal-exposed))
   (message "Terminal %s to the agent"

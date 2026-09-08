@@ -716,6 +716,27 @@ buffer squatting on the name is refused, not erased."
     (should-error (ch-mcp-server-toggle-terminal-visible)
                   :type 'user-error)))
 
+(ert-deftest ch-mcp-tools-terminal-modes-beyond-ghostel ()
+  "Every mode in `ch-mcp-server-terminal-modes' is gated, others are not.
+Uses `define-derived-mode' so the parent chain is real (what
+`derived-mode-p' walks), covering a comint-derived shell as well as the
+listed modes; a mode outside the list stays readable."
+  ;; A throwaway comint child, to prove `comint-mode' in the list gates
+  ;; shells/REPLs derived from it without each being listed.
+  (define-derived-mode ch-mcp-tests--fake-shell-mode comint-mode "FakeShell")
+  (define-derived-mode ch-mcp-tests--plain-mode fundamental-mode "Plain")
+  (let ((ch-mcp-server-terminal-modes '(comint-mode eshell-mode term-mode)))
+    (with-current-buffer (get-buffer-create "ch-mcp-tests-fake-shell")
+      (ch-mcp-tests--fake-shell-mode)
+      (should (ch-mcp-server--terminal-p))
+      (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+      (ch-mcp-server-toggle-terminal-visible)
+      (should (ch-mcp-server--buffer-readable-p (current-buffer))))
+    (with-current-buffer (get-buffer-create "ch-mcp-tests-plain")
+      (ch-mcp-tests--plain-mode)
+      (should-not (ch-mcp-server--terminal-p))
+      (should (ch-mcp-server--buffer-readable-p (current-buffer))))))
+
 (ert-deftest ch-mcp-tools-maybe-mark-sensitive-matches-pattern ()
   "The find-file-hook function marks a buffer visiting a matching name."
   (with-current-buffer (get-buffer-create "ch-mcp-tests-authinfo")
