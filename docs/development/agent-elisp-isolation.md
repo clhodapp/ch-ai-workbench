@@ -259,10 +259,10 @@ The gitleaks scan runs on every path by which content reaches the
 agent's context, not only the mirror, and including the CLI's own
 built-in tools (`Read` and `Bash` alike), not only the MCP tools. Any
 tool result that would put bytes in the agent's context is scanned
-first; on a hit the content is returned redacted, with the matched
-spans marked in place so the agent can see the redaction (`Bash` output
-gets a slightly more explicit treatment, see "Bash output: a visible
-redaction artifact"). A buffer's text reaches the agent
+first; on a hit the content is returned redacted, the agent is told,
+and for `Read` it may resubmit to ask the user for the real bytes
+(`Bash` differs on both counts, see "Redact and tell; resubmit to
+approve"). A buffer's text reaches the agent
 through the mirror
 (buffer-read tools, the file in the mirror directory) and is scanned
 there. A file's content reaches the agent through the MCP file-reading
@@ -288,31 +288,41 @@ That is a narrow residue, and it is the sandbox bind list's to cover,
 not the scan's: a secret in a directory never bound into the jail
 cannot be reached by any means, tool or not.
 
-### Bash output: a visible redaction artifact, no unredact
+### Redact and tell; resubmit to approve (Read); Bash cannot retry
 
-`Read` and the MCP file tools return their content with the matched
-spans redacted in place, the placeholder naming the rule
-(`[REDACTED:github-pat]`); the redaction rides in the result the agent
-already reads.
+A scan hit never fails a read. The matched spans come back redacted with
+a placeholder naming the rule (`[REDACTED:github-pat]`), and the agent
+is told a redaction occurred. The agent proceeds on the redacted text,
+which is the common case: it wanted the file, not the secret in it.
 
-`Bash` output is handled a step more explicitly, because a shell stream
-has no file the agent is holding to see marked. Its stdout and stderr
-are captured to a temp file, run through a `gitleaks_redact` step (which
-is just the scanner writing the marked, redacted copy), and that copy is
-what the agent receives. The agent sees a distinct redacted artifact,
-so it is evident the stream was filtered and where, rather than getting
-bytes that silently differ from what the command printed. And there is
-no unredact path for it: a `Bash` result carries no retry-for-raw
-option. This is deliberate, and cleaner than a resubmit handshake would
-have been, since "the identical read" has no clean meaning for a command
-whose output varies run to run (a live tail, a timestamped listing).
+For `Read` and the MCP file tools, the agent may ask for the real bytes
+by resubmitting the identical read. That second submission of the same
+read raises a prompt to the user; the unredacted content crosses only on
+approval, and a denial returns the redacted text again. The resubmit is
+recognized as the same read by a single-use idempotency key over the
+request (tool, target, range), so a later unrelated read of the same
+path is a first submission and is redacted afresh, not silently approved
+by a stale key. This is the design's consent posture: routine reads are
+automatic, the one that crosses a sensitive boundary is the user's to
+allow.
 
-The confidentiality rule stays flat across both: reads are redacted,
-and the only way the agent sees a real secret is a deliberate user
-action outside the read path, exposing a buffer, binding a path, or
-handing over the value. That is the same isolation-is-the-boundary
-principle the rest of the design rests on: the scan does not decide who
-may see a secret, the user does, by what is exposed in the first place.
+`Bash` output is the exception, in two ways. First, a shell stream has
+no file the agent holds to see marked, so its stdout and stderr are
+captured, run through a `gitleaks_redact` step (the scanner writing a
+marked, redacted copy), and that distinct copy is what the agent
+receives; the separate artifact is what makes the filtering evident
+rather than handing back bytes that silently differ from what the
+command printed. Second, a `Bash` result carries no retry-for-raw
+option: there is no resubmit-to-approve for it, because "the identical
+read" has no clean meaning for a command whose output varies run to run
+(a live tail, a timestamped listing). To see a shell command's raw
+output the user runs it themselves, outside the agent's tool channel.
+
+Either way the boundary is the same: the only way the agent sees a
+secret without a per-read approval is a deliberate user action outside
+the read path, exposing a buffer, binding a path, handing over the
+value. The scan does not decide who may see a secret; the user does, by
+what is exposed and by answering the resubmit prompt.
 
 The scan is accident-prevention, not access control, and edit is why it
 cannot be more, in two ways. First, an edit verb that reports whether an
@@ -372,10 +382,14 @@ print a secret into a log.
 - Every tool result that reaches the agent's context is scanned and
   redacted, `Read` and `Bash` alike (a shell command's output is a tool
   result, so `cat` is covered). `Read` and the MCP tools mark the spans
-  in place; `Bash` output goes through `gitleaks_redact` into a distinct
-  redacted artifact and has no unredact path. The agent sees a real
-  secret only by a deliberate user action outside the read path
-  (exposing a buffer, binding a path, handing over the value).
+  in place and let the agent resubmit the identical read to raise a user
+  prompt for the real bytes (single-use idempotency key over tool,
+  target, range). `Bash` output goes through `gitleaks_redact` into a
+  distinct redacted artifact and has no retry: to see a command's raw
+  output the user runs it themselves. Either way, the agent sees a
+  secret without a per-read approval only by a deliberate user action
+  outside the read path (exposing a buffer, binding a path, handing over
+  the value).
 
 ## Dependencies
 
@@ -401,10 +415,10 @@ print a secret into a log.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
 - **The `claude-code` module** gains the hook that scans the CLI's
   built-in tool results before they reach context: `Read` redacted in
-  place, `Bash` output through `gitleaks_redact` into a distinct
-  artifact with no unredact path. It lives with the CLI's other hooks,
-  not in the MCP server, and is the second of the two enforcement points
-  above.
+  place with the resubmit-to-approve prompt, `Bash` output through
+  `gitleaks_redact` into a distinct artifact with no retry. It lives
+  with the CLI's other hooks, not in the MCP server, and is the second
+  of the two enforcement points above.
 
 ## Phases
 
@@ -430,10 +444,11 @@ print a secret into a log.
    replace it for session facts. The MCP read tools scan and redact
    here.
 4. The CLI-side hook in the `claude-code` module: `Read` redacted in
-   place and `Bash` output through `gitleaks_redact` into a distinct
-   artifact with no unredact path. Depends on the scan existing
-   (phase 3) and on the sandbox bind list (phase 2), and completes
-   "every tool result into context is scanned" for the CLI's own tools.
+   place with the resubmit-to-approve prompt (single-use idempotency
+   key), and `Bash` output through `gitleaks_redact` into a distinct
+   artifact with no retry. Depends on the scan existing (phase 3) and on
+   the sandbox bind list (phase 2), and completes "every tool result
+   into context is scanned" for the CLI's own tools.
 
 The `parenting` `:sandbox` work can precede phase 2 or land alongside
 it.
