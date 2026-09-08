@@ -472,8 +472,8 @@ in
         an identical re-issue through. Merged across all
         modules that set it. This module seeds the peer-programmer
         style's regex-catchable bans (lib/tic-checks.nix): yours,
-        em-dash, click, arrow, relationship-words,
-        performed-enthusiasm.
+        elliptical-possessive, em-dash, click, arrow,
+        relationship-words, performed-enthusiasm.
       '';
     };
   };
