@@ -880,10 +880,10 @@ pending items stay out."
                                :root "/w" :time 50.0)))
          (agents '(((id . "mine") (pid . 41) (cwd . "/w") (startedAt . 50000)
                     (status . "busy") (state . "working"))
-                   ((id . "other") (pid . 42) (name . "fleet job")
+                   ((id . "other") (pid . 42) (name . "queued job")
                     (cwd . "/w/sub") (startedAt . 90000)
                     (status . "busy") (state . "working"))
-                   ((id . "retired") (name . "old fleet job") (cwd . "/w")
+                   ((id . "retired") (name . "old queued job") (cwd . "/w")
                     (startedAt . 10000) (status . "idle") (state . "done"))))
          (active-rows (claude-queue--list-entries pending registry agents
                                                   'all))
@@ -892,7 +892,7 @@ pending items stay out."
     ;; Active: both live agents, no pending row, retired one hidden.
     (should (= 2 (length active-rows)))
     ;; Newest first: the outside agent (t=90) precedes the queue task.
-    (should (equal "fleet job" (aref (cadr (nth 0 active-rows)) 3)))
+    (should (equal "queued job" (aref (cadr (nth 0 active-rows)) 3)))
     (should (plist-get (car (nth 0 active-rows)) :synthetic))
     ;; The registry row is present exactly once and is not synthetic.
     (should (equal "queue task" (aref (cadr (nth 1 active-rows)) 3)))
@@ -900,7 +900,7 @@ pending items stay out."
     (should-not (plist-get (car (nth 1 active-rows)) :synthetic))
     ;; Retired view adds the CLI's full history.
     (should (= 3 (length all-rows)))
-    (should (equal "old fleet job" (aref (cadr (nth 2 all-rows)) 3)))))
+    (should (equal "old queued job" (aref (cadr (nth 2 all-rows)) 3)))))
 
 (ert-deftest claude-queue-agent-active-p ()
   (should (claude-queue--agent-active-p '((id . "a") (pid . 7))))
