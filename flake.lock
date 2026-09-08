@@ -275,11 +275,11 @@
     "parenting": {
       "flake": false,
       "locked": {
-        "lastModified": 1788120189,
-        "narHash": "sha256-Et5O+U8v/QMMHMLTJ8/4fhghTTvxpQrmBcbgfiqI1Bo=",
+        "lastModified": 1788847527,
+        "narHash": "sha256-QWLcmuk90S6n+8XK1eX3SRz+zTHuYL4ZzRDN34RuO4c=",
         "owner": "clhodapp",
         "repo": "parenting",
-        "rev": "18ccdd3d0af911ada75c97b5bd57aea46b7357c8",
+        "rev": "e3a170ec575c7e4958fce4e34ffc2097b30702d6",
         "type": "github"
       },
       "original": {
