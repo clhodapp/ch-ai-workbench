@@ -130,7 +130,7 @@ fragment of unknown subject.  Capped at a third of the chunk budget."
 
 (defcustom semantic-finder-index-jitter 60
   "Upper bound on the random offset added to the first scan.
-Keeps a fleet of simultaneously started sessions from herding."
+Keeps many simultaneously started sessions from herding."
   :type 'natnum
   :group 'semantic-finder)
 
