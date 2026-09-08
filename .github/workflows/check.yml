@@ -30,18 +30,22 @@
 # its own cache scope, which main can never restore. The result is
 # posted to the request's head commit as the "check" status.
 #
-# One cache entry, holding a union of builds. What stays in it is
-# decided by garbage-collection roots kept in a tree the cache carries,
-# /nix/ci-roots, and mirrored into Nix's root directory before each
-# save: main/<sha> for main's builds, pr/<number>/<sha> for requests'.
-# Each run adds its own, drops the lowest-priority roots until the
-# closure fits the repository's 10 GB of cache, and then every
-# unreachable path goes. The priority order, highest first: the current
-# main; each open request's newest build; older mains; closed requests.
-# Requests that changed the pipeline have entries of their own in their
-# scope, which this run only ever deletes, closed ones first, when
-# space is short. Older entries in this scope are removed by the
-# `prune` job, after the new entry is confirmed to exist, never before.
+# One cache entry, holding a union of builds as a Nix binary cache on
+# disk (narinfo files and compressed NARs), which the checks read as a
+# substituter. Paths that cache.nixos.org serves are left out of it: a
+# run fetches those from there, and the entry holds only what was built
+# here or came from the smaller caches. What stays in it is decided by
+# a tree of roots the entry carries: main/<sha> for main's builds,
+# pr/<number>/<sha> for requests', each listing the store paths of that
+# build's closure that the upstream cache did not serve. Each run adds
+# its own, drops the lowest-priority roots until the union fits the
+# repository's 10 GB of cache, and then every path no surviving root
+# lists goes. The priority order, highest first: the current main; each
+# open request's newest build; older mains; closed requests. Requests
+# that changed the pipeline have entries of their own in their scope,
+# which this run only ever deletes, closed ones first, when space is
+# short. Older entries in this scope are removed by the `prune` job,
+# after the new entry is confirmed to exist, never before.
 
 name: check
 
@@ -110,6 +114,14 @@ jobs:
     if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      # The build cache on disk: a Nix binary cache plus the root tree
+      # under roots/, carried whole in one Actions cache entry. The
+      # hosted runners' home directory, spelled out because nix.conf
+      # cannot expand it.
+      CI_CACHE: /home/runner/ci-cache
+      # Caches whose paths are left out of the entry, space-separated.
+      UPSTREAM_CACHES: https://cache.nixos.org
     outputs:
       head: ${{ steps.target.outputs.head }}
     steps:
@@ -146,23 +158,33 @@ jobs:
           ref: ${{ steps.target.outputs.head }}
           persist-credentials: false
 
+      # Restores the newest entry; the save, under this commit's key, is
+      # the explicit step after the roots are settled. Purging older
+      # entries is left to the `prune` job, which checks the save landed.
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CI_CACHE }}
+          key: cache-${{ runner.os }}-${{ steps.target.outputs.head }}
+          restore-keys: cache-${{ runner.os }}-
+
+      # A binary cache needs its directories and its info file before
+      # anything opens it; created here, owned by this user, so that
+      # neither the daemon (which opens it as a substituter, as root)
+      # nor `nix copy` (which writes it, as this user) is the first to.
+      - name: Prepare the build cache
+        run: |
+          mkdir -p "$CI_CACHE/nar" "$CI_CACHE/roots"
+          [[ -e "$CI_CACHE/nix-cache-info" ]] || echo "StoreDir: /nix/store" > "$CI_CACHE/nix-cache-info"
+
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           extra_nix_config: |
             experimental-features = nix-command flakes
             sandbox = true
-
-      # Restores the newest entry and saves under this commit's key. The
-      # cap of zero makes the pruning before the save remove every path
-      # the roots do not reach, so the entry is exactly their closure.
-      # Purging is left to the `prune` job, which checks the save landed.
-      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ steps.target.outputs.head }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          gc-max-store-size-linux: 0
-          purge: false
+            # The restored cache. Its paths carry no signatures; `trusted`
+            # accepts them from this store alone.
+            extra-substituters = file://${{ env.CI_CACHE }}?trusted=true
 
       # Configures the clhodapp cache as a substituter. A public cache
       # needs no credentials to read, and this run carries none: nothing
@@ -186,40 +208,52 @@ jobs:
           ROOT_ID: ${{ steps.target.outputs.id }}
           CURRENT_MAIN: ${{ steps.target.outputs.base }}
           OWN_REF: ${{ github.ref }}
-          KEY_PREFIX: nix-${{ runner.os }}-
+          KEY_PREFIX: cache-${{ runner.os }}-
           MAY_DELETE: "true"
         run: |
           set -euo pipefail
-          # The persistent root tree. It lives under /nix so the cache
-          # carries it, but not under /nix/var/nix, which the cache
-          # action excludes from its archive apart from the database.
-          # Nix reads roots only from /nix/var/nix/gcroots, so the last
-          # step mirrors the surviving tree there before the save's
-          # pruning runs.
-          roots=/nix/ci-roots
+          # The persistent root tree, inside the cache directory so the
+          # entry carries it. A root lists the store paths its build
+          # contributes to the entry: its closure, less what the
+          # upstream caches served.
+          roots="$CI_CACHE/roots"
+          store="file://$CI_CACHE?compression=zstd&parallel-compression=true"
 
           # 1. Root what this run built: the checks and the packages.
           #    Checks alone would not do; a check's output need not
           #    reference what it built (the ERT checks' outputs are
           #    marker files), and the pruning keeps only what the roots
           #    reach. Everything is already built, so this evaluates and
-          #    links. An output the flake does not provide (this one has
+          #    lists. An output the flake does not provide (this one has
           #    no packages) is skipped; any other evaluation error fails.
           own="$roots/$ROOT_CLASS/$ROOT_ID"
-          sudo rm -rf "$own"
-          sudo mkdir -p "$own"
+          rm -rf "$own"
+          mkdir -p "$own"
           for kind in checks packages; do
             if ! names=$(nix eval --json ".#$kind.x86_64-linux" --apply builtins.attrNames 2>"$RUNNER_TEMP/eval.err"); then
               grep -q 'does not provide attribute' "$RUNNER_TEMP/eval.err" || { cat "$RUNNER_TEMP/eval.err"; exit 1; }
               continue
             fi
             for name in $(jq -r '.[]' <<<"$names"); do
-              out=$(nix build --no-link --print-out-paths ".#$kind.x86_64-linux.$name")
-              sudo ln -s "$out" "$own/$kind-$name"
+              nix build --no-link --print-out-paths ".#$kind.x86_64-linux.$name" >> "$own/outputs"
             done
           done
 
-          # 2. Order every root directory, highest priority first. Older
+          # 2. Copy the closure into the cache, then find which of it the
+          #    upstream caches serve; the root lists the rest. The whole
+          #    closure goes in because a binary cache refuses a path whose
+          #    references it lacks; the served paths come out again in
+          #    step 6, and compressing them costs seconds.
+          xargs nix copy --to "$store" < "$own/outputs"
+          xargs nix path-info -r < "$own/outputs" | sort -u > "$RUNNER_TEMP/closure"
+          for cache in $UPSTREAM_CACHES; do
+            xargs nix path-info --store "$cache" --json --json-format 1 < "$RUNNER_TEMP/closure" \
+              | jq -r 'to_entries[] | select(.value != null) | .key'
+          done | sort -u > "$RUNNER_TEMP/served"
+          comm -23 "$RUNNER_TEMP/closure" "$RUNNER_TEMP/served" > "$own/paths"
+          echo "This build: $(wc -l < "$RUNNER_TEMP/closure") paths in the closure, $(wc -l < "$RUNNER_TEMP/served") served upstream, $(wc -l < "$own/paths") kept."
+
+          # 3. Order every root directory, highest priority first. Older
           #    builds of the same request are superseded outright.
           open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 500 --json number --jq '.[].number')
           is_open() { grep -qx "$1" <<<"$open"; }
@@ -235,7 +269,7 @@ jobs:
             n=$(basename "$prdir")
             newest=$(newest_in "$prdir" | head -n1)
             for sha in "$prdir"/*/; do
-              [[ "$(basename "$sha")" == "$newest" ]] || sudo rm -rf "$sha"
+              [[ "$(basename "$sha")" == "$newest" ]] || rm -rf "$sha"
             done
             is_open "$n" && ordered+=("$prdir$newest")
           done
@@ -247,12 +281,12 @@ jobs:
             is_open "$n" || ordered+=("$prdir$(newest_in "$prdir" | head -n1)")
           done
 
-          # 3. The budget: the repository's 10 GB, less the entries of
+          # 4. The budget: the repository's 10 GB, less the entries of
           #    requests that changed the pipeline (they live in their own
           #    scopes), less this scope's current entry, which coexists
           #    with the new one until the `prune` job removes it. Sizes
-          #    are compared as uncompressed closure sizes, which errs on
-          #    the safe side since entries are compressed.
+          #    are the compressed sizes the narinfo files record, which
+          #    is what the entry is made of.
           gib=$((1024 * 1024 * 1024))
           caches=$(gh cache list --repo "$GITHUB_REPOSITORY" --limit 1000 --json key,ref,sizeInBytes,lastAccessedAt)
           used_by_own_scope=$(jq --arg ref "$OWN_REF" --arg p "$KEY_PREFIX" \
@@ -262,22 +296,28 @@ jobs:
           budget=$((10 * gib - used_by_own_scope - used_by_others))
           echo "Budget for this entry: $budget bytes ($used_by_others used by other scopes, $used_by_own_scope by this one)."
 
-          closure_size() {
-            # Union closure size of the roots under the given directories.
-            local targets
-            targets=$(for d in "$@"; do find "$d" -maxdepth 1 -type l -exec readlink {} +; done)
-            [[ -n "$targets" ]] || { echo 0; return; }
-            # shellcheck disable=SC2086
-            nix path-info -r $targets | sort -u | xargs nix path-info -s | awk '{s += $2} END {print s + 0}'
+          # The compressed size of every path in the cache, by store hash,
+          # from the narinfo files. The entry is these files, so the sum
+          # is close to what GitHub will count.
+          find "$CI_CACHE" -maxdepth 1 -name '*.narinfo' \
+            -exec awk 'FNR == 1 { h = FILENAME; sub(/.*\//, "", h); sub(/\.narinfo$/, "", h) } /^FileSize: / { print h, $2 }' {} + \
+            > "$RUNNER_TEMP/sizes"
+          listed_paths() {
+            # The union of the paths listed by the given root directories.
+            for d in "$@"; do cat "$d/paths"; done | sort -u
+          }
+          entry_size() {
+            # The size of an entry holding what the given roots list.
+            listed_paths "$@" | awk 'NR == FNR { size[$1] = $2; next } { total += size[substr($0, 12, 32)] } END { print total + 0 }' "$RUNNER_TEMP/sizes" -
           }
 
-          # 4. Keep the highest-priority roots that fit, drop the rest.
+          # 5. Keep the highest-priority roots that fit, drop the rest.
           #    If not even the current main fits, make room by deleting
           #    pipeline requests' entries, closed ones first, then the
           #    oldest open ones.
           kept=()
           for d in "${ordered[@]}"; do
-            size=$(closure_size "${kept[@]}" "$d")
+            size=$(entry_size "${kept[@]}" "$d")
             if (( size <= budget )); then
               kept+=("$d")
               continue
@@ -308,16 +348,28 @@ jobs:
               kept+=("$d")
               continue
             fi
-            echo "Dropping roots $d (closure would be $size bytes, budget $budget)."
-            sudo rm -rf "$d"
+            echo "Dropping roots $d (the entry would be $size bytes, budget $budget)."
+            rm -rf "$d"
           done
           echo "Kept roots:"
           printf '  %s\n' "${kept[@]}"
 
-          # 5. Mirror the surviving tree into Nix's root directory so the
-          #    pruning before the save honours it (symlinks stay symlinks).
-          sudo rm -rf /nix/var/nix/gcroots/ci
-          sudo cp -a "$roots" /nix/var/nix/gcroots/ci
+          # 6. Prune the cache to what the surviving roots list: first
+          #    every narinfo for a path none of them lists (this run's
+          #    upstream-served paths among them), then every NAR no
+          #    remaining narinfo names.
+          listed_paths "${kept[@]}" | cut -c 12-43 | sort > "$RUNNER_TEMP/keep"
+          find "$CI_CACHE" -maxdepth 1 -name '*.narinfo' -printf '%f\n' | sed 's/\.narinfo$//' | sort \
+            | comm -23 - "$RUNNER_TEMP/keep" | sed "s|.*|$CI_CACHE/&.narinfo|" | xargs -r rm -f
+          find "$CI_CACHE" -maxdepth 1 -name '*.narinfo' -exec sed -n 's|^URL: ||p' {} + | sort -u > "$RUNNER_TEMP/keep-nars"
+          find "$CI_CACHE/nar" -type f -printf 'nar/%f\n' | sort \
+            | comm -23 - "$RUNNER_TEMP/keep-nars" | sed "s|.*|$CI_CACHE/&|" | xargs -r rm -f
+          echo "The entry holds $(wc -l < "$RUNNER_TEMP/keep") paths, $(du -sb "$CI_CACHE" | cut -f1) bytes on disk."
+
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.CI_CACHE }}
+          key: cache-${{ runner.os }}-${{ steps.target.outputs.head }}
 
       - name: Report the result on the pull request
         if: always() && inputs.pr != ''
@@ -331,8 +383,8 @@ jobs:
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
 
   # Older entries in this scope go only once the new one is confirmed
-  # to exist. The cache action would purge regardless, and a save can
-  # fail (a read-only token did, twice), which would leave nothing.
+  # to exist: a save can fail (a read-only token did, twice), and
+  # purging first would leave nothing.
   prune:
     needs: check
     if: needs.check.result == 'success'
@@ -344,8 +396,8 @@ jobs:
       - name: Remove the older entries in this scope
         env:
           GH_TOKEN: ${{ github.token }}
-          KEY: nix-${{ runner.os }}-${{ needs.check.outputs.head }}
-          KEY_PREFIX: nix-${{ runner.os }}-
+          KEY: cache-${{ runner.os }}-${{ needs.check.outputs.head }}
+          KEY_PREFIX: cache-${{ runner.os }}-
           OWN_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
