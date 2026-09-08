@@ -167,38 +167,48 @@ known to leak, whatever its shape.
 The scan is a shape-matcher, so a secret it has no rule for, a bare
 token, a passphrase, an SSH key body, passes it. The user needs a way
 to withhold a buffer by declaration rather than by pattern, decided
-before the secret is in it. A buffer-local flag,
-`ch-mcp-server-buffer-sensitive`, does this: the buffer predicate
-refuses a buffer carrying it before any other test, so no buffer-read
-tool returns it, no mirror file is written for it, it is omitted from
-listings, and neither transform mode can reach it.
+before the secret is in it. One buffer-local state does this,
+`ch-mcp-server-buffer-sensitivity`, with three values: unset (nil),
+`sensitive`, or `exposed`. Unset means the buffer's kind decides the
+default; either explicit value overrides it in that direction. The
+buffer predicate reads the effective state and refuses a sensitive
+buffer before any other test, so no buffer-read tool returns it, no
+mirror file is written for it, it is omitted from listings, and neither
+transform mode can reach it.
 
-Two ways to set it, and the safe one sets it as the file opens so the
-buffer never exists unmarked and readable:
+**The default is by kind.** A terminal (`ghostel-mode`, and the other
+terminal modes: `comint-mode` and what derives from it, `term-mode`,
+`vterm-mode`, `eshell-mode`, a declared list) shows whatever ran in it,
+an echoed password, a token in a command line, the output of `env`, so
+its default is sensitive. Every other buffer's default is not.
+Terminals are the sole kind that starts withheld.
 
-- **On open, by command.** `ch-mcp-server-visit-sensitive` reads a file
-  name and visits it with the flag already set, for the case the user
-  knows is sensitive and no pattern anticipated.
-- **On open, by pattern.** A declared list
+**One toggle, for any buffer.** `ch-mcp-server-toggle-buffer-sensitive`
+(bound to `<leader> a t`) flips the effective state of the current
+buffer: a withheld buffer becomes `exposed`, a readable one becomes
+`sensitive`. Pressed in a terminal, which starts sensitive, the first
+press exposes it; pressed in an ordinary buffer, it withholds it. It is
+the quick per-buffer override of the defaults, and it is the same
+command everywhere; terminals are not a special case of the toggle,
+only of the default.
+
+Two more ways to set `sensitive`, both on open so the buffer never
+exists readable with the secret in it:
+
+- **By command.** `ch-mcp-server-visit-sensitive` reads a file name and
+  visits it already marked, for the case the user knows is sensitive
+  and no pattern anticipated.
+- **By pattern.** A declared list
   (`ch-mcp-server-sensitive-file-patterns`, seed: `~/.authinfo*`,
   `*.gpg`, `*.age`, `.env` and `.env.*`, and a project's declared
-  secrets file) auto-sets the flag from `find-file-hook` on any buffer
-  visiting a match, so routine sensitive files need no thought.
+  secrets file) marks any buffer visiting a match from
+  `find-file-hook`, so routine sensitive files need no thought.
 
-Setting the flag on a buffer that already holds a secret still withholds
-it going forward, but that is the fallback; the point of the two paths
-above is to mark before the content arrives.
-
-**Terminals are sensitive by default.** A `ghostel-mode` buffer shows
-whatever ran in it, an echoed password, a token in a command line, the
-output of `env`, so it is treated as sensitive without a mark: the
-predicate refuses any `ghostel-mode` buffer unless the user has marked
-it exposed. This inverts the flag for that one buffer kind. A toggle,
-`ch-mcp-server-toggle-terminal-visible`, run in a terminal the user
-knows is safe, flips it visible (and back); it is the quick per-buffer
-override the default is built to require. Everything else stays
-visible-by-default and is withheld only by an explicit sensitive mark;
-terminals are the sole kind that starts hidden.
+Marking a buffer that already holds a secret still withholds it going
+forward, but that is the fallback; the point of the on-open paths is to
+mark before the content arrives. A file cannot set this variable
+through a file-local: only nil is accepted, so a file can never expose
+itself.
 
 This flag governs the buffer surfaces (the read tools and the mirror).
 It does not reach a file the agent's own CLI opens inside the sandbox;
@@ -376,9 +386,10 @@ print a secret into a log.
   scan; the mark is set before the secret arrives (on open, by command
   or by pattern), and the scan is not trusted to catch what the user
   already knows is sensitive.
-- Terminals are the one buffer kind sensitive by default, withheld
-  until the user toggles a given one visible; every other kind is
-  visible unless marked.
+- Sensitivity is one per-buffer state with a default by kind: terminals
+  start sensitive, everything else starts readable, and one generic
+  toggle flips any buffer either way. Terminals are a special case of
+  the default, not of the toggle.
 - Every tool result that reaches the agent's context is scanned and
   redacted, `Read` and `Bash` alike (a shell command's output is a tool
   result, so `cat` is covered). `Read` and the MCP tools mark the spans
@@ -406,12 +417,12 @@ print a secret into a log.
   unavailable.
 - **The editor layer** gains a mirror-profile option: no language-server
   autostart, no process-spawning modes.
-- **The `ghostel-terminals` skill** (shipped from ch-emacs-config, which
-  owns ghostel) currently tells the agent terminals are always readable
-  buffers. Terminals sensitive-by-default reverses that, so the skill
-  must change with it: the agent sees a terminal only once the user has
-  toggled it visible, and must not assume otherwise. A cross-repo change,
-  landing with phase 1b.
+- **The `ghostel-terminals` skill** was an untracked, hand-placed file
+  telling the agent terminals are always readable buffers. Terminals
+  sensitive-by-default reverses that, so the skill is adopted into the
+  workbench's skills beside `emacs-tools` with matching text: the agent
+  sees a terminal only once the user has exposed it, and asks rather
+  than assuming otherwise. Lands with phase 1b.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
 - **The `claude-code` module** gains the hook that scans the CLI's
   built-in tool results before they reach context: `Read` redacted in
@@ -425,15 +436,16 @@ print a secret into a log.
 1. Parent side only: the buffer predicate at every resolver with
    `list-buffers` filtering, and the debug-knob latch. Stands alone and
    narrows the tools that stay in the parent regardless. (Landed.)
-1b. The sensitive-buffer flag: the buffer-local
-   `ch-mcp-server-buffer-sensitive`, the predicate refusing it first,
-   the `ch-mcp-server-visit-sensitive` command, and the
-   `find-file-hook` auto-marking from `ch-mcp-server-sensitive-file-patterns`.
-   Terminals sensitive by default with the
-   `ch-mcp-server-toggle-terminal-visible` override, and the matching
-   `ghostel-terminals` skill update in ch-emacs-config. Parent-side and
-   independent of the child, so it can land next to phase 1; the mirror
-   in phase 3 already refuses through the same predicate.
+1b. Buffer sensitivity: the buffer-local
+   `ch-mcp-server-buffer-sensitivity` (unset, `sensitive`, `exposed`),
+   the predicate refusing the effective state first, terminal modes
+   sensitive by default, the generic `ch-mcp-server-toggle-buffer-sensitive`
+   on `<leader> a t`, the `ch-mcp-server-visit-sensitive` command, the
+   `find-file-hook` marking from `ch-mcp-server-sensitive-file-patterns`,
+   and the `ghostel-terminals` skill adopted into the workbench with
+   matching text. Parent-side and independent of the child, so it lands
+   next to phase 1; the mirror in phase 3 already refuses through the
+   same predicate.
 2. The child with configuration only, sandboxed, as the target for
    `eval-elisp`. This already answers every static question (keymaps,
    functions, defaults, features); the gated live path remains for
