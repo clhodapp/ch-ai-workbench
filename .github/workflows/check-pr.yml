@@ -149,18 +149,22 @@ jobs:
             done
           done
 
-          # 2. Copy the closure into the cache, then find which of it the
-          #    upstream caches serve; the root lists the rest. The whole
-          #    closure goes in because a binary cache refuses a path whose
-          #    references it lacks; the served paths come out again in
-          #    step 6, and compressing them costs seconds.
+          # 2. Copy the closure into the cache, then ask each upstream cache
+          #    which of it it serves (a cache serves a path when it has
+          #    the path's narinfo file; a failed request counts as not
+          #    served, which only keeps more); the root lists the rest.
+          #    The whole closure goes in because a binary cache refuses a
+          #    path whose references it lacks; the served paths come out
+          #    again in step 6, and compressing them costs seconds.
           xargs nix copy --to "$store" < "$own/outputs"
           xargs nix path-info -r < "$own/outputs" | sort -u > "$RUNNER_TEMP/closure"
           for cache in $UPSTREAM_CACHES; do
-            xargs nix path-info --store "$cache" --json --json-format 1 < "$RUNNER_TEMP/closure" \
-              | jq -r 'to_entries[] | select(.value != null) | .key'
+            # shellcheck disable=SC2016
+            cut -c 12-43 "$RUNNER_TEMP/closure" | xargs -P 32 -I{} sh -c \
+              'if curl -sfI --retry 3 -o /dev/null "$1/$2.narinfo"; then echo "$2"; fi' _ "$cache" {}
           done | sort -u > "$RUNNER_TEMP/served"
-          comm -23 "$RUNNER_TEMP/closure" "$RUNNER_TEMP/served" > "$own/paths"
+          awk 'NR == FNR { served[$1] = 1; next } !(substr($0, 12, 32) in served)' \
+            "$RUNNER_TEMP/served" "$RUNNER_TEMP/closure" > "$own/paths"
           echo "This build: $(wc -l < "$RUNNER_TEMP/closure") paths in the closure, $(wc -l < "$RUNNER_TEMP/served") served upstream, $(wc -l < "$own/paths") kept."
 
           # 3. Order every root directory, highest priority first.
