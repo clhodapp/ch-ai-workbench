@@ -109,11 +109,13 @@ never exposes what the buffer-read tools would refuse.
 
 Three filters apply, in this order.
 
-1. **The buffer predicate.** A file-visiting buffer is readable exactly
-   when its file would pass the auto-open scope
-   (`ch-emacs-config-mcp-auto-open-scope`), which ties read scope to
-   open scope through one rule. A buffer without a file is readable
-   unless its name starts with a space, Emacs's convention for internal
+1. **The buffer predicate.** A buffer carrying the sensitive mark (see
+   "Marking a buffer sensitive") is never readable, before any other
+   test. Otherwise a file-visiting buffer is readable exactly when its
+   file would pass the auto-open scope
+   (`ch-mcp-server-auto-open-scope`), which ties read scope to open
+   scope through one rule. A buffer without a file is readable unless
+   its name starts with a space, Emacs's convention for internal
    buffers and where the HTTP response buffers live, or matches a
    declared list of hidden names (seed: `*gptel-log*`). The same
    predicate is applied at every place the parent resolves a buffer by
@@ -157,6 +159,40 @@ Three filters apply, in this order.
 The latch and the scan are not alternatives. The scan sees what has a
 recognizable shape; the latch covers text written under conditions
 known to leak, whatever its shape.
+
+## Marking a buffer sensitive
+
+The scan is a shape-matcher, so a secret it has no rule for, a bare
+token, a passphrase, an SSH key body, passes it. The user needs a way
+to withhold a buffer by declaration rather than by pattern, decided
+before the secret is in it. A buffer-local flag,
+`ch-mcp-server-buffer-sensitive`, does this: the buffer predicate
+refuses a buffer carrying it before any other test, so no buffer-read
+tool returns it, no mirror file is written for it, it is omitted from
+listings, and neither transform mode can reach it.
+
+Two ways to set it, and the safe one sets it as the file opens so the
+buffer never exists unmarked and readable:
+
+- **On open, by command.** `ch-mcp-server-visit-sensitive` reads a file
+  name and visits it with the flag already set, for the case the user
+  knows is sensitive and no pattern anticipated.
+- **On open, by pattern.** A declared list
+  (`ch-mcp-server-sensitive-file-patterns`, seed: `~/.authinfo*`,
+  `*.gpg`, `*.age`, `.env` and `.env.*`, and a project's declared
+  secrets file) auto-sets the flag from `find-file-hook` on any buffer
+  visiting a match, so routine sensitive files need no thought.
+
+Setting the flag on a buffer that already holds a secret still withholds
+it going forward, but that is the fallback; the point of the two paths
+above is to mark before the content arrives.
+
+This flag governs the buffer surfaces (the read tools and the mirror).
+It does not reach a file the agent's own CLI opens inside the sandbox;
+a file is kept from the CLI by not binding its directory into the jail
+(see the back contract's territory and the sandbox bind list), which is
+the isolation boundary, not this flag. The two together are the cover:
+the flag for buffers, the bind list for files.
 
 ## Back contract: child to parent
 
@@ -266,6 +302,10 @@ print a secret into a log.
 - A redaction placeholder never round-trips into a file: a redacted
   buffer is read-only.
 - The child is only a sandbox with the OS sandbox in place.
+- A sensitive buffer is withheld by an explicit user mark, not by the
+  scan; the mark is set before the secret arrives (on open, by command
+  or by pattern), and the scan is not trusted to catch what the user
+  already knows is sensitive.
 
 ## Dependencies
 
@@ -288,7 +328,14 @@ print a secret into a log.
 
 1. Parent side only: the buffer predicate at every resolver with
    `list-buffers` filtering, and the debug-knob latch. Stands alone and
-   narrows the tools that stay in the parent regardless.
+   narrows the tools that stay in the parent regardless. (Landed.)
+1b. The sensitive-buffer flag: the buffer-local
+   `ch-mcp-server-buffer-sensitive`, the predicate refusing it first,
+   the `ch-mcp-server-visit-sensitive` command, and the
+   `find-file-hook` auto-marking from `ch-mcp-server-sensitive-file-patterns`.
+   Parent-side and independent of the child, so it can land next to
+   phase 1; the mirror in phase 3 already refuses through the same
+   predicate.
 2. The child with configuration only, sandboxed, as the target for
    `eval-elisp`. This already answers every static question (keymaps,
    functions, defaults, features); the gated live path remains for
