@@ -204,18 +204,47 @@ variable, so a synced variable is an effect.
 The mirror also cannot answer questions about the parent's own runtime
 state, which is why those tools exist rather than an escape hatch.
 
+## The scan covers every file view, and is not a boundary
+
+The gitleaks scan runs on every path by which file content reaches the
+agent, not only the mirror. A buffer's text reaches the agent through
+the mirror (buffer-read tools, the file in the mirror directory) and is
+scanned there. A file's content also reaches the agent through the
+ordinary file-reading tools and through the CLI's own reads inside the
+sandbox; those pass through the scan too, or they are the bypass that
+makes redacting the mirror pointless (reading `~/.env` directly defeats
+a redacted mirror of it). Concretely: the file-reading tools scan and
+redact before returning, and the CLI sees only files inside the bwrap
+view, which holds the mirror and the bound project directories, so what
+it can open is the scanned set.
+
+The scan is accident-prevention, not access control, and edit is why it
+cannot be more. An edit verb that reports whether an `old_string`
+matched is an oracle: an agent can recover a secret it cannot read by
+proposing replacements and extending the confirmed prefix one
+match-or-no-match at a time, never reading the value. Redacting reads
+does nothing against this, and the matching cannot be redacted without
+breaking edit. So the scan stops a secret from landing in the agent's
+context by being read or shown; it does not stop a determined agent
+from extracting one it knows is there. The confidentiality boundary is
+isolation, what is never mirrored in and what the sandbox's filesystem
+view withholds, not the scan.
+
 ## Residual accepted surface
 
 Log text is only as clean as the latch and the scan: a bare secret with
 no recognizable shape passes, and a knob outside the declared list is
 invisible until someone adds it. The mirror is a snapshot and can lag
 the screen. A file that mixes a secret with settings the agent needs to
-edit is read-only for the agent; splicing the original spans back into
-returned text is deferred until that blocks real work, since it adds a
-clever path the rest of the design avoids. Same-user boundaries stay
-soft. This is accident-surface hardening for an agent expected to help
-debug, not an adversarial sandbox, and any program can print a secret
-into a log.
+edit has the secret redacted in the copy it sees, so an edit returned
+from that copy would carry the placeholder back; splicing the original
+spans back into returned text is deferred until that blocks real work,
+since it adds a clever path the rest of the design avoids, and until
+then such a buffer is effectively read-only through the mirror. The
+edit-oracle extraction above is accepted, not closed. Same-user
+boundaries stay soft. This is accident-surface hardening for an agent
+expected to help debug, not an adversarial sandbox, and any program can
+print a secret into a log.
 
 ## Settled
 
