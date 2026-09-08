@@ -7,21 +7,19 @@
 # model gets back.  Left out on purpose: "never", "grows", "seam",
 # and "rides", which have too many ordinary uses for a pattern.
 {
-  yours = {
-    pattern = "\\byours\\b";
-    rule = "a handoff names the next action, not the owner (\"X is yours\" is banned)";
-  };
-  # The same handoff with the owner named instead of "yours": a
-  # possessive left dangling at the end of a clause ("two steps are
-  # the owner's", "the rest is mine", "the choice is my own").  A
-  # possessive is elliptical when punctuation or the end of the line
-  # follows it rather than a noun, so "the owner's act" does not
-  # match.  The word before the apostrophe must not itself open with
-  # one, so a shell-quoted 'plural' passes; straight and curly
-  # apostrophes both count.  "mine" is always the pronoun in prose.
+  # The ownership handoff: a possessive left dangling at the end of a
+  # clause ("two steps are yours", "the merge is the owner's", "the
+  # rest is mine", "the choice is my own").  A noun possessive is
+  # elliptical when punctuation or the end of the line follows it
+  # rather than a noun, so "the owner's act" does not match; the word
+  # before the apostrophe must not itself open with one, so a
+  # shell-quoted 'plural' passes; straight and curly apostrophes both
+  # count.  "my own" follows the same punctuation rule.  The
+  # possessive pronouns (yours, mine, ours, theirs) are elliptical
+  # wherever they stand ("yours governs"), so they match anywhere.
   elliptical-possessive = {
-    pattern = "(^|[^'’[:alnum:]])([[:alnum:]][[:alnum:]_-]*('s|’s|s'|s’)|my own)[[:space:]]*([[:punct:]]|”|$)|\\bmine\\b";
-    rule = "no elliptical possessive (\"X is the owner's\", \"is mine\", \"is my own\"); say what happens next and who does it in a plain sentence";
+    pattern = "(^|[^'’[:alnum:]])([[:alnum:]][[:alnum:]_-]*('s|’s|s'|s’)|my own)[[:space:]]*([[:punct:]]|”|$)|\\b(yours|mine|ours|theirs)\\b";
+    rule = "no elliptical possessive (\"X is yours\", \"X is the owner's\", \"is mine\", \"is my own\"); a handoff names the next action and who does it in a plain sentence, not the owner";
   };
   em-dash = {
     pattern = "—";
