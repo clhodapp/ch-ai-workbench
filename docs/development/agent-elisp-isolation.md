@@ -255,17 +255,54 @@ state, which is why those tools exist rather than an escape hatch.
 
 ## The scan covers every file view, and is not a boundary
 
-The gitleaks scan runs on every path by which file content reaches the
-agent, not only the mirror. A buffer's text reaches the agent through
-the mirror (buffer-read tools, the file in the mirror directory) and is
-scanned there. A file's content also reaches the agent through the
-ordinary file-reading tools and through the CLI's own reads inside the
-sandbox; those pass through the scan too, or they are the bypass that
-makes redacting the mirror pointless (reading `~/.env` directly defeats
-a redacted mirror of it). Concretely: the file-reading tools scan and
-redact before returning, and the CLI sees only files inside the bwrap
-view, which holds the mirror and the bound project directories, so what
-it can open is the scanned set.
+The gitleaks scan runs on every path by which content reaches the
+agent's context, not only the mirror, and including the CLI's own
+built-in read tools, not only the MCP tools. Any read that would put
+bytes in the agent's context is scanned first; on a hit the content is
+returned redacted and the agent is told the redaction happened and
+which rule fired (see "Redact, tell, resubmit"). A buffer's text
+reaches the agent through the mirror (buffer-read tools, the file in the
+mirror directory) and is scanned there. A file's content reaches the
+agent through the MCP file-reading tools and through the CLI's own reads
+inside the sandbox; both are scanned, or they are the bypass that makes
+redacting the mirror pointless (reading `~/.env` directly would defeat a
+redacted mirror of it).
+
+There are two enforcement points, in two repos. The MCP server scans
+its own reads before returning them (workbench). The CLI's built-in
+reads are scanned by a read hook in the `claude-code` module (a
+`PreToolUse`-shaped interception on Read and the file-reading tools);
+this is the point that makes "built-in tools" real rather than aspira-
+tional, and it lives where the CLI's hooks live, not in the MCP server.
+One gap is named honestly: a raw shell read (`cat` of a bound file) is
+not a tool call the hook sees, so it is covered only insofar as the
+bound content was itself scanned or the bytes are a mirror file already
+scanned; a secret in an unscanned bound directory that the agent
+`cat`s is out of reach of this mechanism and stays a matter for the
+sandbox bind list, which is the actual boundary.
+
+### Redact, tell, resubmit
+
+A scan hit does not fail the read. The content comes back with the
+matched spans redacted, and the tool result carries a note: a redaction
+occurred, on rule X, at these positions. The agent proceeds on the
+redacted text, which is the common case (it wanted the file, not the
+secret in it).
+
+When the agent genuinely needs the real bytes, it resubmits the same
+read. The second submission of an identical read is what asks for the
+unredacted content, and it raises a prompt to the user; the real bytes
+cross only on approval, and a denial returns the redacted text again.
+The resubmit is recognized as the same read by an idempotency key over
+the request (tool, target, range), so a later unrelated read of the
+same path is a first submission and is redacted afresh, not silently
+approved by a stale key. The key is single-use: one approval clears one
+resubmitted read, not a standing exemption for the path. This keeps the
+default safe (every read redacts, no content leaks without a user in
+the loop) while leaving a deliberate, logged path to the real value
+when the work needs it, which is the same consent posture as the rest
+of the design: routine reads are automatic, the one that crosses a
+sensitive boundary is the user's to allow.
 
 The scan is accident-prevention, not access control, and edit is why it
 cannot be more, in two ways. First, an edit verb that reports whether an
@@ -322,6 +359,12 @@ print a secret into a log.
 - Terminals are the one buffer kind sensitive by default, withheld
   until the user toggles a given one visible; every other kind is
   visible unless marked.
+- Every read into the agent's context is scanned and redacted by
+  default, the CLI's built-in reads included; the unredacted bytes
+  cross only when the agent resubmits the identical read and the user
+  approves that resubmission. Redaction is the default, de-redaction is
+  user-gated, and a raw shell `cat` of an unscanned bound path is the
+  named gap the sandbox bind list covers instead.
 
 ## Dependencies
 
@@ -345,6 +388,10 @@ print a secret into a log.
   toggled it visible, and must not assume otherwise. A cross-repo change,
   landing with phase 1b.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
+- **The `claude-code` module** gains the read hook that scans and
+  redacts the CLI's built-in reads and implements the resubmit-to-prompt
+  flow. It lives with the CLI's other hooks, not in the MCP server, and
+  is the second of the two enforcement points above.
 
 ## Phases
 
@@ -367,7 +414,13 @@ print a secret into a log.
 3. The mirror (forward contract, incremental sync, secret scan) and the
    back channel; both transform modes move to the child, the elisp one
    and the CLI one; the gated live evaluation is deleted; named tools
-   replace it for session facts.
+   replace it for session facts. The MCP read tools scan and redact
+   here.
+4. The CLI-side read hook in the `claude-code` module: scan and redact
+   the built-in reads, with the redact-tell-resubmit-prompt flow.
+   Depends on the scan existing (phase 3) and on the sandbox bind list
+   (phase 2), and completes "every read into context is scanned" for
+   the CLI's own tools.
 
 The `parenting` `:sandbox` work can precede phase 2 or land alongside
 it.
