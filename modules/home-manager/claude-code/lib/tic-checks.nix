@@ -11,6 +11,18 @@
     pattern = "\\byours\\b";
     rule = "a handoff names the next action, not the owner (\"X is yours\" is banned)";
   };
+  # The same handoff with the owner named instead of "yours": a
+  # possessive left dangling at the end of a clause ("two steps are
+  # the owner's", "the rest is mine", "the choice is my own").  A
+  # possessive is elliptical when punctuation or the end of the line
+  # follows it rather than a noun, so "the owner's act" does not
+  # match.  The word before the apostrophe must not itself open with
+  # one, so a shell-quoted 'plural' passes; straight and curly
+  # apostrophes both count.  "mine" is always the pronoun in prose.
+  elliptical-possessive = {
+    pattern = "(^|[^'’[:alnum:]])([[:alnum:]][[:alnum:]_-]*('s|’s|s'|s’)|my own)[[:space:]]*([[:punct:]]|”|$)|\\bmine\\b";
+    rule = "no elliptical possessive (\"X is the owner's\", \"is mine\", \"is my own\"); say what happens next and who does it in a plain sentence";
+  };
   em-dash = {
     pattern = "—";
     rule = "no em-dashes; use a comma, a colon, parentheses, or a separate sentence";
