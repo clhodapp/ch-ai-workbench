@@ -71,14 +71,16 @@ already does.
 request under the two contracts below.
 
 **The agent's CLI** runs inside the same bwrap filesystem view as the
-child, so the mirror directory is a second read surface: a buffer's
-inert text can be materialized as a file there and the agent works it
-with its ordinary command-line tools (ripgrep, sed, its own ranged
-reads) with no Emacs round-trip. The child Emacs reads the mirror as a
-buffer; the agent reads the same bytes as a file. Both come from the
-one forward contract and pass the one set of filters, so the file the
-agent sees is exactly the redacted, in-scope, unlatched text the child
-sees, and no unfiltered path reaches the CLI.
+child, which makes a second editing mode possible: the CLI transform
+(see "What runs where"). A buffer's inert text is materialized as a
+file in the mirror directory, and the agent edits it with its ordinary
+command-line tools (ripgrep, sed, its own ranged reads and writes) with
+no Emacs round-trip; the edited text lands through the same back
+channel as an elisp transform. The child Emacs reads the mirror as a
+buffer; the agent reads and writes the same bytes as a file. Both come
+from the one forward contract and pass the one set of filters, so the
+file the agent sees is exactly the redacted, in-scope, unlatched text
+the child sees, and no unfiltered path reaches the CLI.
 
 ## Forward contract: parent to child
 
@@ -98,17 +100,12 @@ which buffers changed since the last mirror, and only those are re-sent.
 
 The same text is also written to a file in the mirror directory, named
 for the buffer (the file name's basename when it has one, else a
-sanitized buffer name), so the agent's CLI can read a live in-memory
-buffer as an ordinary file. A tool asks for this by buffer name; the
-parent runs the buffer through the same three filters, writes the
-result into the mirror directory, and returns the in-jail path. A
-buffer the filters refuse yields no file and an error naming the
-reason, so the file surface never leaks what the buffer-read tools
-would refuse. The file is a copy, not the buffer: editing it in place
-changes nothing in Emacs. To land an edit the agent returns text
-through the back channel below, which is the one write path and carries
-all of its checks; there is no write-back by leaving the mirror file
-changed.
+sanitized buffer name). This is the file half of the CLI transform (see
+"What runs where"): a tool asks for it by buffer name, the parent runs
+the buffer through the same three filters, writes the result into the
+mirror directory, and returns the in-jail path. A buffer the filters
+refuse yields no file and an error naming the reason, so this surface
+never exposes what the buffer-read tools would refuse.
 
 Three filters apply, in this order.
 
@@ -186,11 +183,19 @@ variable, so a synced variable is an effect.
 
 - `eval-elisp` runs in the child, ungated, as a `parenting` task with a
   timeout and cancellation. The syntactic gate leaves this path.
-- `transform` runs in the child against the mirrored buffer and returns
-  text over the back channel. The editing registry retires with it.
-- A buffer materializes as a file in the mirror directory on request,
-  for the agent's CLI to read with its own tools. Read-only; an edit
-  lands only through the back channel.
+- A buffer transform comes in two modes, siblings that differ only in
+  what does the editing. Both run in the child against the mirrored
+  buffer and both land the result through the one back channel. The
+  **elisp transform** evaluates a form in the child Emacs (the existing
+  `transform`, now ungated because the child is the sandbox; the editing
+  registry retires with the gate). The **CLI transform** materializes
+  the buffer as a file in the mirror directory and hands the agent that
+  path; the agent edits the file with its own command-line tools, and
+  the file's text is what returns. A read is the CLI transform with no
+  edit: ask for the file, read it, return nothing. The file is a copy,
+  so leaving it changed lands nothing on its own; only the returned text
+  crosses the back channel, which is the single write path with all its
+  checks.
 - Session facts that are not text (Evil state, a terminal's input mode,
   hook lists, which features are loaded, what a key resolves to in the
   live session) are answered by small named read-only tools in the
@@ -250,10 +255,10 @@ into a log.
    `eval-elisp`. This already answers every static question (keymaps,
    functions, defaults, features); the gated live path remains for
    session facts until the named tools exist.
-3. The mirror (forward contract, incremental sync, secret scan), the
-   file surface in the mirror directory for the agent's CLI, and the
-   back channel; `transform` moves; the gated live evaluation is
-   deleted; named tools replace it for session facts.
+3. The mirror (forward contract, incremental sync, secret scan) and the
+   back channel; both transform modes move to the child, the elisp one
+   and the CLI one; the gated live evaluation is deleted; named tools
+   replace it for session facts.
 
 The `parenting` `:sandbox` work can precede phase 2 or land alongside
 it.
