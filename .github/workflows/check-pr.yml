@@ -163,7 +163,7 @@ jobs:
             cut -c 12-43 "$RUNNER_TEMP/closure" | xargs -P 32 -I{} sh -c \
               'if curl -sfI --retry 3 -o /dev/null "$1/$2.narinfo"; then echo "$2"; fi' _ "$cache" {}
           done | sort -u > "$RUNNER_TEMP/served"
-          awk 'NR == FNR { served[$1] = 1; next } !(substr($0, 12, 32) in served)' \
+          awk 'FILENAME == ARGV[1] { served[$1] = 1; next } !(substr($0, 12, 32) in served)' \
             "$RUNNER_TEMP/served" "$RUNNER_TEMP/closure" > "$own/paths"
           echo "This build: $(wc -l < "$RUNNER_TEMP/closure") paths in the closure, $(wc -l < "$RUNNER_TEMP/served") served upstream, $(wc -l < "$own/paths") kept."
 
@@ -216,7 +216,7 @@ jobs:
           }
           entry_size() {
             # The size of an entry holding what the given roots list.
-            listed_paths "$@" | awk 'NR == FNR { size[$1] = $2; next } { total += size[substr($0, 12, 32)] } END { print total + 0 }' "$RUNNER_TEMP/sizes" -
+            listed_paths "$@" | awk 'FILENAME == ARGV[1] { size[$1] = $2; next } { total += size[substr($0, 12, 32)] } END { print total + 0 }' "$RUNNER_TEMP/sizes" -
           }
 
           # 5. Keep the highest-priority roots that fit, drop the rest.
