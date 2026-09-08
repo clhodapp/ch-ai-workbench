@@ -93,7 +93,8 @@ variables, no processes. The child recreates an ordinary in-memory
 buffer and picks its major mode itself with `set-auto-mode` from the
 file name, so sexp motion and indentation work for editing; a buffer
 without a file stays in `fundamental-mode`. A terminal buffer may be a
-source; what arrives is its text.
+source once the user has exposed it (terminals are sensitive by
+default, below); what arrives is its text.
 
 Syncing is incremental: `buffer-chars-modified-tick` tells the parent
 which buffers changed since the last mirror, and only those are re-sent.
@@ -120,7 +121,8 @@ Three filters apply, in this order.
    declared list of hidden names (seed: `*gptel-log*`). The same
    predicate is applied at every place the parent resolves a buffer by
    name, and `list-buffers` omits what it hides rather than listing it.
-   Terminals stay visible.
+   A terminal (`ghostel-mode`) is sensitive by default (see "Marking a
+   buffer sensitive"), so it is withheld until the user exposes it.
 
 2. **The debug-knob latch**, for the log buffers `*Messages*`,
    `*Warnings*`, and `*Backtrace*`. A declared list names the variables
@@ -186,6 +188,17 @@ buffer never exists unmarked and readable:
 Setting the flag on a buffer that already holds a secret still withholds
 it going forward, but that is the fallback; the point of the two paths
 above is to mark before the content arrives.
+
+**Terminals are sensitive by default.** A `ghostel-mode` buffer shows
+whatever ran in it, an echoed password, a token in a command line, the
+output of `env`, so it is treated as sensitive without a mark: the
+predicate refuses any `ghostel-mode` buffer unless the user has marked
+it exposed. This inverts the flag for that one buffer kind. A toggle,
+`ch-mcp-server-toggle-terminal-visible`, run in a terminal the user
+knows is safe, flips it visible (and back); it is the quick per-buffer
+override the default is built to require. Everything else stays
+visible-by-default and is withheld only by an explicit sensitive mark;
+terminals are the sole kind that starts hidden.
 
 This flag governs the buffer surfaces (the read tools and the mirror).
 It does not reach a file the agent's own CLI opens inside the sandbox;
@@ -306,6 +319,9 @@ print a secret into a log.
   scan; the mark is set before the secret arrives (on open, by command
   or by pattern), and the scan is not trusted to catch what the user
   already knows is sensitive.
+- Terminals are the one buffer kind sensitive by default, withheld
+  until the user toggles a given one visible; every other kind is
+  visible unless marked.
 
 ## Dependencies
 
@@ -322,6 +338,12 @@ print a secret into a log.
   unavailable.
 - **The editor layer** gains a mirror-profile option: no language-server
   autostart, no process-spawning modes.
+- **The `ghostel-terminals` skill** (shipped from ch-emacs-config, which
+  owns ghostel) currently tells the agent terminals are always readable
+  buffers. Terminals sensitive-by-default reverses that, so the skill
+  must change with it: the agent sees a terminal only once the user has
+  toggled it visible, and must not assume otherwise. A cross-repo change,
+  landing with phase 1b.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
 
 ## Phases
@@ -333,9 +355,11 @@ print a secret into a log.
    `ch-mcp-server-buffer-sensitive`, the predicate refusing it first,
    the `ch-mcp-server-visit-sensitive` command, and the
    `find-file-hook` auto-marking from `ch-mcp-server-sensitive-file-patterns`.
-   Parent-side and independent of the child, so it can land next to
-   phase 1; the mirror in phase 3 already refuses through the same
-   predicate.
+   Terminals sensitive by default with the
+   `ch-mcp-server-toggle-terminal-visible` override, and the matching
+   `ghostel-terminals` skill update in ch-emacs-config. Parent-side and
+   independent of the child, so it can land next to phase 1; the mirror
+   in phase 3 already refuses through the same predicate.
 2. The child with configuration only, sandboxed, as the target for
    `eval-elisp`. This already answers every static question (keymaps,
    functions, defaults, features); the gated live path remains for
