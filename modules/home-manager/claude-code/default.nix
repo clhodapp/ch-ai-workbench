@@ -471,7 +471,7 @@ in
         which denies an edit or write once with the findings and lets
         an identical re-issue through. Merged across all
         modules that set it. This module seeds the peer-programmer
-        style's regex-catchable bans (lib/tic-checks.nix): yours,
+        style's regex-catchable bans (lib/tic-checks.nix):
         elliptical-possessive, em-dash, click, arrow,
         relationship-words, performed-enthusiasm.
       '';
