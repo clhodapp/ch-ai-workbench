@@ -334,7 +334,12 @@ classifier, registered user-level global by an activation merge into
 out-of-territory Edit/Write through the
 `$XDG_RUNTIME_DIR/claude-consent` spool, and `claude-consent.el`
 (claude-queue's package directory) is the filenotify-driven
-viewer/answerer over it.
+viewer/answerer over it. Since 2026-09-09 the hook asks through
+`claude-consent ask` (the prompt API over the spool,
+`pkgs/claude-consent`): Emacs answers while `claude-consent-mode` is
+on, a terminal running `claude-consent watch` answers the same way,
+and with no answerer attached the hook emits `permissionDecision:
+ask` (design: workspace `consent-gate.md` § Prompt API).
 
 - **PreToolUse hooks fire and gate inside `-p` stream-json sessions.**
   The stdin payload carries `tool_name`, the full `tool_input`,
@@ -388,6 +393,13 @@ viewer/answerer over it.
   deadlines therefore live inside the hook (self-answer with an
   actionable deny before dying); the declared timeout is only a
   liveness backstop against a hung hook.
+- **`PermissionRequest` is a documented event** (hooks reference,
+  read 2026-09-09; not probed here): it fires after PreToolUse when a
+  call needs a permission decision, matches on tool name, and takes
+  `permissionDecision` allow/deny through JSON only (exit 2 is not
+  honored for it). It is the natural tap for routing the CLI's own
+  permission prompts (a command outside the sandbox, say) into the
+  consent spool; whether it fires in headless sessions is unverified.
 - **Consumer note:** a session blocked in a synchronous PreToolUse
   hook reports `state=working` / `status=busy`, never `blocked` — the
   CLI cannot see that the hook is waiting on a human. Any external

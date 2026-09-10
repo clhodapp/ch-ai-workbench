@@ -37,9 +37,12 @@ declared into a manifest, merges that into the live settings, and leaves
 anything you added by hand alone.
 
 **The two halves talking.** A session's working directory follows into
-Emacs, an edit-consent gate answers from a spool Emacs writes, mermaid
-blocks render in message display, and the `emacs-tools` skill documents
-the MCP tools for the agent reading them.
+Emacs; hooks ask the user questions through the `claude-consent` spool,
+where Emacs answers from a menu, a terminal can answer instead
+(`claude-consent watch`, or `claude-consent answer TOKEN` later), and a
+plain allow/deny with nobody attached falls back to the CLI's own
+prompt; mermaid blocks render in message display; and the
+`emacs-tools` skill documents the MCP tools for the agent reading them.
 
 ## Use it
 

@@ -21,8 +21,7 @@
 (declare-function claude-consent-mode "claude-consent")
 (declare-function claude-consent-list "claude-consent")
 (declare-function claude-consent-open "claude-consent")
-(declare-function claude-consent-allow "claude-consent")
-(declare-function claude-consent-deny "claude-consent")
+(declare-function claude-consent-answer "claude-consent")
 (declare-function evil-global-set-key "evil-core")
 (declare-function evil-define-key* "evil-core")
 (defvar claude-queue-list-mode-map)
@@ -82,11 +81,12 @@
       "a" #'claude-queue-transcript-attach)))
 
 ;; The consent answering surface (same package as claude-queue).
-;; Armed at startup, not on first queue use: escalations from
-;; already-running dispatched sessions must surface -- as the
-;; mode-line count and a message -- without any queue buffer open.
-;; The mode degrades to off with a message when the spool cannot be
-;; created (e.g. no runtime dir), so headless inits stay clean.
+;; Armed at startup, not on first queue use: while the mode is on this
+;; Emacs is registered as an attached answerer, and prompts from
+;; already-running sessions must surface -- as the mode-line count
+;; and a message -- without any queue buffer open.  The mode degrades
+;; to off with a message when the spool cannot be created (e.g. no
+;; runtime dir), so headless inits stay clean.
 (use-package claude-consent
   :demand t
   :commands (claude-consent-list)
@@ -96,9 +96,7 @@
     (evil-global-set-key 'motion (kbd "<leader> a c") #'claude-consent-list)
     (evil-define-key* 'normal claude-consent-list-mode-map
       (kbd "RET") #'claude-consent-open
-      "a" #'claude-consent-allow
-      "d" #'claude-consent-deny
+      "a" #'claude-consent-answer
       "gr" #'revert-buffer)
     (evil-define-key* 'normal claude-consent-detail-mode-map
-      "a" #'claude-consent-allow
-      "d" #'claude-consent-deny)))
+      "a" #'claude-consent-answer)))

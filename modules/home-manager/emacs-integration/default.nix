@@ -11,8 +11,11 @@
 #     (claude-queue follow-mode), on CwdChanged and on the worktree
 #     tools, which chdir without emitting CwdChanged;
 #   - a consent hook classifying edit territory for Emacs-dispatched
-#     headless sessions, plus the deny rule that keeps sessions out of
-#     the spool it reads;
+#     headless sessions, asking the user through the claude-code
+#     module's claude-consent tool (Emacs answers while
+#     claude-consent-mode is on; without an answerer the hook falls
+#     back to the CLI's own prompt), plus the deny rule that keeps
+#     sessions out of the spool it reads;
 #   - the emacs-tools skill, usage depth for the MCP server's agent
 #     tools.
 #
@@ -53,13 +56,9 @@ let
     '';
   };
 
-  consentHook = pkgs.writeShellApplication {
-    name = "emacs-claude-consent-hook";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.jq
-    ];
-    text = builtins.readFile ../emacs/lib/emacs-claude-consent-hook.sh;
+  consentHook = import ../emacs/lib/emacs-claude-consent-hook.nix {
+    inherit pkgs;
+    claude-consent = config.ch-ai-workbench.claude-code.consentPackage;
   };
 
   # Renders mermaid blocks as Claude displays them. merman supplies the
