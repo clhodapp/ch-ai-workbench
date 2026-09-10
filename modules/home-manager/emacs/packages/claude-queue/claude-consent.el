@@ -1,36 +1,42 @@
-;;; claude-consent.el --- Consent spool for headless Claude sessions -*- lexical-binding: t -*-
+;;; claude-consent.el --- Answer Claude Code hook prompts from Emacs -*- lexical-binding: t -*-
 ;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
-;; The Emacs half of the consent-gate design (ch-nix-workspace
-;; docs/development/consent-gate.md).  Dispatched headless Claude Code
-;; sessions run under a PreToolUse territory classifier
-;; (emacs-claude-consent-hook); when a session's Edit/Write leaves its
-;; territory, the blocked hook writes a request into the
-;; pending-consent spool ($XDG_RUNTIME_DIR/claude-consent) and polls
-;; for an answer file.  This package is the viewer/answerer over that
-;; spool: a filenotify-driven list of pending requests, a detail view
-;; of the escalated edit, per-request allow/deny, and the
-;; territory-record API the dispatcher (claude-queue) writes through.
+;; The Emacs answerer for the consent spool (ch-nix-workspace
+;; docs/development/consent-gate.md).  Claude Code hooks raise
+;; questions for the user through `claude-consent ask', which writes a
+;; pending record into $XDG_RUNTIME_DIR/claude-consent and waits for
+;; an answer file; this package is one answerer over that spool: a
+;; filenotify-driven list of open prompts, a detail view (the
+;; escalated edit, rendered from the hook payload the record carries),
+;; and a menu over the prompt's options, plus the territory-record API
+;; the dispatcher (claude-queue) writes through.
 ;;
-;; Emacs never talks to the CLI -- the blocked hook process is the
-;; verdict courier in both directions -- so an Emacs restart just
-;; re-reads the spool, and requests whose hook process died are pruned
-;; on read rather than trusting cleanup events.  Answers are per-call
-;; and never memoized: a re-ask re-escalates.  A session parked in the
-;; hook reports working/busy to the CLI, never blocked; the queue list
-;; joins this spool by session id to show "consent ‹n›", and the
-;; global mode's mode-line count covers frames without a list.
+;; While `claude-consent-mode' is on, Emacs is registered as an
+;; attached answerer (handlers/emacs.json, keyed by this process's
+;; pid); a hook that finds an attached answerer waits for its answer,
+;; and one that finds none falls back to the CLI's own prompt or to a
+;; stored answer given later in a terminal (`claude-consent answer').
+;; Emacs never talks to the CLI -- the waiting hook process is the
+;; verdict courier -- so an Emacs restart just re-reads the spool.
+;; Records whose waiter is gone, or whose stored deadline passed, are
+;; pruned on read rather than trusting cleanup events.  Answers are
+;; per-request and never memoized: a re-ask re-escalates.  A session
+;; parked in a hook reports working/busy to the CLI, never blocked;
+;; the queue list joins this spool by session id to show "consent
+;; ‹n›", and the global mode's mode-line count covers frames without
+;; a list.
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'filenotify)
 (require 'seq)
 (require 'subr-x)
 (require 'tabulated-list)
 
 (defgroup claude-consent nil
-  "Answer consent requests from headless Claude Code sessions."
+  "Answer prompts raised by Claude Code hooks."
   :group 'tools
   :prefix "claude-consent-")
 
@@ -38,15 +44,19 @@
   (expand-file-name "claude-consent"
                     (or (getenv "XDG_RUNTIME_DIR")
                         (format "/run/user/%d" (user-uid))))
-  "Consent spool directory shared with the PreToolUse hook.
-Holds territory/ (dispatch-time grants keyed by agent id), pending/
-(requests written by blocked hooks), and answers/ (verdicts written
-here, picked up by the hook's poll)."
+  "Consent spool directory shared with the hooks (`claude-consent').
+Holds territory/ (dispatch-time grants keyed by agent id), handlers/
+(attached answerers), pending/ (prompts written by hooks), answers/
+(answers written here, picked up by the waiting hook), and log/
+(output of asynchronous re-entries)."
   :type 'directory
   :group 'claude-consent)
 
 (defconst claude-consent--list-buffer "*claude-consent*"
-  "Name of the pending-request list buffer.")
+  "Name of the pending-prompt list buffer.")
+
+(defconst claude-consent--handler-name "emacs"
+  "This answerer's name in the spool's handlers/ directory.")
 
 ;;; Spool primitives
 
@@ -56,10 +66,9 @@ here, picked up by the hook's poll)."
 
 (defun claude-consent-ensure-directories ()
   "Create the spool layout owner-only and return the spool root."
-  (dolist (dir (list claude-consent-directory
-                     (claude-consent--subdirectory "territory")
-                     (claude-consent--subdirectory "pending")
-                     (claude-consent--subdirectory "answers")))
+  (dolist (dir (cons claude-consent-directory
+                     (mapcar #'claude-consent--subdirectory
+                             '("territory" "handlers" "pending" "answers" "log"))))
     (make-directory dir t))
   (set-file-modes claude-consent-directory #o700)
   claude-consent-directory)
@@ -75,10 +84,10 @@ here, picked up by the hook's poll)."
 
 (defun claude-consent--write-json (file object)
   "Serialize OBJECT (an alist) to FILE atomically (write then rename).
-The hook polls the answers directory, so a partially written file
-must never be visible under its final name.
+Every reader polls, so a partially written file must never be
+visible under its final name.
 
-The file is a protocol surface read by the bash hook, so it is
+The file is a protocol surface read by other programs, so it is
 always UTF-8 regardless of the daemon's locale.  `json-serialize'
 returns a unibyte string (Emacs 30); inserting that as-is would
 plant raw-byte characters in the buffer, which no Unicode coding
@@ -89,6 +98,10 @@ for a coding system on every non-ASCII name."
     (with-temp-file tmp
       (insert (decode-coding-string (json-serialize object) 'utf-8)))
     (rename-file tmp file t)))
+
+(defun claude-consent--pid-live-p (pid)
+  "Whether process PID exists."
+  (and pid (file-directory-p (format "/proc/%s" pid))))
 
 ;;; Territory records (the dispatcher's API)
 
@@ -125,12 +138,43 @@ record's file name."
     (when (file-exists-p file)
       (ignore-errors (delete-file file)))))
 
+;;; Handler registration (this Emacs as an attached answerer)
+
+(defun claude-consent--handler-file ()
+  "Path of this answerer's registration in the spool."
+  (expand-file-name (concat claude-consent--handler-name ".json")
+                    (claude-consent--subdirectory "handlers")))
+
+(defun claude-consent-register-handler ()
+  "Register this Emacs as an attached answerer, keyed by its pid.
+A hook finding a live registration waits for an answer from the
+spool instead of falling back; the registration is live exactly as
+long as this process is, so a crash needs no cleanup."
+  (claude-consent-ensure-directories)
+  (claude-consent--write-json
+   (claude-consent--handler-file)
+   `((name . ,claude-consent--handler-name)
+     (pid . ,(emacs-pid))
+     (created . ,(floor (float-time)))))
+  (claude-consent--handler-file))
+
+(defun claude-consent-remove-handler ()
+  "Withdraw this Emacs as an attached answerer."
+  (let ((file (claude-consent--handler-file)))
+    (when (file-exists-p file)
+      (ignore-errors (delete-file file)))))
+
 ;;; Pending requests
 
-(defun claude-consent--hook-live-p (request)
-  "Whether the hook process that spooled REQUEST is still alive."
-  (when-let* ((pid (alist-get 'pid request)))
-    (file-directory-p (format "/proc/%s" pid))))
+(defun claude-consent--request-stale-p (request)
+  "Whether nothing can still consume REQUEST.
+A blocking or waiter record is stale once the process named by its
+pid is gone; a stored record (nobody waits, the answer is kept for a
+later ask) is stale once its deadline passed."
+  (if (equal (alist-get 'mode request) "stored")
+      (let ((deadline (alist-get 'deadline request)))
+        (and (numberp deadline) (<= deadline (float-time))))
+    (not (claude-consent--pid-live-p (alist-get 'pid request)))))
 
 (defun claude-consent--answer-file (id)
   "Answer-file path for request ID."
@@ -138,16 +182,16 @@ record's file name."
                     (claude-consent--subdirectory "answers")))
 
 (defun claude-consent-pending-requests ()
-  "Pending consent requests as alists, oldest first.
-A killed session orphans its request, so entries whose hook pid is
-dead are pruned here -- on read -- along with any answer file they
-never consumed; unparseable files are skipped."
+  "Pending requests as alists, oldest first.
+Stale entries (see `claude-consent--request-stale-p') are pruned
+here -- on read -- along with any answer file they never consumed;
+unparseable files are skipped."
   (let ((dir (claude-consent--subdirectory "pending"))
         (requests nil))
     (when (file-directory-p dir)
       (dolist (file (directory-files dir t "\\.json\\'"))
         (when-let* ((request (claude-consent--read-json file)))
-          (if (claude-consent--hook-live-p request)
+          (if (not (claude-consent--request-stale-p request))
               (push request requests)
             (ignore-errors (delete-file file))
             (when-let* ((id (alist-get 'id request)))
@@ -174,31 +218,70 @@ REQUESTS avoids a re-read when the caller already fetched
         ((< seconds 60) (format "%ds" seconds))
         (t (format "%dm%02ds" (/ seconds 60) (% seconds 60)))))
 
+;;; The prompt inside a request
+
+(defun claude-consent--prompt (request)
+  "The question REQUEST carries: title, detail, options, free_text."
+  (alist-get 'prompt request))
+
+(defun claude-consent--options (request)
+  "REQUEST's options, each an alist of value, label, and optional text."
+  (alist-get 'options (claude-consent--prompt request)))
+
+(defun claude-consent--hook (request)
+  "The hook context REQUEST carries: tool_name, tool_input, cwd."
+  (alist-get 'hook request))
+
+(defun claude-consent--target (request)
+  "The file the escalated tool call targets, or nil."
+  (alist-get 'file_path (alist-get 'tool_input (claude-consent--hook request))))
+
+(defun claude-consent--title (request)
+  "The one-line question of REQUEST."
+  (or (alist-get 'title (claude-consent--prompt request))
+      (format "%s outside territory"
+              (or (alist-get 'tool_name (claude-consent--hook request)) "?"))))
+
+(defun claude-consent--option-keys (options)
+  "One distinct key character per option, as the tool derives them:
+the first character of the value when free, else the lowest free
+digit, so Emacs and the terminal show the same keys."
+  (let ((keys nil))
+    (dolist (option options)
+      (let* ((value (format "%s" (or (alist-get 'value option) "")))
+             (candidate (and (> (length value) 0)
+                             (downcase (aref value 0)))))
+        (unless (and candidate
+                     (not (memq candidate keys))
+                     (or (and (>= candidate ?a) (<= candidate ?z))
+                         (and (>= candidate ?0) (<= candidate ?9))))
+          (setq candidate (seq-find (lambda (digit) (not (memq digit keys)))
+                                    (number-sequence ?1 ?9))))
+        (push candidate keys)))
+    (nreverse keys)))
+
 ;;; Answering
 
 (defvar-local claude-consent--request nil
   "Request rendered by this detail buffer, or nil elsewhere.")
 
-(defun claude-consent--deliver (request decision &optional reason)
-  "Write DECISION (`allow' or `deny') for REQUEST, with optional REASON.
-The blocked hook's poll picks the answer up and emits the
-permissionDecision; the answer covers exactly this request and is
-never replayed -- a re-ask re-escalates."
+(defun claude-consent--deliver (request value &optional text)
+  "Write VALUE (an option value string) for REQUEST, with optional TEXT.
+The waiting hook process picks the answer up; the answer covers
+exactly this request and is never replayed -- a re-ask re-escalates."
   (let ((id (alist-get 'id request)))
     (unless id
       (user-error "Malformed consent request (no id)"))
-    (unless (claude-consent--hook-live-p request)
-      (user-error "The requesting hook is gone; nothing to answer"))
+    (when (claude-consent--request-stale-p request)
+      (user-error "The request is stale (its waiter is gone or its deadline passed)"))
     (claude-consent--write-json
      (claude-consent--answer-file id)
      (append `((id . ,id)
-               (decision . ,(symbol-name decision)))
-             (when (and reason (not (string-blank-p reason)))
-               `((reason . ,reason)))))
-    (message "claude-consent: %s %s -> %s"
-             (symbol-name decision)
-             (or (alist-get 'tool_name request) "?")
-             (alist-get 'target request))))
+               (value . ,value)
+               (answered . ,(floor (float-time))))
+             (when (and text (not (string-blank-p text)))
+               `((text . ,text)))))
+    (message "claude-consent: %s -> %s" (claude-consent--title request) value)))
 
 (defun claude-consent--request-here ()
   "The consent request this buffer or line refers to."
@@ -206,17 +289,39 @@ never replayed -- a re-ask re-escalates."
       (tabulated-list-get-id)
       (user-error "No consent request here")))
 
-(defun claude-consent-allow ()
-  "Allow the consent request at point (this call only)."
-  (interactive)
-  (claude-consent--deliver (claude-consent--request-here) 'allow)
-  (claude-consent--after-answer))
+(defun claude-consent--read-answer (request)
+  "Ask the user for REQUEST's answer; return (VALUE . TEXT).
+A menu over the prompt's options, with free text where the prompt
+or the chosen option asks for it."
+  (let* ((prompt (claude-consent--prompt request))
+         (options (claude-consent--options request))
+         (keys (claude-consent--option-keys options))
+         (free-text (alist-get 'free_text prompt))
+         (choices (append
+                   (cl-mapcar (lambda (key option)
+                                (list key (format "%s" (or (alist-get 'label option)
+                                                           (alist-get 'value option)))))
+                              keys options)
+                   (when free-text
+                     (list (list ?t (format "%s (free text)" free-text))))))
+         (chosen (car (read-multiple-choice
+                       (claude-consent--title request) choices))))
+    (if (and free-text (eq chosen ?t)
+             (not (memq ?t keys)))
+        (cons "text" (read-string (format "%s: " free-text)))
+      (let* ((index (seq-position keys chosen))
+             (option (nth index options))
+             (text-prompt (alist-get 'text option)))
+        (cons (format "%s" (alist-get 'value option))
+              (and text-prompt (read-string (format "%s: " text-prompt))))))))
 
-(defun claude-consent-deny (reason)
-  "Deny the consent request at point, sending REASON back to the model."
-  (interactive (list (read-string "Deny reason (returned to the model): ")))
-  (claude-consent--deliver (claude-consent--request-here) 'deny reason)
-  (claude-consent--after-answer))
+(defun claude-consent-answer ()
+  "Answer the consent request at point from a menu of its options."
+  (interactive)
+  (let* ((request (claude-consent--request-here))
+         (answer (claude-consent--read-answer request)))
+    (claude-consent--deliver request (car answer) (cdr answer))
+    (claude-consent--after-answer)))
 
 (defun claude-consent--after-answer ()
   "Leave an answered detail view; refresh what remains."
@@ -228,13 +333,12 @@ never replayed -- a re-ask re-escalates."
 
 (defvar claude-consent-detail-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map "a" #'claude-consent-allow)
-    (define-key map "d" #'claude-consent-deny)
+    (define-key map "a" #'claude-consent-answer)
     map)
   "Keymap for `claude-consent-detail-mode'.")
 
 (define-derived-mode claude-consent-detail-mode special-mode "Claude-Consent-Detail"
-  "One escalated edit, rendered for a decision.
+  "One prompt from a Claude Code hook, rendered for an answer.
 
 \\{claude-consent-detail-mode-map}")
 
@@ -247,34 +351,43 @@ never replayed -- a re-ask re-escalates."
 
 (defun claude-consent--render-request (request)
   "Fill the current buffer with a decision view of REQUEST."
-  (let* ((input (alist-get 'tool_input request))
+  (let* ((prompt (claude-consent--prompt request))
+         (hook (claude-consent--hook request))
+         (input (alist-get 'tool_input hook))
          (territory (alist-get 'territory request))
-         (tool (or (alist-get 'tool_name request) "?"))
-         (target (or (alist-get 'target request)
-                     (alist-get 'file_path input)
-                     "?")))
-    (insert (propertize (format "%s outside territory\n" tool) 'face 'warning))
+         (tool (alist-get 'tool_name hook))
+         (target (claude-consent--target request))
+         (options (claude-consent--options request))
+         (keys (claude-consent--option-keys options)))
+    (insert (propertize (format "%s\n" (claude-consent--title request)) 'face 'warning))
     (insert (format "Session:   %s%s\n"
                     (or (alist-get 'session_id request) "?")
                     (if-let* ((name (alist-get 'name territory)))
                         (format "  (%s)" name)
                       "")))
-    (insert (format "Target:    %s\n" (abbreviate-file-name target)))
-    (insert (format "Cwd:       %s\n"
-                    (abbreviate-file-name (or (alist-get 'cwd request) "?"))))
-    (insert (format "Territory: %s\n"
-                    (mapconcat #'abbreviate-file-name
-                               (alist-get 'roots territory)
-                               ", ")))
+    (when tool
+      (insert (format "Tool:      %s\n" tool)))
+    (when target
+      (insert (format "Target:    %s\n" (abbreviate-file-name target))))
+    (when-let* ((cwd (alist-get 'cwd hook)))
+      (insert (format "Cwd:       %s\n" (abbreviate-file-name cwd))))
+    (when territory
+      (insert (format "Territory: %s\n"
+                      (mapconcat #'abbreviate-file-name
+                                 (alist-get 'roots territory)
+                                 ", "))))
     (insert (format "Deadline:  %s\n"
                     (claude-consent--format-remaining
                      (claude-consent--remaining request))))
-    (when-let* ((buffer (find-buffer-visiting target)))
+    (when-let* ((buffer (and target (find-buffer-visiting target))))
       (when (buffer-modified-p buffer)
         (insert (propertize
                  "Note: a live buffer visits this file with unsaved changes;\nwhat is on disk is not the newest state.\n"
                  'face 'warning))))
     (insert "\n")
+    (let ((detail (alist-get 'detail prompt)))
+      (when (and detail (not (string-blank-p detail)))
+        (claude-consent--insert-section "question" detail)))
     (pcase tool
       ("Edit"
        (claude-consent--insert-section
@@ -282,15 +395,29 @@ never replayed -- a re-ask re-escalates."
        (claude-consent--insert-section
         "with" (or (alist-get 'new_string input) "")))
       ("Write"
-       (when (file-exists-p target)
+       (when (and target (file-exists-p target))
          (insert (propertize "Overwrites an existing file.\n" 'face 'warning)))
        (claude-consent--insert-section
         "content" (or (alist-get 'content input) "")))
+      ((pred null) nil)
       (_
        (claude-consent--insert-section "tool input"
                                        (format "%S" input))))
+    (insert "\n")
+    (claude-consent--insert-section
+     "options"
+     (concat
+      (mapconcat (lambda (pair)
+                   (format "[%c] %s" (car pair)
+                           (or (alist-get 'label (cdr pair))
+                               (alist-get 'value (cdr pair)))))
+                 (cl-mapcar #'cons keys options)
+                 "\n")
+      (if-let* ((free-text (alist-get 'free_text prompt)))
+          (format "\n[t] %s (free text)" free-text)
+        "")))
     (insert (substitute-command-keys
-             "\nType \\[claude-consent-allow] to allow this call, \\[claude-consent-deny] to deny with a reason.\n"))))
+             "\nType \\[claude-consent-answer] to answer.\n"))))
 
 (defun claude-consent-open ()
   "Show the consent request at point in a detail buffer."
@@ -312,25 +439,23 @@ never replayed -- a re-ask re-escalates."
 (defvar claude-consent-list-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'claude-consent-open)
-    (define-key map "a" #'claude-consent-allow)
-    (define-key map "d" #'claude-consent-deny)
+    (define-key map "a" #'claude-consent-answer)
     map)
   "Keymap for `claude-consent-list-mode'.")
 
 (define-derived-mode claude-consent-list-mode tabulated-list-mode "Claude-Consent"
-  "Pending consent requests from headless Claude Code sessions.
+  "Pending prompts from Claude Code hooks.
 
-Each row is one blocked tool call waiting on an answer; RET shows
-the full edit, `a' allows exactly that call, `d' denies it with a
-reason that reaches the model verbatim.  Unanswered requests
-self-deny at their deadline; rows whose session died are pruned on
-refresh.
+Each row is one question waiting on an answer; RET shows the full
+request, `a' answers it from a menu of its options.  Unanswered
+requests self-resolve at their deadline; rows whose waiter died are
+pruned on refresh.
 
 \\{claude-consent-list-mode-map}"
   (setq tabulated-list-format
         [("When" 5 nil)
          ("Session" 12 nil)
-         ("Tool" 5 nil)
+         ("Prompt" 28 nil)
          ("Left" 7 nil)
          ("Target" 0 nil)])
   (setq tabulated-list-sort-key nil)
@@ -341,7 +466,8 @@ refresh.
 (defun claude-consent--list-entries (requests)
   "Rows for the list buffer from REQUESTS."
   (mapcar (lambda (request)
-            (let ((territory (alist-get 'territory request)))
+            (let ((territory (alist-get 'territory request))
+                  (target (claude-consent--target request)))
               (list request
                     (vector
                      (format-time-string
@@ -349,11 +475,10 @@ refresh.
                      (or (alist-get 'name territory)
                          (substring (or (alist-get 'session_id request) "?")
                                     0 (min 8 (length (or (alist-get 'session_id request) "?")))))
-                     (or (alist-get 'tool_name request) "?")
+                     (claude-consent--title request)
                      (claude-consent--format-remaining
                       (claude-consent--remaining request))
-                     (abbreviate-file-name
-                      (or (alist-get 'target request) "?"))))))
+                     (if target (abbreviate-file-name target) "")))))
           requests))
 
 ;;;###autoload
@@ -400,17 +525,20 @@ refresh.
 
 ;;;###autoload
 (define-minor-mode claude-consent-mode
-  "Watch the consent spool and surface pending requests.
-Arms a filenotify watch on the pending directory, keeps a mode-line
-count of unanswered requests, and refreshes the
-`claude-consent-list' buffer as requests arrive and resolve.  Enable
-in the resident session that answers for dispatched agents."
+  "Watch the consent spool and answer prompts from Emacs.
+Registers this Emacs as an attached answerer, arms a filenotify
+watch on the pending directory, keeps a mode-line count of
+unanswered requests, and refreshes the `claude-consent-list' buffer
+as requests arrive and resolve.  Enable in the resident session that
+answers for dispatched agents."
   :global t
   :group 'claude-consent
   (if claude-consent-mode
       (condition-case err
           (progn
             (claude-consent-ensure-directories)
+            (claude-consent-register-handler)
+            (add-hook 'kill-emacs-hook #'claude-consent-remove-handler)
             (setq claude-consent--watch
                   (file-notify-add-watch
                    (claude-consent--subdirectory "pending")
@@ -424,8 +552,11 @@ in the resident session that answers for dispatched agents."
             (claude-consent--refresh))
         (error
          (setq claude-consent-mode nil)
+         (claude-consent-remove-handler)
          (message "claude-consent: spool unavailable, mode stays off (%s)"
                   (error-message-string err))))
+    (claude-consent-remove-handler)
+    (remove-hook 'kill-emacs-hook #'claude-consent-remove-handler)
     (when claude-consent--watch
       (ignore-errors (file-notify-rm-watch claude-consent--watch))
       (setq claude-consent--watch nil))

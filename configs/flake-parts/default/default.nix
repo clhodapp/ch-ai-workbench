@@ -144,6 +144,17 @@
                 {
                   inherit pkgs;
                 };
+
+            # The prompt API tool (its build runs the unittest suite)
+            # and the consent hook built on it, from the same files the
+            # modules use.
+            claudeConsent = pkgs.callPackage ../../../pkgs/claude-consent/claude-consent { };
+            emacsClaudeConsentHook =
+              import ../../../modules/home-manager/emacs/lib/emacs-claude-consent-hook.nix
+                {
+                  inherit pkgs;
+                  claude-consent = claudeConsent;
+                };
           in
           {
             checks = {
@@ -310,6 +321,92 @@
                     quiet 'ls'
                     [ -z "$(call 'git push' | env -u XDG_RUNTIME_DIR "$hook")" ]
                     [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
+
+              # The prompt API: building the package runs its unittest
+              # suite (the four ask outcomes, stored answers consumed by
+              # key, the async re-entry waiter, handler liveness).
+              claude-consent = claudeConsent;
+
+              # The consent hook end to end against the tool: abstention
+              # without a territory record and inside the territory, a
+              # deny on the spool itself, `ask` when no answerer is
+              # attached, the user's allow and deny (with reason)
+              # couriered back while an answerer is registered, the
+              # self-answered deny at the deadline, and silence on
+              # non-JSON stdin.
+              emacs-claude-consent-hook =
+                pkgs.runCommand "emacs-claude-consent-hook"
+                  {
+                    nativeBuildInputs = [ pkgs.jq ];
+                  }
+                  ''
+                    hook=${lib.getExe emacsClaudeConsentHook}
+                    export XDG_RUNTIME_DIR="$TMPDIR/run"
+                    spool="$XDG_RUNTIME_DIR/claude-consent"
+                    mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    mkdir -p "$spool/territory" "$spool/handlers" "$spool/pending" "$spool/answers"
+                    session=0123456789abcdef-0000-4000-8000-000000000000
+                    call() { jq -cn --arg s "$session" --arg f "$1" '{session_id: $s, hook_event_name: "PreToolUse", tool_name: "Write", tool_input: {file_path: $f, content: "x"}, cwd: "/proj"}'; }
+                    decision() { jq -r .hookSpecificOutput.permissionDecision <<<"$1"; }
+                    reason() { jq -r .hookSpecificOutput.permissionDecisionReason <<<"$1"; }
+                    record() { jq -cn --argjson d "$1" '{agent_id: "01234567", roots: ["/proj"], deadline: $d, name: "fix the frob"}' > "$spool/territory/01234567.json"; }
+                    # No territory record: stock behavior.
+                    [ -z "$(call /elsewhere/x | "$hook")" ]
+                    record 5
+                    # In territory: the sandbox accepts it, the hook says nothing.
+                    [ -z "$(call /proj/sub/x | "$hook")" ]
+                    [ -z "$(call sub/x | "$hook")" ]
+                    # The spool is never territory.
+                    res=$(call "$spool/pending/y.json" | "$hook")
+                    [ "$(decision "$res")" = deny ]
+                    # No answerer attached: a plain allow/deny falls back to the CLI's prompt.
+                    res=$(call /elsewhere/x | "$hook")
+                    [ "$(decision "$res")" = ask ]
+                    reason "$res" | grep -q 'outside this session'
+                    [ -z "$(ls "$spool/pending")" ]
+                    # An answerer is attached: the answer is couriered back.
+                    sleep 120 & sleeper=$!
+                    jq -cn --argjson p "$sleeper" '{name: "test", pid: $p}' > "$spool/handlers/test.json"
+                    answer() { # $1 = value, $2 = text; answers the first pending prompt
+                      for _ in $(seq 1 100); do
+                        f=$(find "$spool/pending" -name '*.json' | head -1)
+                        if [ -n "$f" ]; then
+                          [ "$(jq -r .prompt.title "$f")" = "Write outside territory" ]
+                          [ "$(jq -r .mode "$f")" = blocking ]
+                          [ "$(jq -r .territory.name "$f")" = "fix the frob" ]
+                          [ "$(jq -r .hook.tool_input.file_path "$f")" = /elsewhere/x ]
+                          id=$(jq -r .id "$f")
+                          jq -cn --arg id "$id" --arg v "$1" --arg t "$2" '{id: $id, value: $v} + (if $t == "" then {} else {text: $t} end)' > "$spool/answers/$id.json.tmp"
+                          mv "$spool/answers/$id.json.tmp" "$spool/answers/$id.json"
+                          exit 0
+                        fi
+                        sleep 0.1
+                      done
+                      exit 1
+                    }
+                    (answer deny "wrong repo") & answerer=$!
+                    res=$(call /elsewhere/x | "$hook")
+                    wait $answerer
+                    [ "$(decision "$res")" = deny ]
+                    [ "$(reason "$res")" = "denied by the user: wrong repo" ]
+                    (answer allow "") & answerer=$!
+                    res=$(call /elsewhere/x | "$hook")
+                    wait $answerer
+                    [ "$(decision "$res")" = allow ]
+                    [ "$(reason "$res")" = "approved by the user" ]
+                    [ -z "$(ls "$spool/pending")" ]
+                    [ -z "$(ls "$spool/answers")" ]
+                    # Nobody answers: the hook self-denies at the record's deadline.
+                    record 1
+                    res=$(call /elsewhere/x | "$hook")
+                    [ "$(decision "$res")" = deny ]
+                    reason "$res" | grep -q 'timed out after 1s'
+                    kill $sleeper
+                    # Garbage in: nothing out.
+                    [ -z "$(echo 'not json' | "$hook")" ]
+                    [ -z "$(call /elsewhere/x | env -u XDG_RUNTIME_DIR "$hook")" ]
                     touch $out
                   '';
             };

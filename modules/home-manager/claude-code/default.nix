@@ -119,6 +119,14 @@ let
 
   enabledHooks = lib.filterAttrs (_name: hook: hook.enable) cfg.hooks;
 
+  # The prompt API behind the consent spool (pkgs/claude-consent):
+  # `claude-consent ask` raises a question from a hook and returns the
+  # answer, `answer`, `watch`, and `list` are the user's terminal side.
+  # Installed here, vendor side, because the spool is Claude Code's
+  # permission surface; the Emacs answerer plugs in from
+  # emacs-integration.
+  claudeConsent = pkgs.callPackage ../../../pkgs/claude-consent/claude-consent { };
+
   # The declaration as a store manifest: enabled hooks and the deny
   # rules, so a switched-off or deleted entry is absent from "new" and
   # the register prunes it against the sidecar's "base".
@@ -398,6 +406,29 @@ in
       '';
     };
 
+    consentPackage = lib.mkOption {
+      type = lib.types.package;
+      default = claudeConsent;
+      defaultText = lib.literalExpression "claude-consent, built from this flake's pkgs/";
+      description = ''
+        The claude-consent tool: the prompt API hooks use to ask the
+        user a question and get the answer back. A hook runs
+        `claude-consent ask` with a title, options, and the hook
+        payload on stdin; the question goes into the spool under
+        $XDG_RUNTIME_DIR/claude-consent, any attached answerer (the
+        Emacs side registered by claude-consent-mode, or a terminal
+        running `claude-consent watch`) renders it as a menu, and the
+        answer comes back to the hook as JSON. With no answerer
+        attached a hook may fall back to the CLI's own permission
+        prompt (`--fallback ask`), or the question is stored and
+        answered later in a terminal with `claude-consent answer
+        TOKEN`, the token naming the session. `ask --async -- CMD`
+        returns at once and re-runs CMD with the answer when it lands.
+        Installed into the profile so the terminal commands are on
+        PATH and the hooks find it. Override to substitute a build.
+      '';
+    };
+
     permissions.deny = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -546,7 +577,10 @@ in
       };
     };
 
-    home.packages = lib.filter (package: package != null) (
+    home.packages = [
+      cfg.consentPackage
+    ]
+    ++ lib.filter (package: package != null) (
       lib.mapAttrsToList (_name: hook: hook.package) enabledHooks
     );
 
