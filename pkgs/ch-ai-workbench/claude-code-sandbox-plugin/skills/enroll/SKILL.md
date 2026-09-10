@@ -36,5 +36,5 @@ Facts that prevent wrong conclusions:
   persist — narrower wants mean a different profile, not an edit.
 - Never edit the sidecar by hand, and never delete
   `settings.local.json` to "reset" — use `abandon`.
-- Profiles are declared in home-manager (`claude-code-sandbox.profiles`);
+- Profiles are declared in home-manager (`ch-ai-workbench.claude-code-sandbox.profiles`);
   changing what a profile contains is a nix edit + switch, not a CLI verb.

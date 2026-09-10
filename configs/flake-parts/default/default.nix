@@ -17,12 +17,18 @@
       gptel
       claude
       claude-code
+      claude-code-sandbox
       emacs-integration
       zsh
       ;
   };
 
   caisson.nixpkgs.overlays.all = {
+    # This flake's own packages (the sandbox CLI, its plugin, and the
+    # Landlock shim), under pkgs.ch-ai-workbench.
+    packages = lib.caisson.nixpkgs.mkPackagesOverlay (
+      { callPackage, ... }: import ../../../pkgs/ch-ai-workbench { inherit callPackage; }
+    );
     merman = _name: inputs.merman.overlays.packages;
     # The editor's Emacs bases and ELPA pins: the checks below build
     # this layer's packages against the same Emacs the editor
@@ -31,14 +37,25 @@
     emacs-packages = _name: inputs.ch-emacs-config.overlays.emacs-packages;
   };
 
+  caisson.nixpkgs.overlays.export.enabled = true;
+  caisson.nixpkgs.overlays.exported = overlays: {
+    inherit (overlays) packages;
+  };
+
   caisson.nixpkgs.pkgSets.pkgs = {
     pkgFunction = import inputs.nixpkgs;
     overlayImports = overlays: [
       overlays.emacs-packages
       overlays.emacs
       overlays.merman
+      overlays.packages
     ];
   };
+
+  # packages.* is deliberately not partitioned: consumers take these
+  # packages against this flake's main lock, so dev-only inputs must
+  # not taint them.
+  caisson.nixpkgs.packages.export.enabled = true;
 
   partitionedAttrs.checks = "checks";
   partitionedAttrs.formatter = "formatter";
@@ -130,6 +147,15 @@
           in
           {
             checks = {
+              # The sandbox's packages: building the CLI runs its
+              # unittest suite, the plugin assembles the skills-dir
+              # tree, and compiling the shim is its build-time test
+              # (Landlock cannot be exercised inside the Nix build
+              # sandbox).
+              claude-code-sandbox = self.packages.${system}.claude-code-sandbox;
+              claude-code-sandbox-plugin = self.packages.${system}.claude-code-sandbox-plugin;
+              landlock-shim = self.packages.${system}.landlock-shim;
+
               # Evaluating the two modules together is itself the check
               # that this layer composes with the editor: the bundles
               # merge into one init, the packages build against one Emacs
@@ -143,6 +169,7 @@
                     self.modules.homeManager.gptel
                     self.modules.homeManager.claude
                     self.modules.homeManager.claude-code
+                    self.modules.homeManager.claude-code-sandbox
                     self.modules.homeManager.emacs-integration
                     {
                       home.username = "tester";
@@ -160,6 +187,14 @@
                       };
                       ch-ai-workbench.claude.enable = true;
                       ch-ai-workbench.claude-code.enable = true;
+                      # Any package stands in for the CLI a host runs:
+                      # the check evaluates the profile fragments and
+                      # their closures, not a live sandbox.
+                      ch-ai-workbench.claude-code-sandbox = {
+                        enable = true;
+                        runtime.claudePackage = pkgs.hello;
+                        profiles.default.toolset = [ pkgs.ripgrep ];
+                      };
                       ch-ai-workbench.emacs-integration.enable = true;
                     }
                   ];

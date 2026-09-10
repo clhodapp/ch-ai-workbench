@@ -14,6 +14,10 @@
   # The agent half: hooks, skills, output styles, permissions, and the
   # LSP plugin manifest.
   claude-code = lib.caisson-core.mkModule "homeManager" ./claude-code;
+  # Claude Code's native sandbox, declared: named profiles (closed
+  # toolsets compiled from Nix closures into sandbox rules) that a
+  # checkout opts into by enrollment. Independent of the other modules.
+  claude-code-sandbox = lib.caisson-core.mkModule "homeManager" ./claude-code-sandbox;
   # What joins them: the hooks and skill that let a session drive the
   # live Emacs.
   emacs-integration = lib.caisson-core.mkModule "homeManager" ./emacs-integration;

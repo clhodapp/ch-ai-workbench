@@ -52,7 +52,7 @@
   ...
 }:
 let
-  cfg = config.claude-code-sandbox;
+  cfg = config.ch-ai-workbench.claude-code-sandbox;
   system = pkgs.stdenv.hostPlatform.system;
 
   # Everything a fragment needs beyond the declared toolset flows from
@@ -487,20 +487,20 @@ let
   };
 in
 {
-  options.claude-code-sandbox = {
+  options.ch-ai-workbench.claude-code-sandbox = {
     enable = lib.mkEnableOption "nix-declared Claude Code sandbox profiles";
 
     package = lib.mkOption {
       type = lib.types.package;
       default = closure-inputs.self.packages.${system}.claude-code-sandbox;
-      defaultText = lib.literalExpression "claude-code-sandbox.packages.<system>.claude-code-sandbox";
+      defaultText = lib.literalExpression "ch-ai-workbench.packages.<system>.claude-code-sandbox";
       description = "The claude-code-sandbox CLI.";
     };
 
     pluginPackage = lib.mkOption {
       type = lib.types.package;
       default = closure-inputs.self.packages.${system}.claude-code-sandbox-plugin;
-      defaultText = lib.literalExpression "claude-code-sandbox.packages.<system>.claude-code-sandbox-plugin";
+      defaultText = lib.literalExpression "ch-ai-workbench.packages.<system>.claude-code-sandbox-plugin";
       description = "The skills-dir plugin (ceremony skill + advisory hooks).";
     };
 
@@ -689,14 +689,14 @@ in
       }
     ];
 
-    claude-code-sandbox.profiles.default = { };
+    ch-ai-workbench.claude-code-sandbox.profiles.default = { };
 
     # Built-in: an owned copy of ~/.ssh/config, so sandboxed git-over-ssh
     # works (the store-symlinked original is rejected by ssh's config
     # ownership check under the sandbox userns). The farm's ssh wrapper
     # points -F at the copy. git config is not wired: this fleet has no
     # ~/.gitconfig, and the mechanism is here to extend when one appears.
-    claude-code-sandbox.credentials.ssh-config = {
+    ch-ai-workbench.claude-code-sandbox.credentials.ssh-config = {
       source = lib.mkDefault "${config.home.homeDirectory}/.ssh/config";
       target = lib.mkDefault "ssh_config";
     };
