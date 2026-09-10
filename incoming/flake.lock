@@ -1,0 +1,77 @@
+{
+  "nodes": {
+    "caisson": {
+      "locked": {
+        "lastModified": 1788424022,
+        "narHash": "sha256-O5L156uTgGIjBlD9R4uTl4cGAfTa1SiWZRSZBneF7Lo=",
+        "owner": "nix-caisson",
+        "repo": "caisson",
+        "rev": "7eb1bd6270d2a38c6f7973dae3288841cbece3e4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-caisson",
+        "repo": "caisson",
+        "type": "github"
+      }
+    },
+    "caisson_2": {
+      "locked": {
+        "lastModified": 1788424022,
+        "narHash": "sha256-O5L156uTgGIjBlD9R4uTl4cGAfTa1SiWZRSZBneF7Lo=",
+        "owner": "nix-caisson",
+        "repo": "caisson",
+        "rev": "7eb1bd6270d2a38c6f7973dae3288841cbece3e4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-caisson",
+        "repo": "caisson",
+        "type": "github"
+      }
+    },
+    "ch-nixpkgs": {
+      "inputs": {
+        "caisson": "caisson_2"
+      },
+      "locked": {
+        "lastModified": 1788777951,
+        "narHash": "sha256-LDMC8cvyaOf4gcJ0+tmCaxAEKyYfho3khfWJ/gRSibQ=",
+        "owner": "clhodapp",
+        "repo": "ch-nixpkgs",
+        "rev": "635b05e3dc551617b0ec874bb9ebca518b9a3f44",
+        "type": "github"
+      },
+      "original": {
+        "owner": "clhodapp",
+        "repo": "ch-nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1788614874,
+        "narHash": "sha256-7QYjT2vHLuX9Z1pdxHXDKCbh1CR3D/2rywB9Tx0MPRg=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c043004d1c6985732bcc1cbc5a9c9aecbbb4e0f0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "caisson": "caisson",
+        "ch-nixpkgs": "ch-nixpkgs",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
