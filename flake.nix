@@ -65,9 +65,9 @@
         };
       };
     in
-    lib.caisson.mkFlake {
+    lib.caisson.flake-parts.mkConfiguration {
       name = "ch-ai-workbench";
-      configModule = lib.caisson.mkFlakeModule ./configs/flake-parts/default;
+      configModule = lib.caisson.flake-parts.mkModule ./configs/flake-parts/default;
     };
 
 }
