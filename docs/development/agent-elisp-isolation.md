@@ -244,8 +244,13 @@ variable, so a synced variable is an effect.
 
 ## What runs where
 
-- `eval-elisp` runs in the child, ungated, as a `parenting` task with a
-  timeout and cancellation. The syntactic gate leaves this path.
+- `eval-elisp` runs in the child, ungated, as a `parenting` evaluation
+  with a timeout. The syntactic gate leaves this path. The value is
+  printed in the child, so a buffer or marker arrives as its printed
+  text; an error in the child is a tool error carrying its message. A
+  form still running at the deadline cannot be interrupted in the
+  child, so the child is stopped and the next call starts a fresh one;
+  the call returns a tool error saying so. (Landed.)
 - A buffer transform comes in two modes, siblings that differ only in
   what does the editing. Both run in the child against the copied
   buffer and both land the result through the one back channel. The
@@ -474,8 +479,8 @@ print a secret into a log.
 2. The child with configuration only, sandboxed, as the target for
    `eval-elisp`. This already answers every static question (keymaps,
    functions, defaults, features); the gated live path remains for
-   session facts until the named tools exist. (The child's lifecycle
-   has landed; routing `eval-elisp` to it is the next piece.)
+   session facts until the named tools exist. (Landed: the lifecycle
+   and `eval-elisp` in the child.)
 3. The copying of buffer text (forward contract, incremental sync,
    secret scan) and the
    back channel; both transform modes move to the child, the elisp one
