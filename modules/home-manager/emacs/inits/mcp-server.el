@@ -304,24 +304,186 @@ Unvisited files are opened (booting LSP via the usual mode hooks) when
        (format "%s is not visited and lies outside the client territory and every session project (auto-open scope: %s)"
                file ch-mcp-server-auto-open-scope))))))
 
+;;; Buffer sensitivity: one per-buffer state, with a default by kind
+
+(defvar ch-mcp-server-buffer-sensitivity nil
+  "This buffer's sensitivity to the agent: nil, `sensitive', or `exposed'.
+A sensitive buffer is withheld from the agent: the read predicate
+\(`ch-mcp-server--buffer-sensitive-p') refuses it before any other test,
+so no read tool returns it and it is omitted from listings.
+
+nil means unset, and the default decides
+\(`ch-mcp-server--default-sensitive-p'): sensitive for a terminal
+\(`ch-mcp-server-terminal-modes') or a buffer visiting a file whose name
+matches `ch-mcp-server-sensitive-file-patterns', not for anything else.
+`sensitive' and `exposed' are explicit overrides in either direction,
+so a terminal or `.env' the user trusts can be exposed and an ordinary
+buffer holding a secret can be withheld.  Set by the toggle
+\(`ch-mcp-server-toggle-buffer-sensitive') or by
+`ch-mcp-server-visit-sensitive'; never by a file-local variable, so a
+file being read cannot expose itself.")
+(make-variable-buffer-local 'ch-mcp-server-buffer-sensitivity)
+;; A file may not set this via a file-local: `null' is the only accepted
+;; value, so a file can at most re-assert nil (unset), never set
+;; `exposed' on itself.
+(put 'ch-mcp-server-buffer-sensitivity 'safe-local-variable #'null)
+
+(defvar ch-mcp-server-terminal-modes
+  '(ghostel-mode comint-mode term-mode vterm-mode eshell-mode)
+  "Major modes whose buffers are terminals, sensitive by default.
+A buffer whose major mode derives from any of these is withheld from
+the agent unless its `ch-mcp-server-buffer-sensitivity' is `exposed',
+since a terminal's text is whatever ran in it and may include echoed
+secrets.
+`comint-mode' is the base of `shell-mode' and many REPLs, so matching
+by `derived-mode-p' covers those without listing each.  The user runs
+terminals in ghostel; the rest are here so a stray `shell'/`term'/
+`eshell'/`vterm' is gated the same way rather than left readable.
+Extended by the resident user; gated elisp cannot reach it.")
+(put 'ch-mcp-server-terminal-modes 'risky-local-variable t)
+
+(defun ch-mcp-server--terminal-p (&optional buffer)
+  "Whether BUFFER (default current) is a terminal.
+A terminal is a buffer whose major mode derives from one in
+`ch-mcp-server-terminal-modes'."
+  (with-current-buffer (or buffer (current-buffer))
+    (apply #'derived-mode-p ch-mcp-server-terminal-modes)))
+
+(defvar ch-mcp-server-sensitive-file-patterns
+  '("/\\.authinfo\\(?:\\.gpg\\)?\\'"
+    "\\.gpg\\'"
+    "\\.age\\'"
+    "/\\.env\\(?:\\.[^/]*\\)?\\'")
+  "Regexps for file names whose buffers are sensitive by default.
+A buffer visiting a file whose name matches any entry is withheld from
+the agent unless its `ch-mcp-server-buffer-sensitivity' is `exposed',
+the same way a terminal is; the match is part of the default
+\(`ch-mcp-server--default-sensitive-p'), so it needs no hook and holds
+however the buffer came to visit the file.
+Each regexp is matched against the full file name (so the leading `/'
+anchors on a path segment boundary, `\\'' on the end).  Seeds:
+`.authinfo' and `.authinfo.gpg', any `.gpg' or `.age' file, and `.env'
+and `.env.*'.  Extended by the resident user; gated elisp cannot reach
+it.")
+(put 'ch-mcp-server-sensitive-file-patterns 'risky-local-variable t)
+
+(defun ch-mcp-server--default-sensitive-p ()
+  "Whether the current buffer is sensitive by default.
+Sensitive when it is a terminal (`ch-mcp-server-terminal-modes') or
+visits a file whose name matches `ch-mcp-server-sensitive-file-patterns';
+not otherwise.  This is what an unset
+`ch-mcp-server-buffer-sensitivity' falls back to."
+  (or (ch-mcp-server--terminal-p)
+      (and buffer-file-name
+           (seq-some (lambda (re) (string-match-p re buffer-file-name))
+                     ch-mcp-server-sensitive-file-patterns)
+           t)))
+
+(defun ch-mcp-server--buffer-sensitive-p (buffer)
+  "Whether BUFFER must be withheld from the agent as sensitive.
+The effective state of `ch-mcp-server-buffer-sensitivity': an explicit
+`sensitive' or `exposed' wins; unset falls back to
+`ch-mcp-server--default-sensitive-p'."
+  (with-current-buffer buffer
+    (pcase ch-mcp-server-buffer-sensitivity
+      ('sensitive t)
+      ('exposed nil)
+      (_ (ch-mcp-server--default-sensitive-p)))))
+
+(defun ch-mcp-server-visit-sensitive (filename)
+  "Visit FILENAME with its buffer marked sensitive before its content shows.
+Like `find-file', but sets `ch-mcp-server-buffer-sensitivity' to
+`sensitive' in the resulting buffer, so the buffer is withheld from the
+agent the moment it exists, for a file the user knows is sensitive and
+no pattern in `ch-mcp-server-sensitive-file-patterns' anticipated."
+  (interactive "FVisit sensitive file: ")
+  (let ((buffer (find-file filename)))
+    (with-current-buffer buffer
+      (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+    buffer))
+
+(defun ch-mcp-server-toggle-buffer-sensitive ()
+  "Toggle this buffer's sensitivity to the agent.
+Flips the effective state (`ch-mcp-server--buffer-sensitive-p'): a
+withheld buffer becomes `exposed', a readable one becomes `sensitive'.
+Works in any buffer; in a terminal, which starts sensitive, the first
+press exposes it.  This is the quick per-buffer override of the
+defaults."
+  (interactive)
+  (setq ch-mcp-server-buffer-sensitivity
+        (if (ch-mcp-server--buffer-sensitive-p (current-buffer))
+            'exposed
+          'sensitive))
+  (force-mode-line-update)
+  (message "Buffer %s the agent"
+           (if (eq ch-mcp-server-buffer-sensitivity 'sensitive)
+               "withheld from"
+             "exposed to")))
+
+;;; Mode-line indicator: can the agent see this buffer?
+
+(defvar ch-mcp-server-mode-line-withheld " agent:hidden"
+  "Mode-line text shown in a buffer the agent cannot read.")
+
+(defvar ch-mcp-server-mode-line-visible " agent:visible"
+  "Mode-line text shown in a buffer the agent can read.")
+
+(defconst ch-mcp-server--mode-line-construct
+  '(:eval (ch-mcp-server--mode-line))
+  "Entry added to `global-mode-string' by this init.")
+
+(defun ch-mcp-server--mode-line ()
+  "Mode-line fragment for the current buffer's visibility to the agent.
+Reflects the two buffer-intrinsic gates: the sensitivity state
+\(`ch-mcp-server--buffer-sensitive-p') and the debug-knob latch on the
+log buffers (`ch-mcp-server--log-buffer-blocked-p').  The read scope
+\(client territory) is a fact about the calling client, so a mode line
+cannot show it and it is left out; a buffer marked visible here can
+still be refused to a client whose territory excludes its file."
+  (let ((buffer (current-buffer)))
+    (if (or (ch-mcp-server--buffer-sensitive-p buffer)
+            (ch-mcp-server--log-buffer-blocked-p buffer))
+        (propertize ch-mcp-server-mode-line-withheld 'face 'warning)
+      ch-mcp-server-mode-line-visible)))
+
+(unless global-mode-string
+  (setq global-mode-string '("")))
+(unless (memq ch-mcp-server--mode-line-construct global-mode-string)
+  (setq global-mode-string
+        (append global-mode-string
+                (list ch-mcp-server--mode-line-construct))))
+
+;; The quick key for the toggle, in the shared `<leader> a' ("ai")
+;; prefix that gptel, gptel-agent, and claude-queue each bind their own
+;; keys into.  `a t' is free there.
+(declare-function ch/leader-prefix-title "evil")
+(with-eval-after-load 'evil
+  (ch/leader-prefix-title "a" "ai")
+  (evil-global-set-key 'motion (kbd "<leader> a t")
+                       #'ch-mcp-server-toggle-buffer-sensitive))
+
 ;;; Buffer read scope: readability predicate plus the debug-knob latch
 
 (defun ch-mcp-server--buffer-readable-p (buffer)
   "Whether the agent may read BUFFER's contents or see it in a listing.
-A file-visiting buffer is readable exactly when its file passes the
-auto-open read scope (`ch-mcp-server--file-in-scope-p'), tying read
-scope to open scope through one rule.  A buffer without a file is readable
-unless its name marks it internal (a leading space, Emacs's own
-convention, and where the HTTP response buffers live) or matches
-`ch-mcp-server-hidden-buffer-names'.  Terminals stay visible."
-  (let ((file (buffer-file-name buffer)))
-    (if file
-        (ch-mcp-server--file-in-scope-p file)
-      (let ((name (buffer-name buffer)))
-        (not (or (null name)
-                 (string-prefix-p " " name)
-                 (seq-some (lambda (re) (string-match-p re name))
-                           ch-mcp-server-hidden-buffer-names)))))))
+A sensitive buffer (`ch-mcp-server--buffer-sensitive-p': the
+per-buffer mark, or a terminal not explicitly exposed) is never
+readable, before any other test.  Otherwise a file-visiting buffer is
+readable exactly when its file passes the auto-open read scope
+(`ch-mcp-server--file-in-scope-p'), tying read scope to open scope
+through one rule.  A buffer without a file is readable unless its name
+marks it internal (a leading space, Emacs's own convention, and where
+the HTTP response buffers live) or matches
+`ch-mcp-server-hidden-buffer-names'."
+  (and (not (ch-mcp-server--buffer-sensitive-p buffer))
+       (let ((file (buffer-file-name buffer)))
+         (if file
+             (ch-mcp-server--file-in-scope-p file)
+           (let ((name (buffer-name buffer)))
+             (not (or (null name)
+                      (string-prefix-p " " name)
+                      (seq-some (lambda (re) (string-match-p re name))
+                                ch-mcp-server-hidden-buffer-names))))))))
 
 ;; The debug-knob latch.  Each guarded log buffer carries a taint-start
 ;; marker: the position of the earliest still-present text written while a
@@ -434,6 +596,9 @@ The two gates are independent; a buffer must pass both."
   "Throw a tool error unless the agent may read BUFFER; else return BUFFER.
 For the by-name resolvers: an out-of-scope or hidden buffer and a
 latched log buffer are both refused, each with its own message."
+  (when (ch-mcp-server--buffer-sensitive-p buffer)
+    (mcp-server-lib-tool-throw
+     (format "Buffer %s is withheld as sensitive" (buffer-name buffer))))
   (unless (ch-mcp-server--buffer-readable-p buffer)
     (mcp-server-lib-tool-throw
      (format "Buffer %s is not readable (outside scope)" (buffer-name buffer))))
