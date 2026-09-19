@@ -936,11 +936,13 @@ fifty times should not push out fifty other buffers' history."
   :type 'integer
   :group 'ch-emacs-config)
 
-(defcustom ch-mcp-server-history-max-bytes 200000
+(defcustom ch-mcp-server-history-max-bytes 1000000
   "Largest revision body stored, in bytes.
-A rendered mermaid diagram is an SVG that can run to megabytes.
 Bodies over this size are stored truncated, with a marker line, so one
-oversized presentation cannot make the store unreadable."
+oversized presentation cannot make the store unreadable.  The limit sits
+above the documents actually presented, a long design document running
+to a few hundred kilobytes, and below a mermaid render gone wrong, which
+is an SVG that can reach megabytes."
   :type 'integer
   :group 'ch-emacs-config)
 

@@ -118,7 +118,7 @@ needs no "superseding the earlier version" note. Mermaid revisions
 store the source rather than the rendered SVG, so a stored diagram is
 re-renderable and the store stays small. Revisions past
 `ch-mcp-server-history-limit` (200) are dropped oldest-first, and a
-body over `ch-mcp-server-history-max-bytes` (200000) is stored
+body over `ch-mcp-server-history-max-bytes` (1000000) is stored
 truncated with a marker line.
 
 ## edit-buffer / edit-file: the single surgical change
