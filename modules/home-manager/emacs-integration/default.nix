@@ -72,7 +72,7 @@ let
       pkgs.gawk
       pkgs.gnugrep
       pkgs.jq
-      closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman
+      closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman
     ];
     text = builtins.readFile ./claude-mermaid-display-hook.sh;
   };

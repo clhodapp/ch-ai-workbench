@@ -14,7 +14,7 @@ let
   # Claude Code's lspServers shape, and the editor's eglot renders the
   # same table, so the two cannot disagree about how to spawn a server.
   languageServers = closure-inputs.ch-emacs-config.languageServerTable pkgs {
-    merman = closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+    merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
   };
 
   # A personal-scope skills-directory plugin: any folder under

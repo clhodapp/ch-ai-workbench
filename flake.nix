@@ -41,7 +41,7 @@
     ch-zsh-config.url = "github:clhodapp/ch-zsh-config";
 
     # The mermaid renderer behind the message-display hook.
-    merman.url = "github:clhodapp/merman";
+    merman-nix.url = "github:clhodapp/merman-nix";
 
     nixpkgs.follows = "ch-emacs-config/nixpkgs";
   };

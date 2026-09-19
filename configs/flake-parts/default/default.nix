@@ -27,7 +27,7 @@
     packages = lib.caisson.nixpkgs.mkPackagesOverlay (
       { callPackage, ... }: import ../../../pkgs/ch-ai-workbench { inherit callPackage; }
     );
-    merman = _name: inputs.merman.overlays.packages;
+    merman-nix = _name: inputs.merman-nix.overlays.packages;
     # The editor's Emacs bases and ELPA pins: the checks below build
     # this layer's packages against the same Emacs the editor
     # configures, since they load into it.
@@ -45,7 +45,7 @@
     overlayImports = overlays: [
       overlays.emacs-packages
       overlays.emacs
-      overlays.merman
+      overlays.merman-nix
       overlays.packages
     ];
   };
@@ -77,7 +77,7 @@
         perSystem =
           { pkgs, system, ... }:
           let
-            merman = inputs.merman.packages.${system}.merman;
+            merman = inputs.merman-nix.packages.${system}.merman;
 
             # An Emacs carrying both layers' bundles, built the way the
             # editor builds its own check Emacs: the ERT suites below run
@@ -121,7 +121,7 @@
                 import ../../../modules/home-manager/emacs/bundles-spec.nix {
                   inherit lib;
                   readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
-                  merman = inputs.merman.packages.${system}.merman;
+                  merman = inputs.merman-nix.packages.${system}.merman;
                   gitleaks = pkgs.gitleaks;
                 }
               )

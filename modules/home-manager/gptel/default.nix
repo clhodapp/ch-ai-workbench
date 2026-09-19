@@ -14,7 +14,7 @@
 let
   cfg = config.ch-ai-workbench.gptel;
 
-  merman = closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
 in
 {
   options.ch-ai-workbench.gptel = {

@@ -191,22 +191,22 @@
         "type": "github"
       }
     },
-    "merman_2": {
+    "merman-nix": {
       "inputs": {
         "caisson": "caisson_5",
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
-        "lastModified": 1789852401,
-        "narHash": "sha256-gnQPZ/qCkncHAoQP/3D6dzIENDB5WtPUytqhhfe7HCA=",
+        "lastModified": 1789855357,
+        "narHash": "sha256-twO+8fzYPq1h++2fw2dCMVAOgF7mc656USf2PipY2Dg=",
         "owner": "clhodapp",
-        "repo": "merman",
-        "rev": "7b4232322ba0335b141917ecb1bfba48b5a8650d",
+        "repo": "merman-nix",
+        "rev": "f119a9b022afad761f4b27e6c0b2730ed9e14659",
         "type": "github"
       },
       "original": {
         "owner": "clhodapp",
-        "repo": "merman",
+        "repo": "merman-nix",
         "type": "github"
       }
     },
@@ -328,7 +328,7 @@
         "ch-emacs-config": "ch-emacs-config",
         "ch-zsh-config": "ch-zsh-config",
         "collab-comments": "collab-comments",
-        "merman": "merman_2",
+        "merman-nix": "merman-nix",
         "nixpkgs": [
           "ch-emacs-config",
           "nixpkgs"
