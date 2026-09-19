@@ -7,8 +7,9 @@
 ;; (package activation fires the autoload hook).  Covers: registration of
 ;; every tool (which also validates the MCP Parameters docstrings),
 ;; the non-LSP tools end to end on temp files, the auto-open scope
-;; policy, the security filters (client-territory write scope and the
-;; agent-safe elisp gate), and a clean tool error — not a hang — from
+;; policy, the security filters (client-territory write scope, the
+;; transform gate, eval-elisp in the sandboxed child), and a clean tool
+;; error, not a hang, from
 ;; the LSP-backed tools when no server is available.
 
 ;;; Code:
@@ -92,9 +93,6 @@ this isolates one test's revisions from every other test's."
     ;; restricted dispatch profiles can deny it structurally; a rejoined
     ;; "edit" would silently re-widen every profile built on the split.
     (should-not (gethash "edit" tools))))
-
-(ert-deftest ch-mcp-tools-eval-elisp ()
-  (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)"))))
 
 (ert-deftest ch-mcp-tools-context-smoke ()
   (let ((context (ch-mcp-server--context)))
@@ -580,53 +578,99 @@ though it never writes disk; non-file buffers stay editable."
                               (ch-mcp-server--edit-file
                                "alpha" "beta" file))))))
 
-;;; Security filters: the agent-safe elisp gate
+;;; Security filters: eval-elisp in the child, the transform gate
 
-(ert-deftest ch-mcp-tools-eval-elisp-gate-allows-reads ()
-  "The read surface stays open: session inspection is the tool's job."
-  (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)")))
-  (should (stringp (ch-mcp-server--eval-elisp "(buffer-name)")))
-  (should (ch-mcp-server--eval-elisp
-           "(let ((n 0)) (dolist (b (buffer-list) n) (setq n (1+ n))))")))
+(ert-deftest ch-mcp-tools-eval-elisp-runs-in-the-child ()
+  "eval-elisp answers from the sandboxed child: the configuration is
+there, this session's state is not, and a stateful form changes only
+the child."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (progn
+        (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)")))
+        (should (equal "t" (ch-mcp-server--eval-elisp
+                            "(featurep 'ch-emacs-config-default)")))
+        ;; A value with no readable form still prints, in the child.
+        (should (string-prefix-p "#<buffer"
+                                 (ch-mcp-server--eval-elisp "(current-buffer)")))
+        ;; This session's buffers and environment are not there.
+        (get-buffer-create "ch-mcp-tests-parent-only")
+        (should (equal "nil" (ch-mcp-server--eval-elisp
+                              "(get-buffer \"ch-mcp-tests-parent-only\")")))
+        (should-not (equal (format "%S" (getenv "HOME"))
+                           (ch-mcp-server--eval-elisp "(getenv \"HOME\")")))
+        ;; A stateful form runs, and changes only the child.
+        (should (equal "1" (ch-mcp-server--eval-elisp
+                            "(setq ch-mcp-tests--child-only 1)")))
+        (should-not (boundp 'ch-mcp-tests--child-only)))
+    (ch-mcp-server-child-stop)))
 
-(ert-deftest ch-mcp-tools-eval-elisp-gate-blocks-side-effects ()
-  "Mutation, I/O, and indirect calls are rejected before evaluation,
-naming the offender."
-  (dolist (bad '("(delete-file \"/tmp/x\")"
-                 "(setq some-global-var 1)"
-                 "(funcall (intern \"delete-file\") \"/tmp/x\")"
-                 "(eval '(delete-file \"/tmp/x\"))"
-                 "(shell-command \"true\")"
-                 "(insert \"x\")"))
-    (let ((err (should-error (ch-mcp-server--eval-elisp bad)
-                             :type 'mcp-server-lib-tool-error)))
-      (should (string-match-p "unsafe" (error-message-string err))))))
+(ert-deftest ch-mcp-tools-eval-elisp-child-error-is-a-tool-error ()
+  "An error signalled in the child comes back as a tool error carrying
+the child's message."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (let ((err (should-error (ch-mcp-server--eval-elisp
+                                "(error \"boom %d\" 7)")
+                               :type 'mcp-server-lib-tool-error)))
+        (should (string-match-p "boom 7" (error-message-string err))))
+    (ch-mcp-server-child-stop)))
 
-(ert-deftest ch-mcp-tools-eval-elisp-gate-protects-its-own-knobs ()
-  "Gated elisp can neither set nor bind the filter configuration."
-  (dolist (bad '("(setq ch-mcp-server-elisp-scope 'unrestricted)"
-                 "(let ((ch-mcp-server-elisp-scope 'unrestricted)) (eval '(+ 1 2)))"
-                 "(setq ch-mcp-server-write-scope 'unrestricted)"
-                 "(push 'shell-command ch-mcp-server-agent-safe-functions)"))
-    (should-error (ch-mcp-server--eval-elisp bad)
-                  :type 'mcp-server-lib-tool-error)))
-
-(ert-deftest ch-mcp-tools-eval-elisp-agent-safe-registry ()
-  "The user-extensible registry admits functions unsafep does not know."
-  (defun ch-mcp-tests--blessed () "blessed")
-  (should-error (ch-mcp-server--eval-elisp "(ch-mcp-tests--blessed)")
-                :type 'mcp-server-lib-tool-error)
-  (let ((ch-mcp-server-agent-safe-functions
-         (cons 'ch-mcp-tests--blessed ch-mcp-server-agent-safe-functions)))
-    (should (equal "\"blessed\""
-                   (ch-mcp-server--eval-elisp "(ch-mcp-tests--blessed)")))))
+(ert-deftest ch-mcp-tools-eval-elisp-timeout-discards-the-child ()
+  "A form past the deadline is a tool error, the child is stopped, and
+the next call answers from a fresh one."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (progn
+        (let ((ch-mcp-server-eval-timeout 1))
+          (let ((err (should-error (ch-mcp-server--eval-elisp "(sleep-for 3)")
+                                   :type 'mcp-server-lib-tool-error)))
+            (should (string-match-p "timed out" (error-message-string err)))))
+        (should-not ch-mcp-server--child)
+        (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)"))))
+    (ch-mcp-server-child-stop)))
 
 (ert-deftest ch-mcp-tools-eval-elisp-unrestricted-knob ()
-  "The resident user's say-so path: `unrestricted' scope evaluates
-stateful elisp again."
+  "The resident user's say-so path: `unrestricted' scope evaluates in
+this Emacs, ungated."
   (let ((ch-mcp-server-elisp-scope 'unrestricted))
     (should (equal "42" (ch-mcp-server--eval-elisp
                          "(with-temp-buffer (insert \"42\") (string-to-number (buffer-string)))")))))
+
+(ert-deftest ch-mcp-tools-transform-gate-blocks-side-effects ()
+  "The transform gate rejects mutation outside the buffer, I/O, and
+indirect calls before evaluation, naming the offender."
+  (dolist (bad '((delete-file "/tmp/x")
+                 (setq some-global-var 1)
+                 (funcall (intern "delete-file") "/tmp/x")
+                 (eval '(delete-file "/tmp/x"))
+                 (shell-command "true")))
+    (let ((err (should-error (ch-mcp-server--gate-elisp bad "transform" t)
+                             :type 'mcp-server-lib-tool-error)))
+      (should (string-match-p "unsafe" (error-message-string err))))))
+
+(ert-deftest ch-mcp-tools-transform-gate-protects-its-own-knobs ()
+  "Gated elisp can neither set nor bind the filter configuration."
+  (dolist (bad '((setq ch-mcp-server-elisp-scope 'unrestricted)
+                 (let ((ch-mcp-server-elisp-scope 'unrestricted)) (eval '(+ 1 2)))
+                 (setq ch-mcp-server-write-scope 'unrestricted)
+                 (push 'shell-command ch-mcp-server-agent-safe-functions)))
+    (should-error (ch-mcp-server--gate-elisp bad "transform" t)
+                  :type 'mcp-server-lib-tool-error)))
+
+(ert-deftest ch-mcp-tools-transform-agent-safe-registry ()
+  "The user-extensible registry admits functions unsafep does not know."
+  (defun ch-mcp-tests--blessed () "blessed")
+  (should-error (ch-mcp-server--gate-elisp '(ch-mcp-tests--blessed)
+                                           "transform" t)
+                :type 'mcp-server-lib-tool-error)
+  (let ((ch-mcp-server-agent-safe-functions
+         (cons 'ch-mcp-tests--blessed ch-mcp-server-agent-safe-functions)))
+    (should-not (ch-mcp-server--gate-elisp '(ch-mcp-tests--blessed)
+                                           "transform" t))))
 
 (ert-deftest ch-mcp-tools-transform-gate-blocks-escapes ()
   "transform's elisp may move and edit in the target buffer only: no
