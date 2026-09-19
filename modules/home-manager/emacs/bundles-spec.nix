@@ -88,8 +88,9 @@
     };
 
     # Needs collab-comments from the `emacs` group for its comment-thread
-    # tools. Carries parenting itself: the mirror child is spawned from
-    # this init, so a configuration with only this group has it too.
+    # tools. Carries parenting itself: the sandboxed child Emacs is
+    # spawned from this init, so a configuration with only this group
+    # has it too.
     mcp-server = {
       enable = true;
       # The programs the init spawns are appended to this bundle's own

@@ -1197,7 +1197,7 @@ suffix the completion alist would resolve both to the newer one."
       (when-let* ((buffer (get-buffer "*agent-history/*agent/ert-dup**")))
         (kill-buffer buffer)))))
 
-;;; The mirror child
+;;; The child
 
 (ert-deftest ch-mcp-tools-config-key ()
   "The configuration identity is a non-empty string, stable across calls."
@@ -1222,7 +1222,7 @@ test skips there and runs for real outside it."
        (eq 0 (call-process "bwrap" nil nil nil "--ro-bind" "/" "/" "true"))))
 
 (ert-deftest ch-mcp-tools-child-lifecycle ()
-  "Spawn, bootstrap, reuse, and stop of the sandboxed mirror child.
+  "Spawn, bootstrap, reuse, and stop of the sandboxed child.
 The child answers arithmetic, has the configuration loaded, carries no
 eglot-ensure on a mode hook, and has a real HOME in the jail; a second
 ensure returns the same connection; stop leaves nothing live."
