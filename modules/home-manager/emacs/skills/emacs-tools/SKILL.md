@@ -1,6 +1,6 @@
 ---
 name: emacs-tools
-description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, edit-buffer/edit-file, transform, add-comment/list-comments, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers — especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
+description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, edit-buffer/edit-file, transform, add-comment/list-comments, the session-fact tools feature-loaded/hooks/buffer-state/key-binding, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers — especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
 ---
 
 # Emacs agent tools
@@ -184,6 +184,30 @@ Recipes:
 ;; mode-canonical reindentation after structural edits
 (indent-region (point-min) (point-max))
 ```
+
+## Session facts: named tools, not eval-elisp
+
+Facts about the live session that are not buffer text come from four
+read-only tools; reach for them before `eval-elisp`. Each returns
+`key: value` lines and never the value of a variable.
+
+- **feature-loaded** (`feature`): is the feature loaded (`featurep`),
+  and is its symbol `fboundp` / `boundp`.
+- **hooks** (`hook`, optional `buffer`): the functions on a hook, the
+  global value plus the buffer-local value when a buffer is named
+  (`t` shows as "run the global hook too"; lambdas print as
+  `<lambda>`, never their bodies).
+- **buffer-state** (`buffer`): file, major mode, enabled minor modes,
+  read-only, modified, size, point as `line:col`, evil state, a
+  terminal's input mode, sensitivity mark, agent visibility.
+- **key-binding** (`keys`, optional `buffer`): what a chord resolves to
+  in the live context of that buffer (default: the buffer in the
+  selected window), as a command, `<keymap (prefix)>`, `<lambda>`, or
+  `unbound`. Under evil the leader is `SPC` in motion state, so write
+  `SPC p p`.
+
+A named buffer passes the same read scope as `buffer-text`: a
+withheld buffer is refused, not described.
 
 `eval-elisp` remains the escape hatch for **reading** session state
 the dedicated tools don't cover — variables, buffer facts, window
