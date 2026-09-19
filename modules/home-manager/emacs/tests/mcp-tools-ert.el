@@ -721,6 +721,21 @@ buffer squatting on the name is refused, not erased."
     (should (eq ch-mcp-server-buffer-sensitivity 'exposed))
     (should (ch-mcp-server--buffer-readable-p (current-buffer)))))
 
+(ert-deftest ch-mcp-tools-mode-line-shows-visibility ()
+  "The mode-line fragment says hidden for a withheld buffer and visible
+otherwise, tracks the toggle, and is installed in `global-mode-string'."
+  (should (memq ch-mcp-server--mode-line-construct global-mode-string))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-modeline-plain")
+    (should (equal (ch-mcp-server--mode-line)
+                   ch-mcp-server-mode-line-visible))
+    (ch-mcp-server-toggle-buffer-sensitive)
+    (should (equal (ch-mcp-server--mode-line)
+                   ch-mcp-server-mode-line-withheld)))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-modeline-term")
+    (setq-local major-mode 'ghostel-mode)
+    (should (equal (ch-mcp-server--mode-line)
+                   ch-mcp-server-mode-line-withheld))))
+
 (ert-deftest ch-mcp-tools-terminal-modes-beyond-ghostel ()
   "Every mode in `ch-mcp-server-terminal-modes' is gated, others are not.
 Uses `define-derived-mode' so the parent chain is real (what

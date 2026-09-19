@@ -414,10 +414,44 @@ defaults."
         (if (ch-mcp-server--buffer-sensitive-p (current-buffer))
             'exposed
           'sensitive))
+  (force-mode-line-update)
   (message "Buffer %s the agent"
            (if (eq ch-mcp-server-buffer-sensitivity 'sensitive)
                "withheld from"
              "exposed to")))
+
+;;; Mode-line indicator: can the agent see this buffer?
+
+(defvar ch-mcp-server-mode-line-withheld " agent:hidden"
+  "Mode-line text shown in a buffer the agent cannot read.")
+
+(defvar ch-mcp-server-mode-line-visible " agent:visible"
+  "Mode-line text shown in a buffer the agent can read.")
+
+(defconst ch-mcp-server--mode-line-construct
+  '(:eval (ch-mcp-server--mode-line))
+  "Entry added to `global-mode-string' by this init.")
+
+(defun ch-mcp-server--mode-line ()
+  "Mode-line fragment for the current buffer's visibility to the agent.
+Reflects the two buffer-intrinsic gates: the sensitivity state
+\(`ch-mcp-server--buffer-sensitive-p') and the debug-knob latch on the
+log buffers (`ch-mcp-server--log-buffer-blocked-p').  The read scope
+\(client territory) is a fact about the calling client, so a mode line
+cannot show it and it is left out; a buffer marked visible here can
+still be refused to a client whose territory excludes its file."
+  (let ((buffer (current-buffer)))
+    (if (or (ch-mcp-server--buffer-sensitive-p buffer)
+            (ch-mcp-server--log-buffer-blocked-p buffer))
+        (propertize ch-mcp-server-mode-line-withheld 'face 'warning)
+      ch-mcp-server-mode-line-visible)))
+
+(unless global-mode-string
+  (setq global-mode-string '("")))
+(unless (memq ch-mcp-server--mode-line-construct global-mode-string)
+  (setq global-mode-string
+        (append global-mode-string
+                (list ch-mcp-server--mode-line-construct))))
 
 ;; The quick key for the toggle, in the shared `<leader> a' ("ai")
 ;; prefix that gptel, gptel-agent, and claude-queue each bind their own
