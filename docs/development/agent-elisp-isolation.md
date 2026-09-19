@@ -417,8 +417,15 @@ print a secret into a log.
   `:command-wrapper` remains the escape hatch and the composition point
   for remote spawns. Tests must skip where user namespaces are
   unavailable.
-- **The editor layer** gains a mirror-profile option: no language-server
-  autostart, no process-spawning modes.
+- **The editor layer's mirror profile** (landed): `ch/mirror-profile`, a
+  variable the spawner sets on the child's command line before the
+  configuration loads (`--eval (setq ch/mirror-profile t)`). The inits
+  that start external programs or long-lived helpers consult it and stay
+  off: eglot, envrc (direnv), jinx, and ghostel's terminal on a client
+  frame. A runtime variable rather than a Nix option, so one built
+  configuration serves the interactive session and its mirror children;
+  the `emacs-mirror-profile` check loads the init with and without it and
+  asserts hook membership both ways.
 - **The `ghostel-terminals` skill** was an untracked, hand-placed file
   telling the agent terminals are always readable buffers. Terminals
   sensitive-by-default reverses that, so the skill is adopted into the
