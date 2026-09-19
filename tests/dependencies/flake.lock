@@ -2,11 +2,11 @@
   "nodes": {
     "caisson": {
       "locked": {
-        "lastModified": 1789851301,
-        "narHash": "sha256-Coz3+N4BDbVG4JccE75eAZdRT7QqCB9XZRAd4mwtLoQ=",
+        "lastModified": 1789852095,
+        "narHash": "sha256-tcbX7IdrjB8osheKFBtS793JEAig7ZTr2LxH9ducfmI=",
         "owner": "nix-caisson",
         "repo": "caisson",
-        "rev": "e0cdf0da98596d3d3ce65f9dd59bec55bfc3a8d9",
+        "rev": "68cb9c4e6e6285c4ebdacf06bb963b6d59bf2a12",
         "type": "github"
       },
       "original": {
