@@ -61,6 +61,11 @@
 (declare-function collab-comments-threads "collab-comments")
 (declare-function collab-comments-all-threads "collab-comments")
 (declare-function unsafep "unsafep")
+;; The mirror child's lifecycle loads parenting on first spawn.
+(declare-function parenting-spawn "parenting-parent")
+(declare-function parenting-eval "parenting-parent")
+(declare-function parenting-shutdown "parenting")
+(declare-function parenting-connection-live-p "parenting")
 (defvar safe-functions)
 ;; Read by the session-fact tools through `bound-and-true-p' only: evil
 ;; and ghostel are never required here, so a session without either
@@ -1956,6 +1961,147 @@ MCP Parameters:
       (if (null threads)
           "No comment threads"
         (mapconcat #'collab-comments-render-thread threads "\n\n")))))
+
+;;; The mirror child
+
+;; The parent is this Emacs: it runs the MCP server, owns the live
+;; session, and decides every policy.  The child is a second Emacs
+;; from the same configuration, spawned on first use into a bwrap jail
+;; by `parenting-spawn' (docs/development/agent-elisp-isolation.md,
+;; "Architecture"): a scrubbed environment and a filesystem view of the
+;; Nix store, the configuration, and whatever `ch-mcp-server-child-ro-
+;; binds' adds.  It is keyed to the running configuration's store path
+;; so a switch replaces it, stopped after idle, and dies with the
+;; connection.  This section is the lifecycle only; no tool routes to
+;; the child yet.
+
+(defvar ch-mcp-server-child-idle-seconds 600
+  "Seconds of no use before the mirror child is shut down.
+Every `ch-mcp-server--child-ensure' re-arms the timer; when it fires,
+`ch-mcp-server-child-stop' runs and the next use spawns afresh.")
+
+(defvar ch-mcp-server-child-spawn-timeout 60
+  "Seconds to wait for the mirror child to connect and load.
+Passed as the `parenting-spawn' :timeout, which also bounds the
+bootstrap form; longer than parenting's default because the child
+loads the whole configuration before it answers.")
+
+(defvar ch-mcp-server-child-ro-binds nil
+  "Extra paths bound read-only into the mirror child's jail.
+Passed as the sandbox :ro-binds: the place for the project directories
+the child may read.  Each entry is a path or a (SRC . DEST) cons.
+Parenting itself binds the Nix store, its socket directory, and its
+sources.  Set by the resident user only; gated elisp cannot reach it.")
+(put 'ch-mcp-server-child-ro-binds 'risky-local-variable t)
+
+(defvar ch-mcp-server-child-network nil
+  "Whether the mirror child's jail shares the host network.
+Passed as the sandbox :network; nil, the default, gives the child no
+network at all.  Set by the resident user only; gated elisp cannot
+reach it.")
+(put 'ch-mcp-server-child-network 'risky-local-variable t)
+
+(defvar ch-mcp-server--child nil
+  "The live `parenting' connection to the mirror child, or nil.")
+
+(defvar ch-mcp-server--child-key nil
+  "The `ch-mcp-server--config-key' the mirror child was spawned from.")
+
+(defvar ch-mcp-server--child-idle-timer nil
+  "Timer that stops the mirror child after `ch-mcp-server-child-idle-seconds'.")
+
+(defun ch-mcp-server--config-key ()
+  "A string identifying the running configuration.
+The directory of the loaded init package, a store path that changes
+on every rebuild, so a child spawned from an older configuration is
+replaced after a switch.  Falls back to `invocation-directory' when
+the library is not found.  The child runs the same Emacs binary as
+the parent (parenting's :emacs default), so the two share one package
+set."
+  (let ((library (locate-library "ch-emacs-config-default")))
+    (if library
+        (file-name-directory library)
+      invocation-directory)))
+
+(defconst ch-mcp-server--child-bootstrap
+  '(progn
+     (package-activate-all)
+     (require 'ch-emacs-config-default)
+     (when (fboundp 'eglot-ensure)
+       (mapatoms (lambda (sym)
+                   (when (and (boundp sym)
+                              (string-suffix-p "-mode-hook" (symbol-name sym))
+                              (listp (symbol-value sym))
+                              (memq 'eglot-ensure (symbol-value sym)))
+                     (remove-hook sym #'eglot-ensure)))))
+     t)
+  "Form evaluated in the mirror child right after it connects.
+The child has none of this file's code, so the form is self-contained:
+it activates the package set and loads the configuration the parent
+runs.  The workbench neutralizes the configuration's spawners from its
+side; the editor is not changed for this.  `after-init-hook' and
+`emacs-startup-hook' have already run in a -Q child that connected
+before this load, so `envrc-global-mode' and `global-jinx-mode' never
+start; no client frame ever exists, so ghostel's
+`initial-buffer-choice' never fires; the one live spawner is
+`eglot-ensure' on the mode hooks, which the form removes from every
+hook that carries it.")
+
+(defun ch-mcp-server--child-touch ()
+  "Re-arm the idle timer: the mirror child was just used."
+  (when ch-mcp-server--child-idle-timer
+    (cancel-timer ch-mcp-server--child-idle-timer))
+  (setq ch-mcp-server--child-idle-timer
+        (run-with-timer ch-mcp-server-child-idle-seconds nil
+                        #'ch-mcp-server-child-stop)))
+
+(defun ch-mcp-server--child-spawn ()
+  "Spawn the mirror child and return its connection.
+A daemon child (the full interactive environment, for major modes and
+indentation) kept at -Q: the configuration comes from the bootstrap
+form, not from init files.  Records the configuration key the child
+was spawned from and arms the idle timer."
+  (require 'parenting-parent)
+  (let ((conn (parenting-spawn
+               :daemon (format "ch-mcp-child-%d" (emacs-pid))
+               :quick t
+               :sandbox (list :ro-binds ch-mcp-server-child-ro-binds
+                              :network ch-mcp-server-child-network)
+               :timeout ch-mcp-server-child-spawn-timeout
+               :init ch-mcp-server--child-bootstrap
+               :name "ch-mcp-server-child")))
+    (setq ch-mcp-server--child conn
+          ch-mcp-server--child-key (ch-mcp-server--config-key))
+    (ch-mcp-server--child-touch)
+    conn))
+
+(defun ch-mcp-server--child-ensure ()
+  "Return a live connection to the mirror child, spawning one if needed.
+A live child spawned from the running configuration is reused and its
+idle timer re-armed; a dead one, or one from an older configuration,
+is stopped and replaced."
+  (if (and ch-mcp-server--child
+           (parenting-connection-live-p ch-mcp-server--child)
+           (equal ch-mcp-server--child-key (ch-mcp-server--config-key)))
+      (progn
+        (ch-mcp-server--child-touch)
+        ch-mcp-server--child)
+    (ch-mcp-server-child-stop)
+    (ch-mcp-server--child-spawn)))
+
+(defun ch-mcp-server-child-stop ()
+  "Shut the mirror child down and clear its state.
+A no-op without a child.  Run by the idle timer, before a replacement
+spawn, and by hand when the resident user wants the child gone."
+  (interactive)
+  (when ch-mcp-server--child-idle-timer
+    (cancel-timer ch-mcp-server--child-idle-timer)
+    (setq ch-mcp-server--child-idle-timer nil))
+  (when ch-mcp-server--child
+    (let ((conn ch-mcp-server--child))
+      (setq ch-mcp-server--child nil
+            ch-mcp-server--child-key nil)
+      (parenting-shutdown conn))))
 
 ;;; Server lifecycle and registration
 
