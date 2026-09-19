@@ -421,7 +421,13 @@ print a secret into a log.
   `:child-library-directory`), which is why the builder belongs there;
   `:command-wrapper` remains the escape hatch and the composition point
   for remote spawns. Tests must skip where user namespaces are
-  unavailable.
+  unavailable. Later: the spec (paths, environment, network) is
+  backend-neutral, so the bwrap builder becomes one backend behind a
+  `parenting-sandbox-backend` selector, with Landlock (Linux, no
+  namespaces; the workspace already has a shim) and macOS `sandbox-exec`
+  as further backends. Those two differ from bwrap in one way the
+  mirror must note: ungranted paths stay visible by name but unreadable,
+  where bwrap leaves them absent.
 - **The editor layer's mirror profile** (landed): `ch/mirror-profile`, a
   variable the spawner sets on the child's command line before the
   configuration loads (`--eval (setq ch/mirror-profile t)`). The inits
