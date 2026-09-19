@@ -95,8 +95,9 @@
                 // workbenchBundles;
               sources = {
                 # Through the editor rather than a second input, so both
-                # layers build pr-review from one revision.
-                inherit (inputs.ch-emacs-config.inputs) pr-review;
+                # layers build these from one revision. The list mirrors
+                # the editor module's own `emacsPackageSources`.
+                inherit (inputs.ch-emacs-config.inputs) pr-review ghostel;
               };
               extraOverrides = [
                 (self: _super: {
