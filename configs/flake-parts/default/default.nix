@@ -8,8 +8,6 @@
 {
 
   debug = false;
-  systems = [ "x86_64-linux" ];
-
   caisson.configInfo.configName = "ch-ai-workbench";
   caisson.modules.homeManager.exported = modules: {
     inherit (modules)
