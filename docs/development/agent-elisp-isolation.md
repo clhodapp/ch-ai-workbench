@@ -256,10 +256,15 @@ variable, so a synced variable is an effect.
   so leaving it changed lands nothing on its own; only the returned text
   crosses the back channel, which is the single write path with all its
   checks.
-- Session facts that are not text (Evil state, a terminal's input mode,
-  hook lists, which features are loaded, what a key resolves to in the
-  live session) are answered by small named read-only tools in the
-  parent. There is no open evaluator in the parent.
+- Session facts that are not text are answered by four named read-only
+  tools in the parent (landed): `feature-loaded` (featurep, fboundp,
+  boundp of a name, never a value), `hooks` (the functions on a hook,
+  global and buffer-local, lambdas shown as `<lambda>`), `buffer-state`
+  (mode, minor modes, flags, size, point, Evil state, a terminal's input
+  mode, sensitivity, agent visibility), and `key-binding` (what a key
+  resolves to in a buffer, through Evil's state maps). A named buffer
+  passes the same read scope as `buffer-text`. There is no open
+  evaluator in the parent.
 
 The mirror also cannot answer questions about the parent's own runtime
 state, which is why those tools exist rather than an escape hatch.
