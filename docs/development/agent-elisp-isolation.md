@@ -55,8 +55,9 @@ live session, owns every policy decision below, and answers session
 facts through named read-only tools.
 
 **The child** is an Emacs spawned by `parenting-spawn` from the same
-Nix-built configuration as the parent, in a mirror profile (no language
-servers, no process-spawning modes), under a bwrap sandbox: a scrubbed
+Nix-built configuration as the parent, with the configuration's
+spawners unhooked after it loads (no language servers, no
+process-spawning modes; see the dependencies), under a bwrap sandbox: a scrubbed
 environment, and a filesystem view limited to the Nix store, the
 configuration, the project directories, and the mirror directory. An
 unsandboxed child would be weaker than today's gate, since `getenv`
@@ -428,15 +429,17 @@ print a secret into a log.
   as further backends. Those two differ from bwrap in one way the
   mirror must note: ungranted paths stay visible by name but unreadable,
   where bwrap leaves them absent.
-- **The editor layer's mirror profile** (landed): `ch/mirror-profile`, a
-  variable the spawner sets on the child's command line before the
-  configuration loads (`--eval (setq ch/mirror-profile t)`). The inits
-  that start external programs or long-lived helpers consult it and stay
-  off: eglot, envrc (direnv), jinx, and ghostel's terminal on a client
-  frame. A runtime variable rather than a Nix option, so one built
-  configuration serves the interactive session and its mirror children;
-  the `emacs-mirror-profile` check loads the init with and without it and
-  asserts hook membership both ways.
+- **The editor is not changed.** The editor sits below the workbench
+  and knows nothing about agents; a knob in it with the workbench as
+  its one consumer would invert that. The child loads the editor
+  configuration as it is and the workbench neutralizes the spawners
+  from its side, in the child's bootstrap after the `require`. In a
+  child started with `-Q` and connected before the configuration
+  loads, `after-init-hook` and `emacs-startup-hook` have already run,
+  so envrc and jinx never start; no client frame ever exists, so
+  ghostel's terminal never opens; the one live spawner is
+  `eglot-ensure` on the mode hooks, which the bootstrap removes. The
+  lifecycle piece's smoke test asserts that state in the child.
 - **The `ghostel-terminals` skill** was an untracked, hand-placed file
   telling the agent terminals are always readable buffers. Terminals
   sensitive-by-default reverses that, so the skill is adopted into the
