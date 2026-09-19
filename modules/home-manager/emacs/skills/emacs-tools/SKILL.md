@@ -84,7 +84,9 @@ terse labels referencing it. Also for "here's what I found, organized".
   DAGs. Render errors return mmdc's own message — fix the source and
   re-present under the same name.
 - Buffers are named `*agent/<name>*`; reusing a name rewrites the
-  buffer (fine for iterating on the same artifact).
+  buffer (fine for iterating on the same artifact). The overwritten
+  text is not lost: every write is appended to the history store
+  described below.
 - `display: no` writes without raising a window. Display never steals
   focus; the user's display-buffer-alist rules govern placement.
 
@@ -96,7 +98,28 @@ the buffer. Use it for anticipated questions with answers, a glossary,
 a checklist — things read once alongside the reply. Use `present` for
 artifacts the user keeps. Write paragraphs as single long lines; the
 window soft-wraps. Buffers are `*agent/sidebar/<name>*`; reusing a
-name rewrites the sidebar.
+name rewrites the sidebar. A sidebar the user dismisses with `q` is
+gone from the session but stays in the history store below.
+
+## History: presentations survive the buffer
+
+Every `present` and `sidebar` write is appended as a timestamped
+revision to `ch-mcp-server-history-file` (default
+`$XDG_DATA_HOME/Emacs/agent-buffer-history.eld`), so a presentation
+survives being overwritten under the same name, being dismissed, and
+an Emacs daemon restart. The user reaches revisions with
+`ch-mcp-server-history` (`<leader> a h`), which lists them newest
+first and opens the chosen one read-only in a separate
+`*agent-history/...*` buffer, leaving the live buffer alone.
+
+Two consequences for how you write. Content presented under a name you
+reuse is kept, so iterating on an artifact costs the user nothing and
+needs no "superseding the earlier version" note. Mermaid revisions
+store the source rather than the rendered SVG, so a stored diagram is
+re-renderable and the store stays small. Revisions past
+`ch-mcp-server-history-limit` (200) are dropped oldest-first, and a
+body over `ch-mcp-server-history-max-bytes` (200000) is stored
+truncated with a marker line.
 
 ## edit-buffer / edit-file: the single surgical change
 

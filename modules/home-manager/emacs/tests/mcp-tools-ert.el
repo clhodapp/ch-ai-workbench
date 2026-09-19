@@ -57,6 +57,26 @@ so a bare `.git' directory suffices without a git binary."
       (make-directory (expand-file-name child root) t))
     root))
 
+;; Every `present' and `sidebar' call records a revision of the buffer it
+;; writes.  Point the store at a throwaway file for the whole batch run so
+;; no test, here or added later, writes the real history under
+;; XDG_DATA_HOME.
+(setq ch-mcp-server-history-file
+      (make-temp-file "mcp-tools-test-history" nil ".eld"))
+
+(defmacro ch-mcp-tests--with-history (&rest body)
+  "Run BODY against a history store of its own, empty at entry.
+The session-wide store above keeps tests out of the user's real file;
+this isolates one test's revisions from every other test's."
+  (declare (indent 0))
+  `(let ((ch-mcp-server-history-file (make-temp-file "mcp-history" nil ".eld"))
+         (ch-mcp-server--history nil)
+         (ch-mcp-server--history-loaded nil))
+     (unwind-protect
+         (progn ,@body)
+       (when (file-exists-p ch-mcp-server-history-file)
+         (delete-file ch-mcp-server-history-file)))))
+
 (ert-deftest ch-mcp-tools-all-registered ()
   "Every designed tool is registered under the emacs server id."
   (let ((tools (gethash "emacs" mcp-server-lib--tools)))
@@ -812,5 +832,110 @@ The latch keeps module-level markers; tests must not leak them."
                     (lambda (w)
                       (eq w #'ch-mcp-server--log-knob-watcher))
                     watchers))))))
+
+
+(ert-deftest ch-mcp-tools-history-records-every-write ()
+  "Each present is a revision of its own, so a superseded one survives."
+  (ch-mcp-tests--with-history
+    (ch-mcp-server--present "ert-hist" "# v1" "markdown" "no")
+    (ch-mcp-server--present "ert-hist" "# v2" "markdown" "no")
+    (ch-mcp-server--sidebar "ert-hist-side" "# QA" "no")
+    ;; Force a read back from disk rather than trusting the cache.
+    (setq ch-mcp-server--history nil
+          ch-mcp-server--history-loaded nil)
+    (let ((history (ch-mcp-server--history-load)))
+      (should (= (length history) 3))
+      ;; Newest first.
+      (should (equal (plist-get (nth 0 history) :name)
+                     "*agent/sidebar/ert-hist-side*"))
+      (should (equal (plist-get (nth 1 history) :content) "# v2"))
+      (should (equal (plist-get (nth 2 history) :content) "# v1")))))
+
+(ert-deftest ch-mcp-tools-history-stores-mermaid-source ()
+  "A mermaid revision keeps the source, not the rendered SVG."
+  (skip-unless (executable-find "mmdc"))
+  (ch-mcp-tests--with-history
+    (ch-mcp-server--present "ert-hist-mmd" "graph LR\n a --> b" "mermaid" "no")
+    (let ((revision (car (ch-mcp-server--history-load))))
+      (should (equal (plist-get revision :mode) "mermaid"))
+      (should (equal (plist-get revision :content) "graph LR\n a --> b")))))
+
+(ert-deftest ch-mcp-tools-history-caps-revisions ()
+  "The oldest revisions fall off once the limit is reached."
+  (ch-mcp-tests--with-history
+    (let ((ch-mcp-server-history-limit 2))
+      (dolist (n '("1" "2" "3"))
+        (ch-mcp-server--history-record "*agent/ert-cap*" n "markdown"))
+      (setq ch-mcp-server--history nil
+            ch-mcp-server--history-loaded nil)
+      (let ((history (ch-mcp-server--history-load)))
+        (should (= (length history) 2))
+        (should (equal (mapcar (lambda (r) (plist-get r :content)) history)
+                       '("3" "2")))))))
+
+(ert-deftest ch-mcp-tools-history-truncates-on-bytes ()
+  "An oversized body is cut to the byte limit without splitting a character."
+  (ch-mcp-tests--with-history
+    (let ((ch-mcp-server-history-max-bytes 10))
+      ;; Two bytes per character in UTF-8, so ten bytes is five of them.
+      (ch-mcp-server--history-record "*agent/ert-big*" (make-string 50 ?é)
+                                     "markdown")
+      (let ((content (plist-get (car (ch-mcp-server--history-load)) :content)))
+        (should (string-prefix-p (make-string 5 ?é) content))
+        (should (string-match-p "truncated" content))))))
+
+(ert-deftest ch-mcp-tools-history-survives-a-corrupt-store ()
+  "A store that will not read starts an empty history instead of signalling.
+Presenting must not become a tool error because the file was truncated."
+  (ch-mcp-tests--with-history
+    (with-temp-file ch-mcp-server-history-file (insert "((:name broken"))
+    (setq ch-mcp-server--history nil
+          ch-mcp-server--history-loaded nil)
+    (should-not (ch-mcp-server--history-load))
+    (ch-mcp-server--present "ert-hist-corrupt" "# fresh" "markdown" "no")
+    (setq ch-mcp-server--history nil
+          ch-mcp-server--history-loaded nil)
+    (should (= (length (ch-mcp-server--history-load)) 1))))
+
+(ert-deftest ch-mcp-tools-history-picker-opens-a-separate-buffer ()
+  "Reviewing a revision must not overwrite the live *agent/...* buffer."
+  (ch-mcp-tests--with-history
+    (ch-mcp-server--present "ert-hist-pick" "# old" "markdown" "no")
+    (ch-mcp-server--present "ert-hist-pick" "# new" "markdown" "no")
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read)
+                   ;; Take the second (older) candidate.
+                   (lambda (_prompt collection &rest _)
+                     (nth 1 (all-completions "" collection))))
+                  ((symbol-function 'pop-to-buffer) #'ignore))
+          (ch-mcp-server-history)
+          (with-current-buffer "*agent-history/*agent/ert-hist-pick**"
+            (should (string-match-p "old" (buffer-string)))
+            (should buffer-read-only))
+          ;; The live buffer still holds the newest presentation.
+          (with-current-buffer "*agent/ert-hist-pick*"
+            (should (string-match-p "new" (buffer-string)))))
+      (when-let* ((buffer (get-buffer "*agent-history/*agent/ert-hist-pick**")))
+        (kill-buffer buffer)))))
+
+(ert-deftest ch-mcp-tools-history-picker-reaches-duplicate-labels ()
+  "Two revisions that label identically must both be selectable.
+Same buffer, same minute, same first line: without a distinguishing
+suffix the completion alist would resolve both to the newer one."
+  (ch-mcp-tests--with-history
+    (cl-letf (((symbol-function 'current-time) (lambda () '(26000 0 0 0))))
+      (ch-mcp-server--history-record "*agent/ert-dup*" "same\nfirst" "markdown")
+      (ch-mcp-server--history-record "*agent/ert-dup*" "same\nsecond" "markdown"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read)
+                   ;; The older of the two identical-looking candidates.
+                   (lambda (_prompt collection &rest _)
+                     (nth 1 (all-completions "" collection))))
+                  ((symbol-function 'pop-to-buffer) #'ignore))
+          (ch-mcp-server-history)
+          (with-current-buffer "*agent-history/*agent/ert-dup**"
+            (should (string-match-p "first" (buffer-string)))))
+      (when-let* ((buffer (get-buffer "*agent-history/*agent/ert-dup**")))
+        (kill-buffer buffer)))))
 
 ;;; mcp-tools-ert.el ends here
