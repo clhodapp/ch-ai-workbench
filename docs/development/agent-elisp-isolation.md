@@ -197,7 +197,10 @@ buffer: a withheld buffer becomes `exposed`, a readable one becomes
 press exposes it; pressed in an ordinary buffer, it withholds it. It is
 the quick per-buffer override of the defaults, and it is the same
 command everywhere; terminals are not a special case of the toggle,
-only of the default.
+only of the default. The mode line shows the result for the displayed
+buffer, `agent:hidden` or `agent:visible`, computed from the sensitivity
+state and the debug-knob latch; the client-territory read scope is a
+fact about the calling client, so the mode line leaves it out.
 
 For a file the user knows is sensitive and no pattern anticipated,
 `ch-mcp-server-visit-sensitive` reads a file name and visits it with the
