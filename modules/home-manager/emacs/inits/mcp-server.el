@@ -62,6 +62,11 @@
 (declare-function collab-comments-all-threads "collab-comments")
 (declare-function unsafep "unsafep")
 (defvar safe-functions)
+;; Read by the session-fact tools through `bound-and-true-p' only: evil
+;; and ghostel are never required here, so a session without either
+;; reports "none".
+(defvar evil-state)
+(defvar ghostel--input-mode)
 
 (defvar ch-mcp-server-auto-open-scope 'session-projects
   "Scope of files the MCP tools may open into new buffers.
@@ -1072,6 +1077,211 @@ MCP Parameters:
                       diff)))
               (delete-file temp))))))))
 
+;;; Session facts
+
+;; Facts about the live session that are not buffer text (whether a
+;; feature is loaded, what sits on a hook, a buffer's mode and state,
+;; what a key resolves to), each answered by a small named read-only
+;; tool (docs/development/agent-elisp-isolation.md, "What runs where").
+;; The tools return facts, never arbitrary variable values: reading an
+;; arbitrary global is the confidentiality hole an open evaluator opens.
+;; Anything that names a buffer passes the same read scope as the text
+;; tools, so a withheld buffer is refused here as everywhere else.
+
+(defun ch-mcp-server--yes-no (value)
+  "\"yes\" when VALUE is non-nil, else \"no\"."
+  (if value "yes" "no"))
+
+(defun ch-mcp-server--named-buffer (name)
+  "The live buffer called NAME the agent may read, or a tool error.
+The by-name resolver the session-fact tools share: the missing-buffer
+message the text tools use, then `ch-mcp-server--buffer-accessible-or-throw'."
+  (ch-mcp-server--buffer-accessible-or-throw
+   (or (get-buffer name)
+       (mcp-server-lib-tool-throw (format "No buffer named %s" name)))))
+
+(defun ch-mcp-server--function-label (function)
+  "FUNCTION as a printable name: a symbol's name, else <lambda>.
+An anonymous function may close over data, so its body is never
+printed; the special hook value t is rendered as its meaning."
+  (cond ((eq function t) "t (run the global hook too)")
+        ((symbolp function) (symbol-name function))
+        (t "<lambda>")))
+
+(defun ch-mcp-server--hook-functions (value)
+  "The functions in hook VALUE as a list.
+A hook variable may hold a single function instead of a list."
+  (cond ((null value) nil)
+        ((functionp value) (list value))
+        ((listp value) value)
+        (t (list value))))
+
+(defun ch-mcp-server--feature-loaded (feature)
+  "Whether FEATURE is loaded, and whether its symbol is fboundp or boundp.
+
+A session fact the agent cannot get by reading buffer text: `featurep'
+on FEATURE, plus `fboundp' and `boundp' on the same symbol for
+convenience.  Only the three facts are returned, never the value of a
+variable.
+
+MCP Parameters:
+  feature - a feature or library name, e.g. ch-evil-ghostel"
+  (mcp-server-lib-with-error-handling
+    (let ((symbol (intern-soft (string-trim feature))))
+      (format "feature: %s\nloaded: %s\nfboundp: %s\nboundp: %s"
+              (string-trim feature)
+              (ch-mcp-server--yes-no (and symbol (featurep symbol)))
+              (ch-mcp-server--yes-no (and symbol (fboundp symbol)))
+              (ch-mcp-server--yes-no (and symbol (boundp symbol)))))))
+
+(defun ch-mcp-server--hooks (hook &optional buffer)
+  "The functions on HOOK: its global value, and the local value in BUFFER.
+
+Each function is printed by name; an anonymous function prints as
+<lambda> (its body may close over data).  In the local value, t means
+the global hook runs too and is shown as a line saying so.  Refuses a
+symbol that is not a bound variable, and a BUFFER the agent may not
+read.
+
+MCP Parameters:
+  hook - a hook variable name, e.g. find-file-hook
+  buffer - name of a live buffer whose local value to show as well"
+  (mcp-server-lib-with-error-handling
+    (let* ((name (string-trim hook))
+           (symbol (intern-soft name))
+           (buffer-name (ch-mcp-server--opt buffer))
+           (target (and buffer-name
+                        (ch-mcp-server--named-buffer buffer-name))))
+      (unless (and symbol (boundp symbol))
+        (mcp-server-lib-tool-throw
+         (format "%s is not a bound variable" name)))
+      (let ((global (ch-mcp-server--hook-functions (default-value symbol)))
+            (local (and target
+                        (local-variable-p symbol target)
+                        (ch-mcp-server--hook-functions
+                         (buffer-local-value symbol target))))
+            (lines nil))
+        (push (format "hook: %s" name) lines)
+        (if global
+            (dolist (function global)
+              (push (format "global: %s" (ch-mcp-server--function-label function))
+                    lines))
+          (push "global: (none)" lines))
+        (when target
+          (push (format "buffer: %s" (buffer-name target)) lines)
+          (cond
+           ((not (local-variable-p symbol target))
+            (push "local: (no buffer-local value)" lines))
+           ((null local)
+            (push "local: (none)" lines))
+           (t
+            (dolist (function local)
+              (push (format "local: %s" (ch-mcp-server--function-label function))
+                    lines)))))
+        (ch-mcp-server--capped (nreverse lines) nil "lines")))))
+
+(defvar ch-mcp-server-minor-mode-limit 40
+  "How many enabled minor modes `buffer-state' lists before truncating.")
+
+(defun ch-mcp-server--buffer-state (buffer)
+  "Non-text facts about the live buffer named BUFFER, one per line.
+
+File, major mode, enabled minor modes, read-only and modified flags,
+size, point as line:col (1-based, as the position tools report), the
+evil state, a terminal's input mode, the sensitivity mark, and whether
+the agent may see the buffer.  Refuses a buffer the agent may not
+read, so a withheld buffer yields no facts.
+
+MCP Parameters:
+  buffer - name of a live buffer, as listed by the list-buffers tool"
+  (mcp-server-lib-with-error-handling
+    (let ((target (ch-mcp-server--named-buffer buffer)))
+      (with-current-buffer target
+        (let* ((modes (seq-filter (lambda (mode)
+                                    (and (boundp mode) (symbol-value mode)))
+                                  minor-mode-list))
+               (total (length modes))
+               (limit ch-mcp-server-minor-mode-limit)
+               (shown (mapconcat #'symbol-name (seq-take modes limit) " ")))
+          (format (concat "buffer: %s\n"
+                          "file: %s\n"
+                          "major-mode: %s\n"
+                          "minor-modes: %s\n"
+                          "read-only: %s\n"
+                          "modified: %s\n"
+                          "size: %d\n"
+                          "point: %d:%d\n"
+                          "evil-state: %s\n"
+                          "input-mode: %s\n"
+                          "sensitivity: %s\n"
+                          "agent-visible: %s")
+                  (buffer-name)
+                  (or buffer-file-name "none")
+                  major-mode
+                  (if (> total limit)
+                      (format "%s ... %d more (%d total)"
+                              shown (- total limit) total)
+                    shown)
+                  (ch-mcp-server--yes-no buffer-read-only)
+                  (ch-mcp-server--yes-no (buffer-modified-p))
+                  (buffer-size)
+                  (line-number-at-pos (point))
+                  (1+ (current-column))
+                  (or (bound-and-true-p evil-state) "none")
+                  (or (bound-and-true-p ghostel--input-mode) "none")
+                  (or ch-mcp-server-buffer-sensitivity "unset")
+                  (ch-mcp-server--yes-no
+                   (ch-mcp-server--buffer-accessible-p target))))))))
+
+(defun ch-mcp-server--binding-label (binding)
+  "BINDING, the result of `key-binding', as a printable line.
+A command symbol prints by name, a prefix as <keymap (prefix)>, an
+anonymous command as <lambda>, a keyboard macro as <macro>, and
+nothing (or a key sequence longer than any binding) as unbound."
+  (cond ((or (null binding) (numberp binding)) "unbound")
+        ((keymapp binding) "<keymap (prefix)>")
+        ((symbolp binding) (symbol-name binding))
+        ((or (stringp binding) (vectorp binding)) "<macro>")
+        ((functionp binding) "<lambda>")
+        (t (format "<%s>" (type-of binding)))))
+
+(defun ch-mcp-server--key-binding (keys &optional buffer)
+  "What KEYS resolve to in BUFFER (default: the buffer in the selected window).
+
+The live answer, with every active keymap in that buffer's context
+\(major and minor modes, evil's state maps): a command symbol, <keymap
+\(prefix)> for a prefix, <lambda> for an anonymous command, or unbound.
+Under evil the leader is SPC in motion state, so write a leader
+binding as SPC p p, not <leader> p p.  Refuses a named BUFFER the
+agent may not read.
+
+MCP Parameters:
+  keys - a key description as kbd reads it, e.g. SPC p p or C-c C-t
+  buffer - name of a live buffer to resolve in (default: the buffer in
+      the selected window)"
+  (mcp-server-lib-with-error-handling
+    (let* ((buffer-name (ch-mcp-server--opt buffer))
+           (target (if buffer-name
+                       (ch-mcp-server--named-buffer buffer-name)
+                     (window-buffer (selected-window))))
+           (key (condition-case err
+                    (kbd keys)
+                  (error (mcp-server-lib-tool-throw
+                          (format "Cannot read key description %S: %s"
+                                  keys (error-message-string err)))))))
+      (with-current-buffer target
+        ;; Built newest-first and reversed at the end.
+        (let ((lines (list (format "buffer: %s" (buffer-name))
+                           (format "keys: %s" (key-description key)))))
+          (when (featurep 'evil)
+            (push (format "evil-state: %s"
+                          (or (bound-and-true-p evil-state) "none"))
+                  lines))
+          (push (format "binding: %s"
+                        (ch-mcp-server--binding-label (key-binding key)))
+                lines)
+          (mapconcat #'identity (nreverse lines) "\n"))))))
+
 ;;; Agent buffer history
 
 ;; `present' and `sidebar' write into a buffer named for a slug and
@@ -1778,7 +1988,10 @@ the others."
            "live/shared buffer without saving (both carry the native Edit "
            "contract: unique match, fails loudly on drift); leaving or "
            "answering review notes on text under discussion -> add-comment, "
-           "reading the user's notes -> list-comments. eval-elisp is "
+           "reading the user's notes -> list-comments; a session fact that "
+           "is not buffer text (is a feature loaded, what is on a hook, a "
+           "buffer's mode/state/visibility, what a key does) -> "
+           "feature-loaded, hooks, buffer-state, key-binding. eval-elisp is "
            "the read-only escape hatch for everything else: it accepts "
            "side-effect-free elisp only, and writes are confined to the "
            "session's own project.")
@@ -1835,6 +2048,26 @@ the others."
           :id "buffer-diff"
           :description
           "Unified diff of a file's unsaved buffer state vs the file on disk"
+          :read-only t)
+    (list #'ch-mcp-server--feature-loaded
+          :id "feature-loaded"
+          :description
+          "Whether a feature is loaded in the live session (featurep), plus fboundp/boundp on its symbol; a session fact buffer text cannot give"
+          :read-only t)
+    (list #'ch-mcp-server--hooks
+          :id "hooks"
+          :description
+          "Functions on a hook variable in the live session: the global value, and a buffer's local value when a buffer is named (lambdas print as <lambda>)"
+          :read-only t)
+    (list #'ch-mcp-server--buffer-state
+          :id "buffer-state"
+          :description
+          "Non-text facts about a live buffer: file, major/minor modes, read-only, modified, size, point, evil state, terminal input mode, sensitivity, agent visibility"
+          :read-only t)
+    (list #'ch-mcp-server--key-binding
+          :id "key-binding"
+          :description
+          "What a key sequence (kbd syntax, e.g. SPC p p; the evil leader is SPC in motion state) resolves to in a buffer's live context: command, <keymap (prefix)>, <lambda>, or unbound"
           :read-only t)
     (list #'ch-mcp-server--present
           :id "present"

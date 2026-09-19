@@ -85,7 +85,8 @@ this isolates one test's revisions from every other test's."
                   "diagnostics" "find-references" "find-definition"
                   "symbol-info" "document-outline" "modified-buffers"
                   "buffer-diff" "present" "sidebar" "edit-buffer" "edit-file"
-                  "transform" "add-comment" "list-comments"))
+                  "transform" "add-comment" "list-comments"
+                  "feature-loaded" "hooks" "buffer-state" "key-binding"))
       (should (gethash id tools)))
     ;; The disk-writing verb is a separate name from buffer mutation so
     ;; restricted dispatch profiles can deny it structurally; a rejoined
@@ -867,6 +868,131 @@ missing-buffer error for a name with no buffer."
         (should-not (string-match-p "gptel-log" listing))
         (should-not (string-match-p (regexp-quote (buffer-name buffer))
                                     listing))))))
+
+;;; Session facts: the four named read-only tools
+
+(ert-deftest ch-mcp-tools-feature-loaded ()
+  "A loaded feature reports loaded; a made-up one does not; a defined
+function reports fboundp, and no value is ever printed."
+  (let ((result (ch-mcp-server--feature-loaded "ert")))
+    (should (string-match-p "^feature: ert$" result))
+    (should (string-match-p "^loaded: yes$" result)))
+  (let ((result (ch-mcp-server--feature-loaded "ch-mcp-tests-no-such-feature")))
+    (should (string-match-p "^loaded: no$" result))
+    (should (string-match-p "^fboundp: no$" result))
+    (should (string-match-p "^boundp: no$" result)))
+  (let ((result (ch-mcp-server--feature-loaded "ch-mcp-server--capped")))
+    (should (string-match-p "^loaded: no$" result))
+    (should (string-match-p "^fboundp: yes$" result)))
+  ;; A variable reports boundp, and only that: never its value.
+  (defvar ch-mcp-tests--secret-var "hunter2")
+  (let ((result (ch-mcp-server--feature-loaded "ch-mcp-tests--secret-var")))
+    (should (string-match-p "^boundp: yes$" result))
+    (should-not (string-match-p "hunter2" result))))
+
+(defvar ch-mcp-tests--hook nil
+  "A hook variable for the hooks tool tests.")
+
+(defun ch-mcp-tests--hook-fn ()
+  "A named function to put on `ch-mcp-tests--hook'."
+  nil)
+
+(ert-deftest ch-mcp-tools-hooks-global ()
+  "A named function shows by name, a lambda as <lambda> with no body."
+  (let ((ch-mcp-tests--hook (list #'ch-mcp-tests--hook-fn
+                                  (lambda () 'closed-over-secret))))
+    (let ((result (ch-mcp-server--hooks "ch-mcp-tests--hook")))
+      (should (string-match-p "^hook: ch-mcp-tests--hook$" result))
+      (should (string-match-p "^global: ch-mcp-tests--hook-fn$" result))
+      (should (string-match-p "^global: <lambda>$" result))
+      (should-not (string-match-p "closed-over-secret" result)))))
+
+(ert-deftest ch-mcp-tools-hooks-unbound-symbol-is-refused ()
+  (let ((err (should-error (ch-mcp-server--hooks "ch-mcp-tests-no-such-hook")
+                           :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "not a bound variable" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-hooks-buffer-local ()
+  "A buffer-local value lists its functions and the t that means run the
+global hook too."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-hooks-local")
+    (add-hook 'ch-mcp-tests--hook #'ch-mcp-tests--hook-fn nil t))
+  (let ((result (ch-mcp-server--hooks "ch-mcp-tests--hook"
+                                      "ch-mcp-tests-hooks-local")))
+    (should (string-match-p "^buffer: ch-mcp-tests-hooks-local$" result))
+    (should (string-match-p "^local: ch-mcp-tests--hook-fn$" result))
+    (should (string-match-p "^local: t (run the global hook too)$" result))))
+
+(ert-deftest ch-mcp-tools-hooks-refuses-withheld-buffer ()
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-hooks-sensitive")
+    (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+  (let ((err (should-error (ch-mcp-server--hooks "find-file-hook"
+                                                 "ch-mcp-tests-hooks-sensitive")
+                           :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-buffer-state ()
+  "A file-visiting buffer reports its mode, size, point, and visibility."
+  (ch-mcp-tests--in-territory
+    (let* ((file (ch-mcp-tests--temp-file "one\ntwo\nthree\n"))
+           (buffer (find-file-noselect file)))
+      (with-current-buffer buffer
+        (goto-char (point-min))
+        (forward-line 1)
+        (forward-char 2))
+      (let ((result (ch-mcp-server--buffer-state (buffer-name buffer))))
+        (should (string-match-p (format "^buffer: %s$"
+                                        (regexp-quote (buffer-name buffer)))
+                                result))
+        (should (string-match-p (format "^file: %s$" (regexp-quote file))
+                                result))
+        (should (string-match-p "^major-mode: [a-z-]+-mode$" result))
+        (should (string-match-p "^minor-modes: " result))
+        (should (string-match-p "^read-only: no$" result))
+        (should (string-match-p "^modified: no$" result))
+        (should (string-match-p "^size: 14$" result))
+        (should (string-match-p "^point: 2:3$" result))
+        (should (string-match-p "^evil-state: " result))
+        (should (string-match-p "^input-mode: none$" result))
+        (should (string-match-p "^sensitivity: unset$" result))
+        (should (string-match-p "^agent-visible: yes$" result))))))
+
+(ert-deftest ch-mcp-tools-buffer-state-refuses-terminal ()
+  "A terminal is withheld from buffer-state like every other read tool."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-state-terminal")
+    (setq-local major-mode 'ghostel-mode))
+  (let ((err (should-error
+              (ch-mcp-server--buffer-state "ch-mcp-tests-state-terminal")
+              :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err))))
+  (let ((err (should-error (ch-mcp-server--buffer-state "ch-mcp-tests-no-such")
+                           :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "No buffer named" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-key-binding ()
+  "A bound chord resolves to a command symbol; a nonsense chord does not
+error."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-keys")
+    (fundamental-mode))
+  (let ((result (ch-mcp-server--key-binding "C-x C-f" "ch-mcp-tests-keys")))
+    (should (string-match-p "^keys: C-x C-f$" result))
+    (should (string-match-p "^buffer: ch-mcp-tests-keys$" result))
+    (should (string-match-p "^binding: [a-z][a-z0-9/-]*$" result))
+    (should-not (string-match-p "^binding: unbound$" result)))
+  (let ((result (ch-mcp-server--key-binding "C-c C-M-S-q" "ch-mcp-tests-keys")))
+    (should (string-match-p "^binding: \\(unbound\\|<keymap (prefix)>\\)$"
+                            result)))
+  ;; A prefix key is named as one.
+  (should (string-match-p "^binding: <keymap (prefix)>$"
+                          (ch-mcp-server--key-binding "C-x" "ch-mcp-tests-keys")))
+  ;; No buffer named: the selected window's buffer answers.
+  (should (string-match-p "^binding: " (ch-mcp-server--key-binding "C-x C-f"))))
+
+(ert-deftest ch-mcp-tools-key-binding-refuses-withheld-buffer ()
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-keys-sensitive")
+    (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+  (should-error (ch-mcp-server--key-binding "C-x C-f" "ch-mcp-tests-keys-sensitive")
+                :type 'mcp-server-lib-tool-error))
 
 ;;; Read scope: the debug-knob latch
 
