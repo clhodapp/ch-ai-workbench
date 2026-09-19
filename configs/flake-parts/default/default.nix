@@ -124,6 +124,7 @@
                   inherit lib;
                   readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
                   merman = inputs.merman.packages.${system}.merman;
+                  gitleaks = pkgs.gitleaks;
                 }
               )
             );
