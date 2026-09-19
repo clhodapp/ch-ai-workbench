@@ -907,6 +907,166 @@ MCP Parameters:
                       diff)))
               (delete-file temp))))))))
 
+;;; Agent buffer history
+
+;; `present' and `sidebar' write into a buffer named for a slug and
+;; erase whatever was there.  Two things are lost that way: a
+;; presentation superseded under the same name, and every presentation
+;; at all when the Emacs daemon rotates.  Each write is therefore
+;; appended to a store on disk as a timestamped revision, and
+;; `ch-mcp-server-history' reads them back.  The store is the record;
+;; the live buffer is a view of its newest revision.
+
+(defcustom ch-mcp-server-history-file
+  (expand-file-name "Emacs/agent-buffer-history.eld"
+                    (or (getenv "XDG_DATA_HOME")
+                        (expand-file-name "~/.local/share")))
+  "File holding the revision history of agent presentation buffers.
+Data rather than configuration, so it follows the other persisted
+state (savehist, save-place) under XDG_DATA_HOME instead of the user
+Emacs directory."
+  :type 'file
+  :group 'ch-emacs-config)
+
+(defcustom ch-mcp-server-history-limit 200
+  "Number of revisions kept in `ch-mcp-server-history-file'.
+Oldest revisions past this count are dropped on the next write.  The
+cap is global rather than per name: a session that presents one buffer
+fifty times should not push out fifty other buffers' history."
+  :type 'integer
+  :group 'ch-emacs-config)
+
+(defcustom ch-mcp-server-history-max-bytes 1000000
+  "Largest revision body stored, in bytes.
+Bodies over this size are stored truncated, with a marker line, so one
+oversized presentation cannot make the store unreadable.  The limit sits
+above the documents actually presented, a long design document running
+to a few hundred kilobytes, and below a mermaid render gone wrong, which
+is an SVG that can reach megabytes."
+  :type 'integer
+  :group 'ch-emacs-config)
+
+(defvar ch-mcp-server--history nil
+  "Cached revision list, newest first, or nil when not yet loaded.
+Each element is a plist: :name buffer name, :time an Emacs time value,
+:mode the presentation mode string, :content the body.")
+
+(defvar ch-mcp-server--history-loaded nil
+  "Whether `ch-mcp-server--history' reflects the file on disk.")
+
+(defun ch-mcp-server--history-load ()
+  "Return the revision list, reading the store on first use."
+  (unless ch-mcp-server--history-loaded
+    (setq ch-mcp-server--history
+          (when (file-readable-p ch-mcp-server-history-file)
+            ;; A truncated or hand-edited store must not break
+            ;; presenting; an unreadable file starts an empty history.
+            (ignore-errors
+              (with-temp-buffer
+                (insert-file-contents ch-mcp-server-history-file)
+                (goto-char (point-min))
+                (read (current-buffer)))))
+          ch-mcp-server--history-loaded t))
+  ch-mcp-server--history)
+
+(defun ch-mcp-server--history-record (name content mode)
+  "Append a revision of buffer NAME holding CONTENT in MODE to the store.
+Returns nil.  Every failure is swallowed: history is a convenience, and
+a full disk must not turn a presentation into a tool error."
+  (ignore-errors
+    (let* ((body (if (> (string-bytes content) ch-mcp-server-history-max-bytes)
+                     ;; Cut on the byte count the limit is expressed in,
+                     ;; then decode back, discarding a multibyte
+                     ;; character the cut landed inside.
+                     (concat (decode-coding-string
+                              (substring (encode-coding-string content 'utf-8)
+                                         0 ch-mcp-server-history-max-bytes)
+                              'utf-8 t)
+                             "\n\n[truncated by ch-mcp-server-history-max-bytes]")
+                   content))
+           (revision (list :name name
+                           :time (current-time)
+                           :mode mode
+                           :content body))
+           (history (cons revision (ch-mcp-server--history-load))))
+      (setq ch-mcp-server--history
+            (seq-take history ch-mcp-server-history-limit))
+      (make-directory (file-name-directory ch-mcp-server-history-file) t)
+      (with-temp-file ch-mcp-server-history-file
+        (let ((print-length nil)
+              (print-level nil))
+          (prin1 ch-mcp-server--history (current-buffer))))))
+  nil)
+
+(defun ch-mcp-server--history-label (revision)
+  "A completing-read line for REVISION: time, buffer name, first line."
+  (let* ((content (or (plist-get revision :content) ""))
+         (first-line (car (split-string content "\n")))
+         (summary (string-trim (or first-line ""))))
+    (format "%s  %-28s  %s"
+            (format-time-string "%Y-%m-%d %H:%M" (plist-get revision :time))
+            (or (plist-get revision :name) "?")
+            (truncate-string-to-width summary 60))))
+
+(defun ch-mcp-server-history ()
+  "Pick a stored agent presentation revision and show it read-only.
+Candidates are every revision in `ch-mcp-server-history-file', newest
+first, labelled with the time, the buffer name, and the first line of
+the body.  The chosen revision opens in its own buffer rather than the
+live *agent/...* one, so reviewing history never overwrites what an
+agent last presented."
+  (interactive)
+  (setq ch-mcp-server--history-loaded nil)
+  (let ((history (ch-mcp-server--history-load)))
+    (unless history
+      (user-error "No agent presentation history in %s"
+                  ch-mcp-server-history-file))
+    (let* (;; Two revisions of one buffer written in the same minute
+           ;; with the same first line label identically, and `assoc'
+           ;; would then reach only the newer.  The index makes every
+           ;; candidate distinct without being what the eye reads.
+           (index 0)
+           (candidates
+            (mapcar (lambda (revision)
+                      (setq index (1+ index))
+                      (cons (format "%s  #%d"
+                                    (ch-mcp-server--history-label revision)
+                                    index)
+                            revision))
+                    history))
+           ;; The labels lead with a timestamp and the list is already
+           ;; newest first; keep that order rather than letting
+           ;; completion sort it alphabetically.
+           (completion-table
+            (lambda (string predicate action)
+              (if (eq action 'metadata)
+                  '(metadata (display-sort-function . identity)
+                             (cycle-sort-function . identity))
+                (complete-with-action action candidates string predicate))))
+           (choice (completing-read "Agent revision: " completion-table nil t))
+           (revision (cdr (assoc choice candidates)))
+           (buffer (get-buffer-create
+                    (format "*agent-history/%s*"
+                            (plist-get revision :name)))))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (or (plist-get revision :content) "")))
+        (if (equal (plist-get revision :mode) "diff")
+            (ch-mcp-server--set-major-mode #'diff-mode)
+          (ch-mcp-server--set-major-mode #'markdown-ts-mode)
+          (visual-line-mode 1))
+        (setq buffer-read-only t)
+        (set-buffer-modified-p nil)
+        (goto-char (point-min)))
+      (pop-to-buffer buffer))))
+
+;; `<leader> a' is the ai prefix the gptel and claude-queue bundles also
+;; bind under; h for history.  Motion state covers visual state too.
+(declare-function evil-global-set-key "evil-core")
+(with-eval-after-load 'evil
+  (evil-global-set-key 'motion (kbd "<leader> a h") #'ch-mcp-server-history))
+
 ;;; Presenting to the user
 
 (defvar ch-mcp-server-mermaid-timeout 30
@@ -1039,6 +1199,10 @@ MCP Parameters:
              (ch-mcp-server--set-major-mode #'fundamental-mode)))
           (set-buffer-modified-p nil)
           (goto-char (point-min)))
+        ;; Store the mermaid source rather than the rendered SVG: the
+        ;; source is what a later reader can re-render or edit, and an
+        ;; SVG blob would blow past the body size cap for no gain.
+        (ch-mcp-server--history-record (buffer-name buffer) content mode)
         (if (equal display "no")
             (format "Wrote %s (not displayed)" (buffer-name buffer))
           (display-buffer buffer)
@@ -1106,6 +1270,7 @@ MCP Parameters:
         (ch-emacs-config-sidebar-mode 1)
         (set-buffer-modified-p nil)
         (goto-char (point-min)))
+      (ch-mcp-server--history-record (buffer-name buffer) content "markdown")
       (if (equal display "no")
           (format "Wrote %s (not displayed)" (buffer-name buffer))
         (display-buffer buffer
