@@ -1245,6 +1245,13 @@ module points this at the nix-installed merman (the same drv the
 language-server table spawns); the bare-name default only works when
 an mmdc is on PATH.")
 
+(defvar ch-mcp-server-gitleaks-command '("gitleaks")
+  "Command list prefix for the gitleaks secret scanner.
+The mirror's secret scan appends its subcommand and flags.  The
+home-manager module points this at the nix-installed gitleaks from the
+pinned nixpkgs, so the rule set moves with the pin; the bare-name
+default only works when a gitleaks is on PATH.")
+
 (defun ch-mcp-server--render-mermaid (source)
   "Render mermaid SOURCE to an SVG data string via the mmdc CLI.
 The theme follows the selected frame's background mode.  Render errors
