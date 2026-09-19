@@ -1,7 +1,7 @@
 # Agent Elisp Isolation
 
-Design, 2026-09-07. Nothing below is implemented yet; the phases at the
-end give the order. The subject is the elisp an agent runs against the
+Design, 2026-09-07. The phases at the end give the order and mark what
+has landed. The subject is the elisp an agent runs against the
 resident Emacs through the MCP server
 (`modules/home-manager/emacs/inits/mcp-server.el`): how it is kept from
 changing the session, and how it is kept from seeing what it was not
@@ -59,7 +59,9 @@ Nix-built configuration as the parent, with the configuration's
 spawners unhooked after it loads (no language servers, no
 process-spawning modes; see the dependencies), under a bwrap sandbox: a scrubbed
 environment, and a filesystem view limited to the Nix store, the
-configuration, the project directories, and the mirror directory. An
+configuration, the project directories, and the copy directory (the
+directory in the jail holding a file copy of each buffer's text, under
+the forward contract below). An
 unsandboxed child would be weaker than today's gate, since `getenv`
 would return real keys and `insert-file-contents` would read
 `~/.authinfo`; the sandbox is part of the design, not a hardening step
@@ -68,17 +70,17 @@ configuration store path so that a switch replaces it, stopped after
 idle, and kills itself when the connection closes, which `parenting`
 already does.
 
-**The mirror** is the data the child holds. The parent produces it per
-request under the two contracts below.
+**The copied text** is the data the child holds. The parent produces it
+per request under the two contracts below.
 
 **The agent's CLI** runs inside the same bwrap filesystem view as the
 child, which makes a second editing mode possible: the CLI transform
 (see "What runs where"). A buffer's inert text is materialized as a
-file in the mirror directory, and the agent edits it with its ordinary
+file in the copy directory, and the agent edits it with its ordinary
 command-line tools (ripgrep, sed, its own ranged reads and writes) with
 no Emacs round-trip; the edited text lands through the same back
-channel as an elisp transform. The child Emacs reads the mirror as a
-buffer; the agent reads and writes the same bytes as a file. Both come
+channel as an elisp transform. The child Emacs reads the copied text as
+a buffer; the agent reads and writes the same bytes as a file. Both come
 from the one forward contract and pass the one set of filters, so the
 file the agent sees is exactly the redacted, in-scope, unlatched text
 the child sees, and no unfiltered path reaches the CLI.
@@ -98,14 +100,14 @@ source once the user has exposed it (terminals are sensitive by
 default, below); what arrives is its text.
 
 Syncing is incremental: `buffer-chars-modified-tick` tells the parent
-which buffers changed since the last mirror, and only those are re-sent.
+which buffers changed since the last copy, and only those are re-sent.
 
-The same text is also written to a file in the mirror directory, named
+The same text is also written to a file in the copy directory, named
 for the buffer (the file name's basename when it has one, else a
 sanitized buffer name). This is the file half of the CLI transform (see
 "What runs where"): a tool asks for it by buffer name, the parent runs
 the buffer through the same three filters, writes the result into the
-mirror directory, and returns the in-jail path. A buffer the filters
+copy directory, and returns the in-jail path. A buffer the filters
 refuse yields no file and an error naming the reason, so this surface
 never exposes what the buffer-read tools would refuse.
 
@@ -140,19 +142,19 @@ Three filters apply, in this order.
    all empty the region, so a tainted window clears itself once it has
    scrolled out.
 
-3. **The secret scan.** gitleaks runs over the changed mirror files
-   before the child reads them:
+3. **The secret scan.** gitleaks runs over the changed copies before
+   the child reads them:
 
    ```
    gitleaks dir --no-banner --log-level error --redact \
-     --report-format json --report-path - --exit-code 0 <mirror-dir>
+     --report-format json --report-path - --exit-code 0 <copy-dir>
    ```
 
    The stock rules are used as they are: they flag GitHub tokens,
    JWTs, provider keys, and PEM blocks, and they leave Nix store paths,
    `narHash` values, and git SHAs alone, so no entropy heuristics are
    enabled and no allowlist is needed. A hit redacts the matched span in
-   the mirror copy with a placeholder naming the rule,
+   the copy with a placeholder naming the rule,
    `[REDACTED:github-pat]`, marks the child's buffer read-only, and
    marks the buffer refused on the back channel. The span is replaced
    by re-matching on the reported line rather than by column, since the
@@ -174,7 +176,7 @@ before the secret is in it. One buffer-local state does this,
 default; either explicit value overrides it in that direction. The
 buffer predicate reads the effective state and refuses a sensitive
 buffer before any other test, so no buffer-read tool returns it, no
-mirror file is written for it, it is omitted from listings, and neither
+copy is written for it, it is omitted from listings, and neither
 transform mode can reach it.
 
 **The default is computed, not stamped.** A buffer is sensitive by
@@ -212,7 +214,7 @@ the visit command exist so the common cases are withheld before the
 content arrives. A file cannot set this variable through a file-local:
 only nil is accepted, so a file can never expose itself.
 
-This flag governs the buffer surfaces (the read tools and the mirror).
+This flag governs the buffer surfaces (the read tools and the copies).
 It does not reach a file the agent's own CLI opens inside the sandbox;
 a file is kept from the CLI by not binding its directory into the jail
 (see the back contract's territory and the sandbox bind list), which is
@@ -226,7 +228,7 @@ in-memory buffer with no process attached. The parent accepts it when
 all of the following hold: the file is inside the client territory (the
 existing write scope); the buffer is not read-only in the parent; the
 buffer was not redacted; and the parent's `buffer-chars-modified-tick`
-still equals the value recorded when the mirror was taken. The text is
+still equals the value recorded when the copy was taken. The text is
 applied through the existing edit path, which returns a diff.
 
 The mechanism is one parent function registered with
@@ -245,12 +247,12 @@ variable, so a synced variable is an effect.
 - `eval-elisp` runs in the child, ungated, as a `parenting` task with a
   timeout and cancellation. The syntactic gate leaves this path.
 - A buffer transform comes in two modes, siblings that differ only in
-  what does the editing. Both run in the child against the mirrored
+  what does the editing. Both run in the child against the copied
   buffer and both land the result through the one back channel. The
   **elisp transform** evaluates a form in the child Emacs (the existing
   `transform`, now ungated because the child is the sandbox; the editing
   registry retires with the gate). The **CLI transform** materializes
-  the buffer as a file in the mirror directory and hands the agent that
+  the buffer as a file in the copy directory and hands the agent that
   path; the agent edits the file with its own command-line tools, and
   the file's text is what returns. A read is the CLI transform with no
   edit: ask for the file, read it, return nothing. The file is a copy,
@@ -267,26 +269,26 @@ variable, so a synced variable is an effect.
   passes the same read scope as `buffer-text`. There is no open
   evaluator in the parent.
 
-The mirror also cannot answer questions about the parent's own runtime
-state, which is why those tools exist rather than an escape hatch.
+The child holds copies only, so it cannot answer questions about the
+parent's own runtime state either, which is why those tools exist
+rather than an escape hatch.
 
 ## The scan covers every file view, and is not a boundary
 
 The gitleaks scan runs on every path by which content reaches the
-agent's context, not only the mirror, and including the CLI's own
+agent's context, not only the copies, and including the CLI's own
 built-in tools (`Read` and `Bash` alike), not only the MCP tools. Any
 tool result that would put bytes in the agent's context is scanned
 first; on a hit the content is returned redacted, the agent is told,
 and for `Read` it may resubmit to ask the user for the real bytes
 (`Bash` differs on both counts, see "Redact and tell; resubmit to
-approve"). A buffer's text reaches the agent
-through the mirror
-(buffer-read tools, the file in the mirror directory) and is scanned
+approve"). A buffer's text reaches the agent as a copy (through the
+buffer-read tools, or as the file in the copy directory) and is scanned
 there. A file's content reaches the agent through the MCP file-reading
 tools, the CLI's `Read`, and the output of a shell command run through
 `Bash`; all are scanned, or they are the bypass that makes redacting the
-mirror pointless (reading `~/.env` directly, or `cat`-ing it, would
-defeat a redacted mirror of it).
+copy pointless (reading `~/.env` directly, or `cat`-ing it, would
+defeat a redacted copy of it).
 
 There are two enforcement points, in two repos. The MCP server scans
 its own reads before returning them and redacts the matched spans in
@@ -359,20 +361,20 @@ being read or shown; it does not stop a determined agent from
 extracting one it can already edit. Both attacks need the secret to be
 in a file the agent can edit, which means already inside the sandbox's
 view, so the confidentiality boundary is isolation, what is never
-mirrored in and what the sandbox's filesystem view withholds, not the
+copied in and what the sandbox's filesystem view withholds, not the
 scan.
 
 ## Residual accepted surface
 
 Log text is only as clean as the latch and the scan: a bare secret with
 no recognizable shape passes, and a knob outside the declared list is
-invisible until someone adds it. The mirror is a snapshot and can lag
-the screen. A file that mixes a secret with settings the agent needs to
+invisible until someone adds it. A copy is a snapshot and can lag the
+screen. A file that mixes a secret with settings the agent needs to
 edit has the secret redacted in the copy it sees, so an edit returned
 from that copy would carry the placeholder back; splicing the original
 spans back into returned text is deferred until that blocks real work,
 since it adds a clever path the rest of the design avoids, and until
-then such a buffer is effectively read-only through the mirror. The
+then such a buffer is effectively read-only through its copy. The
 edit-oracle extraction above is accepted, not closed. Same-user
 boundaries stay soft. This is accident-surface hardening for an agent
 expected to help debug, not an adversarial sandbox, and any program can
@@ -384,7 +386,7 @@ print a secret into a log.
   observable set is open.
 - A per-symbol rules registry keyed by function or value position was
   designed and is superseded by isolation; only the buffer predicate and
-  the secret policy survive, as mirror filters.
+  the secret policy survive, as the filters on what is copied.
 - Variables are never synced.
 - A redaction placeholder never round-trips into a file: a redacted
   buffer is read-only.
@@ -426,8 +428,8 @@ print a secret into a log.
   backend-neutral, so the bwrap builder becomes one backend behind a
   `parenting-sandbox-backend` selector, with Landlock (Linux, no
   namespaces; the workspace already has a shim) and macOS `sandbox-exec`
-  as further backends. Those two differ from bwrap in one way the
-  mirror must note: ungranted paths stay visible by name but unreadable,
+  as further backends. Those two differ from bwrap in one way this
+  design must note: ungranted paths stay visible by name but unreadable,
   where bwrap leaves them absent.
 - **The editor is not changed.** The editor sits below the workbench
   and knows nothing about agents; a knob in it with the workbench as
@@ -467,13 +469,15 @@ print a secret into a log.
    on `<leader> a t`, the `ch-mcp-server-visit-sensitive` command, and
    the `ghostel-terminals` skill adopted into the workbench with
    matching text. Parent-side and independent of the child, so it lands
-   next to phase 1; the mirror in phase 3 already refuses through the
+   next to phase 1; the copying in phase 3 already refuses through the
    same predicate.
 2. The child with configuration only, sandboxed, as the target for
    `eval-elisp`. This already answers every static question (keymaps,
    functions, defaults, features); the gated live path remains for
-   session facts until the named tools exist.
-3. The mirror (forward contract, incremental sync, secret scan) and the
+   session facts until the named tools exist. (The child's lifecycle
+   has landed; routing `eval-elisp` to it is the next piece.)
+3. The copying of buffer text (forward contract, incremental sync,
+   secret scan) and the
    back channel; both transform modes move to the child, the elisp one
    and the CLI one; the gated live evaluation is deleted; named tools
    replace it for session facts. The MCP read tools scan and redact
