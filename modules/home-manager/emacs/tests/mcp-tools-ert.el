@@ -1197,4 +1197,55 @@ suffix the completion alist would resolve both to the newer one."
       (when-let* ((buffer (get-buffer "*agent-history/*agent/ert-dup**")))
         (kill-buffer buffer)))))
 
+;;; The child
+
+(ert-deftest ch-mcp-tools-config-key ()
+  "The configuration identity is a non-empty string, stable across calls."
+  (let ((key (ch-mcp-server--config-key)))
+    (should (stringp key))
+    (should-not (string-empty-p key))
+    (should (equal key (ch-mcp-server--config-key)))))
+
+(ert-deftest ch-mcp-tools-child-bootstrap-shape ()
+  "The bootstrap is one progn that loads the configuration and unhooks
+eglot-ensure; the unhooking must stay in the form the child evaluates."
+  (should (eq (car ch-mcp-server--child-bootstrap) 'progn))
+  (let ((text (format "%S" ch-mcp-server--child-bootstrap)))
+    (should (string-match-p "ch-emacs-config-default" text))
+    (should (string-match-p "eglot-ensure" text))))
+
+(defun ch-mcp-tests--bwrap-usable-p ()
+  "Whether bwrap is present and can create a user namespace here.
+The jail needs one; the nix build sandbox denies it, so the lifecycle
+test skips there and runs for real outside it."
+  (and (executable-find "bwrap")
+       (eq 0 (call-process "bwrap" nil nil nil "--ro-bind" "/" "/" "true"))))
+
+(ert-deftest ch-mcp-tools-child-lifecycle ()
+  "Spawn, bootstrap, reuse, and stop of the sandboxed child.
+The child answers arithmetic, has the configuration loaded, carries no
+eglot-ensure on a mode hook, and has a real HOME in the jail; a second
+ensure returns the same connection; stop leaves nothing live."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  ;; The config load is slow; give the spawn room.
+  (let ((ch-mcp-server-child-spawn-timeout 120)
+        (conn nil))
+    (unwind-protect
+        (progn
+          (setq conn (ch-mcp-server--child-ensure))
+          (should (parenting-connection-live-p conn))
+          (should (equal 3 (parenting-eval conn '(+ 1 2))))
+          (should (eq t (parenting-eval
+                         conn '(featurep 'ch-emacs-config-default))))
+          (should-not (parenting-eval
+                       conn '(memq 'eglot-ensure nix-ts-mode-hook)))
+          (should (eq t (parenting-eval
+                         conn '(file-directory-p (getenv "HOME")))))
+          (should (eq conn (ch-mcp-server--child-ensure))))
+      (ch-mcp-server-child-stop))
+    (should-not ch-mcp-server--child)
+    (should-not ch-mcp-server--child-key)
+    (should-not (parenting-connection-live-p conn))))
+
 ;;; mcp-tools-ert.el ends here
