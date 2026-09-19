@@ -12,9 +12,13 @@ by default: a terminal shows whatever ran in it (an echoed password, a
 token on a command line, the output of `env`), so terminals are treated as
 sensitive and withheld until the user exposes the specific one.
 
-This reverses the usual buffer rule. Ordinary buffers are readable unless
-the user marks them sensitive; terminals are the one kind that starts
-hidden and becomes readable only when the user says so.
+Terminals are not the only buffers that start hidden. A buffer is
+sensitive by default when it is a terminal or when it visits a file whose
+name marks it as holding secrets (`.authinfo`, `.gpg` and `.age` files,
+`.env` and its variants). Every other buffer starts readable, and the
+user can flip any buffer either way with one toggle. So a withheld
+buffer you cannot see may be a terminal or one of those files; the rule
+for getting access below is the same for both.
 
 ## What you can and cannot see
 
