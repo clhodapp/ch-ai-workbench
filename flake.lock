@@ -80,16 +80,16 @@
         "caisson": "caisson_2",
         "emacs-overlay": "emacs-overlay",
         "ghostel": "ghostel",
-        "merman": "merman",
+        "merman-nix": "merman-nix",
         "nixpkgs": "nixpkgs_2",
         "pr-review": "pr-review"
       },
       "locked": {
-        "lastModified": 1789852483,
-        "narHash": "sha256-NevDiq2oaIcGzBN9rN1eRgGHjwiLjmWPFIorX8D1DqM=",
+        "lastModified": 1789855485,
+        "narHash": "sha256-zVdCk2Sv+MhtynzJsM3N3PmZ4dwWRDfC1kkEahUZyxA=",
         "owner": "clhodapp",
         "repo": "ch-emacs-config",
-        "rev": "532225f2be10c2348b4ad0c842300ed97cc0fc86",
+        "rev": "b776f78986c051c8c77f463fa96df87ee656864d",
         "type": "github"
       },
       "original": {
@@ -172,26 +172,26 @@
         "type": "github"
       }
     },
-    "merman": {
+    "merman-nix": {
       "inputs": {
         "caisson": "caisson_3",
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1789852401,
-        "narHash": "sha256-gnQPZ/qCkncHAoQP/3D6dzIENDB5WtPUytqhhfe7HCA=",
+        "lastModified": 1789855357,
+        "narHash": "sha256-twO+8fzYPq1h++2fw2dCMVAOgF7mc656USf2PipY2Dg=",
         "owner": "clhodapp",
-        "repo": "merman",
-        "rev": "7b4232322ba0335b141917ecb1bfba48b5a8650d",
+        "repo": "merman-nix",
+        "rev": "f119a9b022afad761f4b27e6c0b2730ed9e14659",
         "type": "github"
       },
       "original": {
         "owner": "clhodapp",
-        "repo": "merman",
+        "repo": "merman-nix",
         "type": "github"
       }
     },
-    "merman-nix": {
+    "merman-nix_2": {
       "inputs": {
         "caisson": "caisson_5",
         "nixpkgs": "nixpkgs_4"
@@ -328,7 +328,7 @@
         "ch-emacs-config": "ch-emacs-config",
         "ch-zsh-config": "ch-zsh-config",
         "collab-comments": "collab-comments",
-        "merman-nix": "merman-nix",
+        "merman-nix": "merman-nix_2",
         "nixpkgs": [
           "ch-emacs-config",
           "nixpkgs"
