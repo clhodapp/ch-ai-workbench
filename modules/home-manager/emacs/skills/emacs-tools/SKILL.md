@@ -14,11 +14,12 @@ do well stays native — these are not mirrors of those.
 Design and rationale: `projects/ch-emacs-config/docs/development/emacs-mcp-agent-tools.md`.
 Safety rules: the `live-emacs-safety` skill (read-only tools are fine
 unasked; `present` and buffer auto-open are consented by design).
-Two server-side filters are structural, not etiquette: writes
+Three server-side rules are structural, not etiquette: writes
 (edit-file, transform, edit-buffer on file-backed buffers) are
-confined to your session's territory — the project you were launched
-in — and eval-elisp/transform accept only elisp the server can prove
-safe (below). A filter refusal is a boundary, not a bug: don't route
+confined to your session's territory, the project you were launched
+in; transform accepts only elisp the server can prove safe (below);
+and eval-elisp runs in a sandboxed child Emacs, not in the live
+session (below). A refusal is a boundary, not a bug: don't route
 around it; ask the user, who owns the widening knobs.
 
 ## Conventions
@@ -209,13 +210,19 @@ read-only tools; reach for them before `eval-elisp`. Each returns
 A named buffer passes the same read scope as `buffer-text`: a
 withheld buffer is refused, not described.
 
-`eval-elisp` remains the escape hatch for **reading** session state
-the dedicated tools don't cover — variables, buffer facts, window
-layout. It accepts only elisp the server can prove side-effect-free,
-so it is structurally not an editing interface; mutation belongs to
-the edit verbs and transform. If a legitimately innocuous function is
-rejected, the user can add it to
-`ch-mcp-server-agent-safe-functions`.
+`eval-elisp` runs in a sandboxed child Emacs: the same configuration
+as the live session, loaded fresh, with none of the session's
+buffers, variables, environment, or files (no network, and only the
+Nix store on disk). Use it for what the configuration answers: a
+default binding, a function's definition or docstring, a variable's
+default, whether a mode adds a hook. It does not see the live
+session; the four tools above do. A stateful form runs and changes
+only the child. A form past `ch-mcp-server-eval-timeout` (30 s) is a
+tool error and the child is replaced; an error in the child comes
+back as a tool error with its message. Mutation of the session
+belongs to the edit verbs and transform; if transform rejects a
+legitimately innocuous editing function, the user can add it to
+`ch-mcp-server-agent-safe-editing-functions`.
 
 ## add-comment / list-comments: the margin, not the page
 

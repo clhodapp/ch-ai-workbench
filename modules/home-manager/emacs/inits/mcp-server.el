@@ -92,16 +92,18 @@ gated elisp cannot reach it.")
 (put 'ch-mcp-server-write-scope 'risky-local-variable t)
 
 (defvar ch-mcp-server-elisp-scope 'agent-safe
-  "Which elisp the MCP elisp-taking tools will evaluate.
-`agent-safe' (the default) accepts only forms `unsafep' proves free of
-side effects, extended by `ch-mcp-server-agent-safe-functions'
-(and, for `transform', `ch-mcp-server-agent-safe-editing-functions').
-`unrestricted' disables the gate — the resident user's explicit say-so
+  "Where the MCP elisp-taking tools evaluate, and under what check.
+`agent-safe' (the default): `eval-elisp' runs in the sandboxed child
+Emacs (see \"The child\"), ungated, and `transform' runs in this Emacs
+under the `unsafep' gate extended by
+`ch-mcp-server-agent-safe-functions' and
+`ch-mcp-server-agent-safe-editing-functions'.  `unrestricted' runs
+both in this Emacs with no gate: the resident user's explicit say-so
 for a stateful co-driving session; gated elisp cannot reach it.")
 (put 'ch-mcp-server-elisp-scope 'risky-local-variable t)
 
 (defvar ch-mcp-server-agent-safe-functions '(error ignore)
-  "Functions the elisp gate accepts beyond Emacs's own safety metadata.
+  "Functions the `transform' gate accepts beyond Emacs's safety metadata.
 `unsafep' already admits everything marked `pure', `side-effect-free',
 or `safe-function'; list here functions that are innocuous for agents
 to call but carry no such marking.  Seeds: `error' so gated code can
@@ -666,18 +668,21 @@ latched log buffer are both refused, each with its own message."
 (defun ch-mcp-server--eval-elisp (elisp)
   "Evaluate ELISP and return the value of the last form, printed with %S.
 
-Gated: in the default `agent-safe' scope only elisp provably free of
-side effects is accepted (see `ch-mcp-server--gate-elisp'), so
-this is a read-only escape hatch — inspecting variables, buffer state,
-and session facts the dedicated tools don't cover.  Mutation belongs
-to the edit verbs and `transform'.
+In the default `agent-safe' scope the forms run in the sandboxed child
+Emacs (see `ch-mcp-server--child-eval'): the same configuration as
+this session and none of its buffers, variables, environment, or
+files, so the answer is about the configuration, and a stateful form
+changes only the child.  Facts about the live session come from the
+named read-only tools.  In `unrestricted' scope the forms run in this
+Emacs, ungated.
 
 MCP Parameters:
   elisp - Emacs Lisp source text; multiple forms allowed, evaluated in order"
   (mcp-server-lib-with-error-handling
     (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)")))))
-      (ch-mcp-server--gate-elisp form "eval-elisp" nil)
-      (format "%S" (eval form t)))))
+      (if (eq ch-mcp-server-elisp-scope 'unrestricted)
+          (format "%S" (eval form t))
+        (ch-mcp-server--child-eval form)))))
 
 (defun ch-mcp-server--context ()
   "Summarize the state of the interactive Emacs session.
@@ -1972,8 +1977,9 @@ MCP Parameters:
 ;; Nix store, the configuration, and whatever `ch-mcp-server-child-ro-
 ;; binds' adds.  It is keyed to the running configuration's store path
 ;; so a switch replaces it, stopped after idle, and dies with the
-;; connection.  This section is the lifecycle only; no tool routes to
-;; the child yet.
+;; connection.  `eval-elisp' routes to it through
+;; `ch-mcp-server--child-eval'; the buffer copies and the transforms
+;; are later pieces.
 
 (defvar ch-mcp-server-child-idle-seconds 600
   "Seconds of no use before the child is shut down.
@@ -1985,6 +1991,12 @@ Every `ch-mcp-server--child-ensure' re-arms the timer; when it fires,
 Passed as the `parenting-spawn' :timeout, which also bounds the
 bootstrap form; longer than parenting's default because the child
 loads the whole configuration before it answers.")
+
+(defvar ch-mcp-server-eval-timeout 30
+  "Seconds an `eval-elisp' form may run in the child.
+A form still running at the deadline is not interrupted: the child is
+stopped instead (`ch-mcp-server-child-stop'), so the next use starts
+a fresh one, and the call returns a tool error naming the timeout.")
 
 (defvar ch-mcp-server-child-ro-binds nil
   "Extra paths bound read-only into the child's jail.
@@ -2103,6 +2115,40 @@ spawn, and by hand when the resident user wants the child gone."
             ch-mcp-server--child-key nil)
       (parenting-shutdown conn))))
 
+(defun ch-mcp-server--child-eval (form)
+  "Evaluate FORM in the child and return its value printed with %S.
+The printing happens in the child, so a value with no readable form
+(a buffer, a marker) arrives as its %S text.  An error in the child
+becomes a tool error carrying the child's message; a timeout stops
+the child (see `ch-mcp-server-eval-timeout'); a child that cannot be
+started or reached is a tool error naming the cause."
+  (let ((conn (condition-case err
+                  (ch-mcp-server--child-ensure)
+                (error
+                 (mcp-server-lib-tool-throw
+                  (format "eval-elisp: the child Emacs could not be started: %s"
+                          (error-message-string err)))))))
+    (condition-case err
+        (parenting-eval conn (list 'format "%S" form)
+                        ch-mcp-server-eval-timeout)
+      (parenting-timeout
+       (ch-mcp-server-child-stop)
+       (mcp-server-lib-tool-throw
+        (format "eval-elisp timed out after %ss in the child Emacs; the child was stopped and the next call starts a fresh one"
+                ch-mcp-server-eval-timeout)))
+      (parenting-remote-error
+       (let ((symbol (nth 1 err))
+             (data (nth 2 err)))
+         (mcp-server-lib-tool-throw
+          (format "eval-elisp signalled in the child Emacs: %s"
+                  (condition-case nil
+                      (error-message-string (cons symbol data))
+                    (error (format "%S %S" symbol data)))))))
+      (parenting-error
+       (mcp-server-lib-tool-throw
+        (format "eval-elisp could not reach the child Emacs: %s"
+                (error-message-string err)))))))
+
 ;;; Server lifecycle and registration
 
 (defun ch-mcp-server-start ()
@@ -2144,16 +2190,18 @@ the others."
            "reading the user's notes -> list-comments; a session fact that "
            "is not buffer text (is a feature loaded, what is on a hook, a "
            "buffer's mode/state/visibility, what a key does) -> "
-           "feature-loaded, hooks, buffer-state, key-binding. eval-elisp is "
-           "the read-only escape hatch for everything else: it accepts "
-           "side-effect-free elisp only, and writes are confined to the "
-           "session's own project.")
+           "feature-loaded, hooks, buffer-state, key-binding. eval-elisp "
+           "runs in a sandboxed child Emacs that has this session's "
+           "configuration and none of its state: it answers questions "
+           "about the configuration (defaults, functions, keymaps as "
+           "configured), not about the live session, and cannot change "
+           "it. Writes are confined to the session's own project.")
    :tools
    (list
     (list #'ch-mcp-server--eval-elisp
           :id "eval-elisp"
           :description
-          "Evaluate side-effect-free Emacs Lisp in the running Emacs and return the result (mutation is rejected; use the edit tools)")
+          "Evaluate Emacs Lisp in a sandboxed child Emacs running this session's configuration, with none of the live session's buffers, variables, or files; edits go through the edit tools")
     (list #'ch-mcp-server--context
           :id "context"
           :description
