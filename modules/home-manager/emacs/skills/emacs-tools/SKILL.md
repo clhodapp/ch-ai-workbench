@@ -218,7 +218,7 @@ The copies are refreshed before each call and carry the buffer's name
 and text only: the major mode comes from the file name, there are no
 buffer-local values, no processes, and the copy visits no file. A
 buffer the read scope, the sensitivity mark, or the debug-knob latch
-withholds has no copy. A copy in which the secret scan found a token
+withholds has no copy. A copy in which gitleaks found a token
 has it replaced by `[REDACTED:<rule>]` and is read-only. Use the tool
 for what the configuration and buffer text answer: a default binding,
 a function's definition or docstring, a variable's default, whether a

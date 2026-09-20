@@ -716,7 +716,7 @@ its copy was taken leaves the child on the next call."
     (kill-buffer "ch-mcp-tests-open-note")))
 
 (ert-deftest ch-mcp-tools-copies-are-redacted ()
-  "A token the scan recognizes is replaced in the child's copy, which is
+  "A token gitleaks recognizes is replaced in the child's copy, which is
 read-only; the parent's buffer is untouched."
   (unless (ch-mcp-tests--bwrap-usable-p)
     (ert-skip "bwrap cannot create a user namespace here"))

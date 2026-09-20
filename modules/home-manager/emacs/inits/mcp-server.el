@@ -1467,8 +1467,9 @@ language-server table spawns); the bare-name default only works when
 an mmdc is on PATH.")
 
 (defvar ch-mcp-server-gitleaks-command '("gitleaks")
-  "Command list prefix for the gitleaks secret scanner.
-The scan of text copied to the child appends its subcommand and flags.  The
+  "Command list prefix for running gitleaks.
+The copies sent to the child are run through it, with the subcommand
+and flags appended.  The
 home-manager module points this at the nix-installed gitleaks from the
 pinned nixpkgs, so the rule set moves with the pin; the bare-name
 default only works when a gitleaks is on PATH.")
@@ -2126,7 +2127,7 @@ spawn, and by hand when the resident user wants the child gone."
 ;; name, and the file name; nothing else crosses.  The child recreates a
 ;; plain buffer under the same name and picks the major mode from the
 ;; file name.  The same text is written to a file in the copy directory,
-;; where the secret scan runs; a hit redacts the copy in place and makes
+;; where gitleaks runs; a finding redacts the copy in place and makes
 ;; the child's buffer read-only.  Copies are incremental: a buffer is
 ;; re-sent only when `buffer-chars-modified-tick' moved, and a buffer
 ;; that died or stopped being readable is removed from the child.
@@ -2138,9 +2139,9 @@ Created with the child and deleted with it.")
 (defvar ch-mcp-server--copies (make-hash-table :test #'equal)
   "Buffer name to the state of its copy in the child.
 Each value is a plist: :tick, the `buffer-chars-modified-tick' the
-copy was taken at; :file, the copy's path; :redacted, non-nil when the
-secret scan hit the copy, which also makes the child's buffer
-read-only.")
+copy was taken at; :file, the copy's path; :redacted, non-nil when
+gitleaks found a secret in the copy, which also makes the child's
+buffer read-only.")
 
 (defun ch-mcp-server--copies-reset (create)
   "Forget every copy and delete the copy directory; with CREATE, make a new one."
@@ -2192,11 +2193,12 @@ on the first line, the rest emptied."
                 (setq i (1+ i))))))))
     (mapconcat #'identity lines "\n")))
 
-(defun ch-mcp-server--scan-copies ()
+(defun ch-mcp-server--gitleaks-findings ()
   "Run gitleaks over the copy directory; return findings by copy file name.
 An alist of (BASENAME . FINDINGS), each finding a report entry as
-`ch-mcp-server--redact-text' takes.  A scanner that cannot run, or
-fails, is a tool error: no copy is sent unscanned."
+`ch-mcp-server--redact-text' takes.  A gitleaks that cannot run, or
+fails, is a tool error: no copy is sent before gitleaks has passed
+over it."
   (with-temp-buffer
     (let* ((command (append ch-mcp-server-gitleaks-command
                             (list "dir" "--no-banner" "--log-level" "error"
@@ -2208,11 +2210,11 @@ fails, is a tool error: no copy is sent unscanned."
                               (cdr command))
                      (error
                       (mcp-server-lib-tool-throw
-                       (format "the secret scanner could not run (%s): %s"
+                       (format "gitleaks could not run (%s): %s"
                                (car command) (error-message-string err)))))))
       (unless (eq status 0)
         (mcp-server-lib-tool-throw
-         (format "the secret scanner failed (exit %s): %s"
+         (format "gitleaks failed (exit %s): %s"
                  status (string-trim (buffer-string)))))
       (let ((report (condition-case nil
                         (json-parse-string (buffer-string)
@@ -2245,10 +2247,10 @@ the child's buffer visits nothing.  READ-ONLY marks a redacted copy."
 
 (defun ch-mcp-server--copies-sync (conn)
   "Bring the child's copies up to date with the buffers the agent may read.
-Writes each changed buffer's text into the copy directory, runs the
-secret scan over the directory, sends every changed copy (redacted
-where the scan hit) to the child on CONN, and removes from the child
-each buffer that died or is no longer readable."
+Writes each changed buffer's text into the copy directory, runs
+gitleaks over the directory, sends every changed copy (redacted where
+gitleaks found a secret) to the child on CONN, and removes from the
+child each buffer that died or is no longer readable."
   (let ((changed nil)
         (live (make-hash-table :test #'equal)))
     (dolist (buffer (buffer-list))
@@ -2280,7 +2282,7 @@ each buffer that died or is no longer readable."
         (remhash name ch-mcp-server--copies)
         (parenting-eval conn `(when (get-buffer ,name) (kill-buffer ,name)))))
     (when changed
-      (let ((findings (ch-mcp-server--scan-copies)))
+      (let ((findings (ch-mcp-server--gitleaks-findings)))
         (dolist (item (nreverse changed))
           (pcase-let* ((`(,name ,file ,text) item)
                        (entry (gethash name ch-mcp-server--copies))
