@@ -7,7 +7,8 @@
 ;; (warm LSP, unsaved buffer state, user attention, the editing engine),
 ;; positions in as 1-based file/line/col, locations out as grep-format
 ;; lines, results capped with true totals.  Server-side security filters
-;; (client-territory write scope, the agent-safe elisp gate) extend the
+;; (client-territory write scope, agent elisp confined to a sandboxed
+;; child Emacs) extend the
 ;; consent-gate design (workspace docs/development/consent-gate.md): the
 ;; MCP server is a side-channel around the CLI's permission machinery,
 ;; so the filters live here, where every client passes.
@@ -20,7 +21,6 @@
   (require 'project)
   (require 'imenu)
   (require 'which-func)
-  (require 'unsafep)
   (require 'markdown-ts-mode))
 ;; The compile-time requires above make these known to the byte compiler,
 ;; but each is loaded lazily at runtime (mode activation, package
@@ -60,7 +60,6 @@
 (declare-function collab-comments-render-thread "collab-comments")
 (declare-function collab-comments-threads "collab-comments")
 (declare-function collab-comments-all-threads "collab-comments")
-(declare-function unsafep "unsafep")
 ;; The child's lifecycle loads parenting on first spawn.
 (declare-function parenting-spawn "parenting-parent")
 (declare-function parenting-eval "parenting-parent")
@@ -92,52 +91,15 @@ gated elisp cannot reach it.")
 (put 'ch-mcp-server-write-scope 'risky-local-variable t)
 
 (defvar ch-mcp-server-elisp-scope 'agent-safe
-  "Where the MCP elisp-taking tools evaluate, and under what check.
-`agent-safe' (the default): `eval-elisp' runs in the sandboxed child
-Emacs (see \"The child\"), ungated, and `transform' runs in this Emacs
-under the `unsafep' gate extended by
-`ch-mcp-server-agent-safe-functions' and
-`ch-mcp-server-agent-safe-editing-functions'.  `unrestricted' runs
-both in this Emacs with no gate: the resident user's explicit say-so
-for a stateful co-driving session; gated elisp cannot reach it.")
+  "Where the MCP elisp-taking tools evaluate.
+`agent-safe' (the default): `eval-elisp' and `transform' run in the
+sandboxed child Emacs (see \"The child\"), which holds the
+configuration and copies of the readable buffers and nothing else of
+this session; only text comes back, through the checks of
+`ch-mcp-server--land-text'.  `unrestricted' runs both in this Emacs:
+the resident user's explicit say-so for a stateful co-driving
+session.")
 (put 'ch-mcp-server-elisp-scope 'risky-local-variable t)
-
-(defvar ch-mcp-server-agent-safe-functions '(error ignore)
-  "Functions the `transform' gate accepts beyond Emacs's safety metadata.
-`unsafep' already admits everything marked `pure', `side-effect-free',
-or `safe-function'; list here functions that are innocuous for agents
-to call but carry no such marking.  Seeds: `error' so gated code can
-signal validation failures, `ignore' as the no-op it is.  Extended by
-the resident user (or by modes declaring their own functions); gated
-elisp cannot grow it.")
-(put 'ch-mcp-server-agent-safe-functions 'risky-local-variable t)
-
-(defvar ch-mcp-server-agent-safe-editing-functions
-  '(save-excursion save-restriction widen narrow-to-region
-    goto-char move-to-column
-    forward-char backward-char forward-line forward-word backward-word
-    forward-sexp backward-sexp up-list down-list backward-up-list
-    beginning-of-line end-of-line beginning-of-defun end-of-defun
-    search-forward search-backward re-search-forward re-search-backward
-    looking-at looking-back
-    skip-chars-forward skip-chars-backward
-    skip-syntax-forward skip-syntax-backward
-    insert delete-region delete-char replace-match
-    indent-region indent-according-to-mode
-    upcase-region downcase-region capitalize-region
-    sort-lines sort-fields fill-region fill-paragraph
-    delete-trailing-whitespace delete-blank-lines delete-indentation)
-  "Buffer-editing functions the elisp gate accepts for `transform' only.
-Motion, search, and current-buffer mutation: enough for the transform
-recipes (computed replacements, sexp-aware edits, reindentation)
-without a path out of the buffer.  Deliberately absent: `set-buffer'
-and friends (mutation must stay in the transform's target buffer),
-the kill ring (`kill-region', `kill-sexp' — they overwrite the user's
-clipboard; use `delete-region'), and the `replace-regexp' family
-(their replacement strings evaluate embedded `\\,(...)' elisp,
-bypassing this gate).  Extended by the resident user; gated elisp
-cannot grow it.")
-(put 'ch-mcp-server-agent-safe-editing-functions 'risky-local-variable t)
 
 (defvar ch-mcp-server-hidden-buffer-names '("\\`\\*gptel-log\\*\\'")
   "Regexps for non-file buffer names the MCP read tools must never expose.
@@ -247,33 +209,6 @@ CLI-side workdir sandbox the MCP server would otherwise bypass."
     (mcp-server-lib-tool-throw
      (format "%s is outside this session's territory %s (the project of the client's launch directory); MCP writes are confined to it (ch-mcp-server-write-scope)"
              file (ch-mcp-server--client-territory)))))
-
-(defun ch-mcp-server--gate-elisp (form what editing)
-  "Throw a tool error unless FORM passes the agent elisp safety gate.
-WHAT names the tool for the error message.  With EDITING, the
-buffer-editing registry is allowed too (the `transform' case).
-The gate (`ch-mcp-server-elisp-scope') accepts only forms
-`unsafep' proves harmless given Emacs's own safety metadata plus the
-agent-safe registries; everything else — mutation, I/O, indirect
-calls — is rejected before evaluation."
-  (when (eq ch-mcp-server-elisp-scope 'agent-safe)
-    (require 'unsafep)
-    (let* ((safe-functions
-            (if (eq safe-functions t)
-                t
-              (append ch-mcp-server-agent-safe-functions
-                      (and editing
-                           ch-mcp-server-agent-safe-editing-functions)
-                      safe-functions)))
-           (reason (unsafep form)))
-      (when reason
-        (mcp-server-lib-tool-throw
-         (format "%s rejected as unsafe: %S. In agent-safe scope only elisp provably free of side effects runs (unsafep over Emacs's safety metadata plus the ch-mcp-server-agent-safe%s registries). %s"
-                 what reason
-                 (if editing "(-editing)" "")
-                 (if editing
-                     "Stick to motion, search, and current-buffer editing functions; anything else is the resident user's to allow."
-                   "Reads are fine; for edits use edit-file, edit-buffer, or transform.")))))))
 
 (defun ch-mcp-server--maybe-revert (buffer)
   "Revert BUFFER when it is unmodified but stale against its file.
@@ -1677,18 +1612,20 @@ MCP Parameters:
 ;;; The editing engine
 
 (defun ch-mcp-server--transform (file elisp &optional save)
-  "Run ELISP with FILE's buffer current; return a unified diff of the change.
+  "Run ELISP against FILE's text; land the result; return a unified diff.
 
 For bulk/structural edits where one form beats many single edits:
 computed replacements, sexp-aware transforms, mode-canonical
-`indent-region'.  Gated twice: FILE must lie in the calling client's
-territory (`ch-mcp-server--check-file-write'), and ELISP must
-pass the agent-safe gate with the buffer-editing registry allowed
-(motion, search, current-buffer mutation — see
-`ch-mcp-server-agent-safe-editing-functions').  Refuses buffers
-holding unsaved user modifications.  Begin with (goto-char
-\(point-min)) — point is wherever the user left it.  On error the
-buffer is restored untouched.  Saves unless SAVE is no.
+`indent-region'.  FILE must lie in the calling client's territory
+(`ch-mcp-server--check-file-write'), and its buffer must hold no
+unsaved user modifications.  In the default `agent-safe' scope the
+form runs in the sandboxed child against the buffer's copy, with the
+copy current, and any elisp is allowed there; only the copy's text
+comes back, and it lands through `ch-mcp-server--land-text'.  In
+`unrestricted' scope the form runs in this Emacs, in the buffer
+itself.  Begin with (goto-char (point-min)): point is wherever the
+last form left it.  An error in the form changes nothing.  Saves
+unless SAVE is no.
 
 MCP Parameters:
   file - absolute path of the file to transform
@@ -1697,38 +1634,114 @@ MCP Parameters:
   save - no to leave the change unsaved in the buffer (default: save)"
   (mcp-server-lib-with-error-handling
     (ch-mcp-server--check-file-write file)
-    (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)")))))
-      (ch-mcp-server--gate-elisp form "transform" t)
-      (with-current-buffer (ch-mcp-server--file-buffer file)
-        (when (buffer-modified-p)
-          (mcp-server-lib-tool-throw
-           (format "%s has unsaved modifications; refusing to transform (see buffer-diff)"
-                   file)))
-        (save-excursion
-          (save-restriction
-            (widen)
-            (let ((old (buffer-substring-no-properties (point-min) (point-max))))
-              (condition-case err
-                  (eval form t)
-                (error
-                 (delete-region (point-min) (point-max))
-                 (insert old)
-                 (set-buffer-modified-p nil)
-                 (mcp-server-lib-tool-throw
-                  (format "transform failed (buffer restored): %s"
-                          (error-message-string err)))))
-              (widen)
-              (let ((new (buffer-substring-no-properties (point-min) (point-max))))
-                (if (equal old new)
-                    (progn (set-buffer-modified-p nil)
-                           "No changes")
-                  (let ((diff (ch-mcp-server--text-diff
-                               old new
-                               (concat file " (before)")
-                               (concat file " (after)"))))
-                    (unless (equal save "no")
-                      (save-buffer))
-                    diff))))))))))
+    (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)"))))
+          (buffer (ch-mcp-server--file-buffer file)))
+      (when (buffer-modified-p buffer)
+        (mcp-server-lib-tool-throw
+         (format "%s has unsaved modifications; refusing to transform (see buffer-diff)"
+                 file)))
+      (if (eq ch-mcp-server-elisp-scope 'unrestricted)
+          (ch-mcp-server--transform-here buffer file form save)
+        (ch-mcp-server--transform-in-child buffer file form save)))))
+
+(defun ch-mcp-server--transform-here (buffer file form save)
+  "Run FORM in BUFFER, visiting FILE, here; diff, then save unless SAVE is no.
+The `unrestricted' path of `ch-mcp-server--transform'.  On error the
+buffer is restored untouched."
+  (with-current-buffer buffer
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let ((old (buffer-substring-no-properties (point-min) (point-max))))
+          (condition-case err
+              (eval form t)
+            (error
+             (delete-region (point-min) (point-max))
+             (insert old)
+             (set-buffer-modified-p nil)
+             (mcp-server-lib-tool-throw
+              (format "transform failed (buffer restored): %s"
+                      (error-message-string err)))))
+          (widen)
+          (let ((new (buffer-substring-no-properties (point-min) (point-max))))
+            (if (equal old new)
+                (progn (set-buffer-modified-p nil)
+                       "No changes")
+              (let ((diff (ch-mcp-server--text-diff
+                           old new
+                           (concat file " (before)")
+                           (concat file " (after)"))))
+                (unless (equal save "no")
+                  (save-buffer))
+                diff))))))))
+
+;; Defined with the child, further down; the transform reads it here.
+(defvar ch-mcp-server--copies)
+
+(defun ch-mcp-server--transform-in-child (buffer file form save)
+  "Run FORM in the child against BUFFER's copy and land the text here.
+The `agent-safe' path of `ch-mcp-server--transform': the copies are
+refreshed, FORM runs with the copy current, and the copy's text comes
+back to `ch-mcp-server--land-text' with the tick the copy was taken
+at.  A buffer with no copy (withheld from the agent) or with a
+redacted copy is refused.  The copy is re-sent on the next refresh
+whatever happened, since FORM may have changed it."
+  (let* ((name (buffer-name buffer))
+         (conn (ch-mcp-server--child-connection)))
+    (ch-mcp-server--copies-sync conn)
+    (let ((entry (gethash name ch-mcp-server--copies)))
+      (unless entry
+        (mcp-server-lib-tool-throw
+         (format "%s is withheld from the agent, so it cannot be transformed"
+                 file)))
+      (when (plist-get entry :redacted)
+        (mcp-server-lib-tool-throw
+         (format "%s holds a redacted secret; its copy is read-only, so it cannot be transformed"
+                 file)))
+      (let ((tick (plist-get entry :tick))
+            (new (unwind-protect
+                     (ch-mcp-server--in-child
+                      conn
+                      `(with-current-buffer ,name
+                         (save-restriction
+                           (widen)
+                           ,form
+                           (widen)
+                           (buffer-substring-no-properties (point-min)
+                                                           (point-max)))))
+                   (remhash name ch-mcp-server--copies))))
+        (unless (stringp new)
+          (mcp-server-lib-tool-throw "transform: the child returned no text"))
+        (ch-mcp-server--land-text buffer file new tick save)))))
+
+(defun ch-mcp-server--land-text (buffer file new tick save)
+  "Put NEW into BUFFER, visiting FILE, if its text is still the one at TICK.
+The back contract: text from the child lands only in a buffer that is
+not read-only and whose `buffer-chars-modified-tick' still equals
+TICK, the tick its copy was taken at, so a change made meanwhile is
+never overwritten.  Returns a unified diff, or \"No changes\"; saves
+unless SAVE is no.  The replacement keeps point and markers where the
+unchanged text allows."
+  (with-current-buffer buffer
+    (when buffer-read-only
+      (mcp-server-lib-tool-throw (format "%s is read-only" file)))
+    (unless (eql tick (buffer-chars-modified-tick))
+      (mcp-server-lib-tool-throw
+       (format "%s changed while the form ran; nothing landed, run the transform again"
+               file)))
+    (save-restriction
+      (widen)
+      (let ((old (buffer-substring-no-properties (point-min) (point-max))))
+        (if (equal old new)
+            "No changes"
+          (replace-region-contents (point-min) (point-max) (lambda () new))
+          (let ((diff (ch-mcp-server--text-diff
+                       old new
+                       (concat file " (before)")
+                       (concat file " (after)"))))
+            (unless (equal save "no")
+              (save-buffer))
+            diff))))))
 
 (defun ch-mcp-server--replace-literal (label old-string new-string replace-all)
   "Replace OLD-STRING with NEW-STRING in the current buffer; diff back.
@@ -1979,9 +1992,9 @@ MCP Parameters:
 ;; Nix store, the configuration, and whatever `ch-mcp-server-child-ro-
 ;; binds' adds.  It is keyed to the running configuration's store path
 ;; so a switch replaces it, stopped after idle, and dies with the
-;; connection.  `eval-elisp' routes to it through
-;; `ch-mcp-server--child-eval', after the readable buffers' text is
-;; copied in (next section); the transforms are later pieces.
+;; connection.  `eval-elisp' and `transform' run in it, after the
+;; readable buffers' text is copied in (next section); the CLI
+;; transform is a later piece.
 
 (defvar ch-mcp-server-child-idle-seconds 600
   "Seconds of no use before the child is shut down.
@@ -2253,6 +2266,16 @@ gitleaks found a secret) to the child on CONN, and removes from the
 child each buffer that died or is no longer readable."
   (let ((changed nil)
         (live (make-hash-table :test #'equal)))
+    ;; A copy the child no longer holds (a form killed it) counts as
+    ;; changed, so it is sent again.
+    (let ((present (ch-mcp-server--in-child
+                    conn '(mapcar #'buffer-name (buffer-list))))
+          (missing nil))
+      (maphash (lambda (name _entry)
+                 (unless (member name present) (push name missing)))
+               ch-mcp-server--copies)
+      (dolist (name missing)
+        (remhash name ch-mcp-server--copies)))
     (dolist (buffer (buffer-list))
       (when (ch-mcp-server--buffer-accessible-p buffer)
         (let* ((name (buffer-name buffer))
@@ -2280,7 +2303,8 @@ child each buffer that died or is no longer readable."
           (when (and file (file-exists-p file))
             (delete-file file)))
         (remhash name ch-mcp-server--copies)
-        (parenting-eval conn `(when (get-buffer ,name) (kill-buffer ,name)))))
+        (ch-mcp-server--in-child
+         conn `(when (get-buffer ,name) (kill-buffer ,name)))))
     (when changed
       (let ((findings (ch-mcp-server--gitleaks-findings)))
         (dolist (item (nreverse changed))
@@ -2294,44 +2318,54 @@ child each buffer that died or is no longer readable."
               (let ((coding-system-for-write 'utf-8-unix))
                 (with-temp-file copy (insert text)))
               (plist-put entry :redacted t))
-            (parenting-eval conn (ch-mcp-server--copy-form
-                                  name file text (plist-get entry :redacted)))))))))
+            (ch-mcp-server--in-child
+             conn (ch-mcp-server--copy-form
+                   name file text (plist-get entry :redacted)))))))))
+
+(defun ch-mcp-server--child-connection ()
+  "The live connection to the child, spawning one if needed.
+A child that cannot be started is a tool error naming the cause."
+  (condition-case err
+      (ch-mcp-server--child-ensure)
+    (error
+     (mcp-server-lib-tool-throw
+      (format "the child Emacs could not be started: %s"
+              (error-message-string err))))))
+
+(defun ch-mcp-server--in-child (conn form)
+  "Evaluate FORM in the child on CONN and return its value.
+An error in the child becomes a tool error carrying the child's
+message.  A form still running at `ch-mcp-server-eval-timeout' cannot
+be interrupted, so the child is stopped, the next call starts a fresh
+one, and this call is a tool error saying so.  A child that cannot be
+reached is a tool error naming the cause."
+  (condition-case err
+      (parenting-eval conn form ch-mcp-server-eval-timeout)
+    (parenting-timeout
+     (ch-mcp-server-child-stop)
+     (mcp-server-lib-tool-throw
+      (format "the child Emacs timed out after %ss; it was stopped and the next call starts a fresh one"
+              ch-mcp-server-eval-timeout)))
+    (parenting-remote-error
+     (let ((symbol (nth 1 err))
+           (data (nth 2 err)))
+       (mcp-server-lib-tool-throw
+        (format "the child Emacs signalled: %s"
+                (condition-case nil
+                    (error-message-string (cons symbol data))
+                  (error (format "%S %S" symbol data)))))))
+    (parenting-error
+     (mcp-server-lib-tool-throw
+      (format "the child Emacs could not be reached: %s"
+              (error-message-string err))))))
 
 (defun ch-mcp-server--child-eval (form)
-  "Evaluate FORM in the child and return its value printed with %S.
+  "Evaluate FORM in the child after refreshing the copies; print with %S.
 The printing happens in the child, so a value with no readable form
-(a buffer, a marker) arrives as its %S text.  An error in the child
-becomes a tool error carrying the child's message; a timeout stops
-the child (see `ch-mcp-server-eval-timeout'); a child that cannot be
-started or reached is a tool error naming the cause."
-  (let ((conn (condition-case err
-                  (ch-mcp-server--child-ensure)
-                (error
-                 (mcp-server-lib-tool-throw
-                  (format "eval-elisp: the child Emacs could not be started: %s"
-                          (error-message-string err)))))))
-    (condition-case err
-        (progn
-          (ch-mcp-server--copies-sync conn)
-          (parenting-eval conn (list 'format "%S" form)
-                          ch-mcp-server-eval-timeout))
-      (parenting-timeout
-       (ch-mcp-server-child-stop)
-       (mcp-server-lib-tool-throw
-        (format "eval-elisp timed out after %ss in the child Emacs; the child was stopped and the next call starts a fresh one"
-                ch-mcp-server-eval-timeout)))
-      (parenting-remote-error
-       (let ((symbol (nth 1 err))
-             (data (nth 2 err)))
-         (mcp-server-lib-tool-throw
-          (format "eval-elisp signalled in the child Emacs: %s"
-                  (condition-case nil
-                      (error-message-string (cons symbol data))
-                    (error (format "%S %S" symbol data)))))))
-      (parenting-error
-       (mcp-server-lib-tool-throw
-        (format "eval-elisp could not reach the child Emacs: %s"
-                (error-message-string err)))))))
+(a buffer, a marker) arrives as its %S text."
+  (let ((conn (ch-mcp-server--child-connection)))
+    (ch-mcp-server--copies-sync conn)
+    (ch-mcp-server--in-child conn (list 'format "%S" form))))
 
 ;;; Server lifecycle and registration
 
@@ -2474,7 +2508,7 @@ the others."
     (list #'ch-mcp-server--transform
           :id "transform"
           :description
-          "Eval buffer-editing elisp (motion/search/current-buffer mutation only) in a file's buffer for bulk/structural edits; returns a unified diff; saves unless save=no")
+          "Run elisp against a file's buffer for bulk/structural edits: the form runs in the sandboxed child on the buffer's copy and only the resulting text lands (refused if the buffer changed meanwhile); returns a unified diff; saves unless save=no")
     (list #'ch-mcp-server--add-comment
           :id "add-comment"
           :description

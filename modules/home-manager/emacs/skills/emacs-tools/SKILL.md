@@ -14,13 +14,12 @@ do well stays native — these are not mirrors of those.
 Design and rationale: `projects/ch-emacs-config/docs/development/emacs-mcp-agent-tools.md`.
 Safety rules: the `live-emacs-safety` skill (read-only tools are fine
 unasked; `present` and buffer auto-open are consented by design).
-Three server-side rules are structural, not etiquette: writes
+Two server-side rules are structural, not etiquette: writes
 (edit-file, transform, edit-buffer on file-backed buffers) are
 confined to your session's territory, the project you were launched
-in; transform accepts only elisp the server can prove safe (below);
-and eval-elisp runs in a sandboxed child Emacs, not in the live
-session (below). A refusal is a boundary, not a bug: don't route
-around it; ask the user, who owns the widening knobs.
+in; and eval-elisp and transform run in a sandboxed child Emacs, not
+in the live session (below). A refusal is a boundary, not a bug:
+don't route around it; ask the user, who owns the widening knobs.
 
 ## Conventions
 
@@ -152,19 +151,23 @@ wrap/raise/splice, computed replacements, reindentation) — one short
 form instead of N native edits. Not for one or two ordinary edits;
 native edit tools stay the default.
 
-- Runs your elisp with the buffer current, returns a **unified diff**
-  of what changed — read it; that diff is the verification step.
-- **Gated elisp**: only motion, search, and current-buffer editing
-  functions are accepted (the server's agent-safe registries; the
-  rejection names the offender). No `set-buffer`, no kill ring (use
-  `delete-region`), no `replace-regexp`/`query-replace-regexp` (their
-  replacement strings evaluate embedded elisp) — write the
-  re-search-forward + replace-match loop instead. Computation in the
-  replacement (string ops, `match-string`, arithmetic) is fine.
+- Runs your elisp in the sandboxed child with the buffer's copy
+  current (the same copy eval-elisp sees: the text, the mode from the
+  file name, no buffer-locals, no file), lands the copy's text in the
+  live buffer, and returns a **unified diff** of what changed. Read
+  it; that diff is the verification step.
+- **Any elisp runs; only text lands.** Nothing the form does reaches
+  the live session except the copy's text, which lands only if the
+  buffer did not change meanwhile, is not read-only, and holds no
+  redacted secret. Motion, search, `replace-match`, computed
+  replacements (string ops, `match-string`, arithmetic), and
+  `indent-region` are the useful moves; `save-buffer` and the kill
+  ring do nothing useful there.
 - Refuses buffers with unsaved user modifications (use buffer-diff).
-- Errors restore the buffer untouched.
+- An error in the form lands nothing.
 - Saves to disk by default (`save: no` to stage in-buffer only).
-- Point starts wherever it was: begin with `(goto-char (point-min))`.
+- Point is wherever the last form left it in the copy: begin with
+  `(goto-char (point-min))`.
 - **After a transform, re-read the file before further native edits** —
   the harness requires re-reading files changed outside its own tools.
 
@@ -228,9 +231,7 @@ above answer those. A stateful form runs and changes only the child.
 A form past `ch-mcp-server-eval-timeout` (30 s) is a tool error and
 the child is replaced; an error in the child comes back as a tool
 error with its message. Mutation of the session belongs to the edit
-verbs and transform; if transform rejects a legitimately innocuous
-editing function, the user can add it to
-`ch-mcp-server-agent-safe-editing-functions`.
+verbs and transform.
 
 ## add-comment / list-comments: the margin, not the page
 

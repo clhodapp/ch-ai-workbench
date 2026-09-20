@@ -7,8 +7,8 @@
 ;; (package activation fires the autoload hook).  Covers: registration of
 ;; every tool (which also validates the MCP Parameters docstrings),
 ;; the non-LSP tools end to end on temp files, the auto-open scope
-;; policy, the security filters (client-territory write scope, the
-;; transform gate, eval-elisp in the sandboxed child), and a clean tool
+;; policy, the security filters (client-territory write scope, agent
+;; elisp in the sandboxed child), and a clean tool
 ;; error, not a hang, from
 ;; the LSP-backed tools when no server is available.
 
@@ -46,6 +46,15 @@ launched where the temp files live."
   (declare (indent 0))
   `(let ((default-directory temporary-file-directory))
      ,@body))
+
+(defun ch-mcp-tests--random-token ()
+  "A GitHub-token-shaped string gitleaks flags.
+Random, because the stock allowlist drops placeholder-looking ones."
+  (let ((alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"))
+    (concat "ghp_"
+            (apply #'string
+                   (mapcar (lambda (_) (aref alphabet (random 62)))
+                           (number-sequence 1 36))))))
 
 (defun ch-mcp-tests--project-dir (parent &rest children)
   "Create a project directory under PARENT: a `.git' dir plus CHILDREN.
@@ -436,38 +445,42 @@ reach disk from here."
         (insert-file-contents file)
         (should (equal (buffer-string) "alpha\n"))))))
 
-(ert-deftest ch-mcp-tools-transform ()
-  (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n")))
-      (find-file-noselect file)
-      (let ((diff (ch-mcp-server--transform
-                   file
-                   (concat "(goto-char (point-min))"
-                           "(while (re-search-forward \"beta\" nil t)"
-                           "  (replace-match \"gamma\"))"))))
-        (should (string-match-p "^-beta" diff))
-        (should (string-match-p "^\\+gamma" diff)))
-      ;; Saved by default: the change reached disk and the buffer is clean.
-      (with-temp-buffer
-        (insert-file-contents file)
-        (should (equal (buffer-string) "alpha\ngamma\n")))
-      (should-not (buffer-modified-p (find-buffer-visiting file))))))
+(ert-deftest ch-mcp-tools-transform-here ()
+  "In `unrestricted' scope the form runs in this Emacs, in the buffer."
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n")))
+        (find-file-noselect file)
+        (let ((diff (ch-mcp-server--transform
+                     file
+                     (concat "(goto-char (point-min))"
+                             "(while (re-search-forward \"beta\" nil t)"
+                             "  (replace-match \"gamma\"))"))))
+          (should (string-match-p "^-beta" diff))
+          (should (string-match-p "^\\+gamma" diff)))
+        ;; Saved by default: the change reached disk and the buffer is clean.
+        (with-temp-buffer
+          (insert-file-contents file)
+          (should (equal (buffer-string) "alpha\ngamma\n")))
+        (should-not (buffer-modified-p (find-buffer-visiting file)))))))
 
-(ert-deftest ch-mcp-tools-transform-no-save ()
-  (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
-      (find-file-noselect file)
-      (let ((diff (ch-mcp-server--transform
-                   file
-                   "(goto-char (point-max)) (insert \"omega\\n\")"
-                   "no")))
-        (should (string-match-p "^\\+omega" diff)))
-      (should (buffer-modified-p (find-buffer-visiting file)))
-      (with-temp-buffer
-        (insert-file-contents file)
-        (should (equal (buffer-string) "alpha\n"))))))
+(ert-deftest ch-mcp-tools-transform-here-no-save ()
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
+        (find-file-noselect file)
+        (let ((diff (ch-mcp-server--transform
+                     file
+                     "(goto-char (point-max)) (insert \"omega\\n\")"
+                     "no")))
+          (should (string-match-p "^\\+omega" diff)))
+        (should (buffer-modified-p (find-buffer-visiting file)))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (should (equal (buffer-string) "alpha\n")))))))
 
 (ert-deftest ch-mcp-tools-transform-refuses-dirty-buffer ()
+  "Unsaved user modifications refuse the transform before either path."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
            (buffer (find-file-noselect file)))
@@ -477,25 +490,65 @@ reach disk from here."
       (should-error (ch-mcp-server--transform file "(ignore)")
                     :type 'mcp-server-lib-tool-error))))
 
-(ert-deftest ch-mcp-tools-transform-restores-on-error ()
-  (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
-           (buffer (find-file-noselect file)))
-      (should-error (ch-mcp-server--transform
-                     file
-                     "(goto-char (point-max)) (insert \"junk\") (error \"boom\")")
-                    :type 'mcp-server-lib-tool-error)
-      (with-current-buffer buffer
-        (should (equal (buffer-substring-no-properties (point-min) (point-max))
-                       "alpha\n"))
-        (should-not (buffer-modified-p))))))
+(ert-deftest ch-mcp-tools-transform-here-restores-on-error ()
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
+             (buffer (find-file-noselect file)))
+        (should-error (ch-mcp-server--transform
+                       file
+                       "(goto-char (point-max)) (insert \"junk\") (error \"boom\")")
+                      :type 'mcp-server-lib-tool-error)
+        (with-current-buffer buffer
+          (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                         "alpha\n"))
+          (should-not (buffer-modified-p)))))))
 
-(ert-deftest ch-mcp-tools-transform-no-changes ()
+(ert-deftest ch-mcp-tools-transform-here-no-changes ()
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
+        (find-file-noselect file)
+        (should (equal "No changes"
+                       (ch-mcp-server--transform file "(ignore)")))))))
+
+(ert-deftest ch-mcp-tools-land-text ()
+  "Text lands when the buffer still stands at the tick its copy was taken
+at, as a diff, saved unless asked not to; identical text is no change;
+a buffer that changed meanwhile or is read-only refuses."
   (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
-      (find-file-noselect file)
+    (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n"))
+           (buffer (find-file-noselect file))
+           (tick (buffer-chars-modified-tick buffer)))
       (should (equal "No changes"
-                     (ch-mcp-server--transform file "(ignore)"))))))
+                     (ch-mcp-server--land-text buffer file "alpha\nbeta\n"
+                                               tick nil)))
+      (should (string-match-p
+               "^\\+gamma"
+               (ch-mcp-server--land-text buffer file "alpha\ngamma\n"
+                                         tick "no")))
+      (should (buffer-modified-p buffer))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (equal (buffer-string) "alpha\nbeta\n")))
+      ;; That landing moved the tick, so the old tick is stale.
+      (should-error (ch-mcp-server--land-text buffer file "alpha\ndelta\n"
+                                              tick nil)
+                    :type 'mcp-server-lib-tool-error)
+      (should (string-match-p
+               "^\\+delta"
+               (ch-mcp-server--land-text buffer file "alpha\ndelta\n"
+                                         (buffer-chars-modified-tick buffer)
+                                         nil)))
+      (should-not (buffer-modified-p buffer))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (equal (buffer-string) "alpha\ndelta\n")))
+      (with-current-buffer buffer (setq buffer-read-only t))
+      (should-error (ch-mcp-server--land-text buffer file "x"
+                                              (buffer-chars-modified-tick buffer)
+                                              nil)
+                    :type 'mcp-server-lib-tool-error))))
 
 ;;; Security filters: client-territory write scope
 
@@ -578,7 +631,7 @@ though it never writes disk; non-file buffers stay editable."
                               (ch-mcp-server--edit-file
                                "alpha" "beta" file))))))
 
-;;; Security filters: eval-elisp in the child, the transform gate
+;;; Security filters: eval-elisp and transform in the child
 
 (ert-deftest ch-mcp-tools-eval-elisp-runs-in-the-child ()
   "eval-elisp answers from the sandboxed child: the configuration is
@@ -722,11 +775,7 @@ read-only; the parent's buffer is untouched."
     (ert-skip "bwrap cannot create a user namespace here"))
   (unless (executable-find (car ch-mcp-server-gitleaks-command))
     (ert-skip "no gitleaks to run"))
-  (let* ((alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
-         (token (concat "ghp_"
-                        (apply #'string
-                               (mapcar (lambda (_) (aref alphabet (random 62)))
-                                       (number-sequence 1 36)))))
+  (let* ((token (ch-mcp-tests--random-token))
          (name "ch-mcp-tests-leaky"))
     (unwind-protect
         (progn
@@ -750,67 +799,68 @@ this Emacs, ungated."
     (should (equal "42" (ch-mcp-server--eval-elisp
                          "(with-temp-buffer (insert \"42\") (string-to-number (buffer-string)))")))))
 
-(ert-deftest ch-mcp-tools-transform-gate-blocks-side-effects ()
-  "The transform gate rejects mutation outside the buffer, I/O, and
-indirect calls before evaluation, naming the offender."
-  (dolist (bad '((delete-file "/tmp/x")
-                 (setq some-global-var 1)
-                 (funcall (intern "delete-file") "/tmp/x")
-                 (eval '(delete-file "/tmp/x"))
-                 (shell-command "true")))
-    (let ((err (should-error (ch-mcp-server--gate-elisp bad "transform" t)
-                             :type 'mcp-server-lib-tool-error)))
-      (should (string-match-p "unsafe" (error-message-string err))))))
+(ert-deftest ch-mcp-tools-transform-runs-in-the-child ()
+  "transform runs the form in the child against the copy: any elisp
+runs there, only the text lands (as a diff, saved), and an error in
+the form lands nothing."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (ch-mcp-tests--in-territory
+        (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n"))
+               (buffer (find-file-noselect file)))
+          (let ((diff (ch-mcp-server--transform
+                       file
+                       (concat "(setq ch-mcp-tests--transform-side 1)"
+                               "(goto-char (point-min))"
+                               "(while (re-search-forward \"beta\" nil t)"
+                               "  (replace-match \"gamma\"))"))))
+            (should (string-match-p "^-beta" diff))
+            (should (string-match-p "^\\+gamma" diff)))
+          ;; The form's side effect stayed in the child; the text landed
+          ;; and was saved.
+          (should-not (boundp 'ch-mcp-tests--transform-side))
+          (should-not (buffer-modified-p buffer))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "alpha\ngamma\n")))
+          (let ((err (should-error
+                      (ch-mcp-server--transform
+                       file
+                       "(goto-char (point-max)) (insert \"junk\") (error \"boom\")")
+                      :type 'mcp-server-lib-tool-error)))
+            (should (string-match-p "boom" (error-message-string err))))
+          (with-current-buffer buffer
+            (should (equal (buffer-substring-no-properties (point-min)
+                                                           (point-max))
+                           "alpha\ngamma\n")))
+          ;; The copy the failed form dirtied is re-sent before the next
+          ;; form runs, so an idle form sees clean text.
+          (should (equal "No changes"
+                         (ch-mcp-server--transform file "(ignore)")))))
+    (ch-mcp-server-child-stop)))
 
-(ert-deftest ch-mcp-tools-transform-gate-protects-its-own-knobs ()
-  "Gated elisp can neither set nor bind the filter configuration."
-  (dolist (bad '((setq ch-mcp-server-elisp-scope 'unrestricted)
-                 (let ((ch-mcp-server-elisp-scope 'unrestricted)) (eval '(+ 1 2)))
-                 (setq ch-mcp-server-write-scope 'unrestricted)
-                 (push 'shell-command ch-mcp-server-agent-safe-functions)))
-    (should-error (ch-mcp-server--gate-elisp bad "transform" t)
-                  :type 'mcp-server-lib-tool-error)))
-
-(ert-deftest ch-mcp-tools-transform-agent-safe-registry ()
-  "The user-extensible registry admits functions unsafep does not know."
-  (defun ch-mcp-tests--blessed () "blessed")
-  (should-error (ch-mcp-server--gate-elisp '(ch-mcp-tests--blessed)
-                                           "transform" t)
-                :type 'mcp-server-lib-tool-error)
-  (let ((ch-mcp-server-agent-safe-functions
-         (cons 'ch-mcp-tests--blessed ch-mcp-server-agent-safe-functions)))
-    (should-not (ch-mcp-server--gate-elisp '(ch-mcp-tests--blessed)
-                                           "transform" t))))
-
-(ert-deftest ch-mcp-tools-transform-gate-blocks-escapes ()
-  "transform's elisp may move and edit in the target buffer only: no
-shell, no other buffers, no replace-regexp (its replacements evaluate
-embedded elisp), no kill ring."
-  (ch-mcp-tests--in-territory
-    (let ((file (ch-mcp-tests--temp-file "alpha\n")))
-      (find-file-noselect file)
-      (dolist (bad '("(shell-command \"true\")"
-                     "(set-buffer (other-buffer))"
-                     "(with-current-buffer (other-buffer) (insert \"x\"))"
-                     "(replace-regexp \"a\" \"b\")"
-                     "(kill-region (point-min) (point-max))"
-                     "(save-buffer)"
-                     "(write-region (point-min) (point-max) \"/tmp/out\")"))
-        (let ((err (should-error (ch-mcp-server--transform file bad)
-                                 :type 'mcp-server-lib-tool-error)))
-          (should (string-match-p "unsafe" (error-message-string err)))))
-      ;; And the buffer never moved.
-      (with-temp-buffer
-        (insert-file-contents file)
-        (should (equal (buffer-string) "alpha\n"))))))
+(ert-deftest ch-mcp-tools-transform-refuses-redacted-copy ()
+  "A buffer whose copy gitleaks redacted cannot be transformed."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (unwind-protect
+      (ch-mcp-tests--in-territory
+        (let ((file (ch-mcp-tests--temp-file
+                     (concat "token = " (ch-mcp-tests--random-token) "\n"))))
+          (find-file-noselect file)
+          (let ((err (should-error (ch-mcp-server--transform file "(ignore)")
+                                   :type 'mcp-server-lib-tool-error)))
+            (should (string-match-p "redacted" (error-message-string err))))))
+    (ch-mcp-server-child-stop)))
 
 (ert-deftest ch-mcp-tools-knobs-are-risky ()
-  "The filter knobs and registries carry `risky-local-variable', the
-property unsafep keys its binding refusals on."
+  "The filter knobs carry `risky-local-variable', so a file-local
+setting is refused."
   (dolist (var '(ch-mcp-server-write-scope
                  ch-mcp-server-elisp-scope
-                 ch-mcp-server-agent-safe-functions
-                 ch-mcp-server-agent-safe-editing-functions
                  ch-mcp-server-hidden-buffer-names
                  ch-mcp-server-debug-leak-knobs))
     (should (get var 'risky-local-variable))))
