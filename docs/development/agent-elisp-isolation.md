@@ -239,12 +239,13 @@ buffer was not redacted; and the parent's `buffer-chars-modified-tick`
 still equals the value recorded when the copy was taken. The text is
 applied through the existing edit path, which returns a diff.
 
-The mechanism is one parent function registered with
-`parenting-allow-function`, whose argument predicate implements exactly
-those checks, plus the connection's guard functions. Nothing else is
-allowed, so the child has no other way to reach the parent; the
-read-only flag in the child is a courtesy that stops honest mistakes,
-and the parent's refusal is the enforcement.
+The parent pulls: it evaluates the form in the child and takes the
+copy's text as the value, then runs those checks in one landing
+function (`ch-mcp-server--land-text`) before the text touches the
+buffer. No function is registered for the child to call, so it has no
+way to reach the parent at all; the read-only flag in the child is a
+courtesy that stops honest mistakes, and the parent's refusal is the
+enforcement. (Landed.)
 
 Variables never cross in either direction. Printable data cannot carry a
 closure, but it can carry a symbol naming a function into a hook
@@ -264,7 +265,7 @@ variable, so a synced variable is an effect.
   buffer and both land the result through the one back channel. The
   **elisp transform** evaluates a form in the child Emacs (the existing
   `transform`, now ungated because the child is the sandbox; the editing
-  registry retires with the gate). The **CLI transform** materializes
+  registry retired with the gate; landed). The **CLI transform** materializes
   the buffer as a file in the copy directory and hands the agent that
   path; the agent edits the file with its own command-line tools, and
   the file's text is what returns. A read is the CLI transform with no
@@ -492,10 +493,11 @@ print a secret into a log.
    and `eval-elisp` in the child.)
 3. The copying of buffer text (forward contract, incremental sync,
    gitleaks redaction; landed, with the copy directory not yet bound
-   into the jail) and the back channel; both transform modes move to
-   the child, the elisp one and the CLI one; the gated live evaluation
-   is deleted; named tools replace it for session facts. The MCP read
-   tools run gitleaks and redact here.
+   into the jail) and the back channel (landed); both transform modes
+   move to the child, the elisp one (landed, and the gated live
+   evaluation is deleted with it) and the CLI one; named tools replace
+   the live evaluation for session facts (landed). The MCP read tools
+   run gitleaks and redact here.
 4. The CLI-side hook in the `claude-code` module: `Read` redacted in
    place with the resubmit-to-approve prompt (single-use idempotency
    key), and `Bash` output through `gitleaks_redact` into a distinct
