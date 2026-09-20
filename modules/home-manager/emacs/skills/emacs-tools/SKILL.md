@@ -211,17 +211,25 @@ A named buffer passes the same read scope as `buffer-text`: a
 withheld buffer is refused, not described.
 
 `eval-elisp` runs in a sandboxed child Emacs: the same configuration
-as the live session, loaded fresh, with none of the session's
-buffers, variables, environment, or files (no network, and only the
-Nix store on disk). Use it for what the configuration answers: a
-default binding, a function's definition or docstring, a variable's
-default, whether a mode adds a hook. It does not see the live
-session; the four tools above do. A stateful form runs and changes
-only the child. A form past `ch-mcp-server-eval-timeout` (30 s) is a
-tool error and the child is replaced; an error in the child comes
-back as a tool error with its message. Mutation of the session
-belongs to the edit verbs and transform; if transform rejects a
-legitimately innocuous editing function, the user can add it to
+as the live session, loaded fresh, plus plain-text copies of the
+buffers you may read, and none of the session's variables,
+environment, or files (no network, and only the Nix store on disk).
+The copies are refreshed before each call and carry the buffer's name
+and text only: the major mode comes from the file name, there are no
+buffer-local values, no processes, and the copy visits no file. A
+buffer the read scope, the sensitivity mark, or the debug-knob latch
+withholds has no copy. A copy in which gitleaks found a token
+has it replaced by `[REDACTED:<rule>]` and is read-only. Use the tool
+for what the configuration and buffer text answer: a default binding,
+a function's definition or docstring, a variable's default, whether a
+mode adds a hook, a computation over a buffer's text. The live
+session's variables and window state are not there; the four tools
+above answer those. A stateful form runs and changes only the child.
+A form past `ch-mcp-server-eval-timeout` (30 s) is a tool error and
+the child is replaced; an error in the child comes back as a tool
+error with its message. Mutation of the session belongs to the edit
+verbs and transform; if transform rejects a legitimately innocuous
+editing function, the user can add it to
 `ch-mcp-server-agent-safe-editing-functions`.
 
 ## add-comment / list-comments: the margin, not the page
