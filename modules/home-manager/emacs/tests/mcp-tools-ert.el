@@ -594,10 +594,11 @@ the child."
         ;; A value with no readable form still prints, in the child.
         (should (string-prefix-p "#<buffer"
                                  (ch-mcp-server--eval-elisp "(current-buffer)")))
-        ;; This session's buffers and environment are not there.
-        (get-buffer-create "ch-mcp-tests-parent-only")
+        ;; This session's withheld buffers and environment are not there
+        ;; (a leading space marks an internal buffer, never copied).
+        (get-buffer-create " ch-mcp-tests-parent-only")
         (should (equal "nil" (ch-mcp-server--eval-elisp
-                              "(get-buffer \"ch-mcp-tests-parent-only\")")))
+                              "(get-buffer \" ch-mcp-tests-parent-only\")")))
         (should-not (equal (format "%S" (getenv "HOME"))
                            (ch-mcp-server--eval-elisp "(getenv \"HOME\")")))
         ;; A stateful form runs, and changes only the child.
@@ -632,6 +633,115 @@ the next call answers from a fresh one."
         (should-not ch-mcp-server--child)
         (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)"))))
     (ch-mcp-server-child-stop)))
+
+(ert-deftest ch-mcp-tools-redact-text ()
+  "A secret is replaced on its reported line; a multi-line match has its
+line range replaced by one placeholder and empty lines."
+  (let ((findings '(((RuleID . "github-pat") (Secret . "ghp_abc")
+                     (StartLine . 1) (EndLine . 1))
+                    ((RuleID . "private-key")
+                     (Secret . "-----BEGIN\nxyz\n-----END")
+                     (StartLine . 3) (EndLine . 5)))))
+    (should (equal (concat "t = [REDACTED:github-pat] ok\nplain\n"
+                           "[REDACTED:private-key]\n\n\ntail")
+                   (ch-mcp-server--redact-text
+                    "t = ghp_abc ok\nplain\n-----BEGIN\nxyz\n-----END\ntail"
+                    findings)))))
+
+(ert-deftest ch-mcp-tools-copy-file-name-is-plain ()
+  "A buffer name becomes one plain file name in the copy directory."
+  (let ((ch-mcp-server--copy-directory "/copies"))
+    (should (equal "/copies/modules%default.nix"
+                   (ch-mcp-server--copy-file-name "modules/default.nix")))
+    (should (equal "/copies/%Messages%"
+                   (ch-mcp-server--copy-file-name "*Messages*")))))
+
+(ert-deftest ch-mcp-tools-eval-elisp-sees-buffer-copies ()
+  "A readable buffer reaches the child as plain text under its name with
+the mode from its file name; a change is re-sent; nothing but text
+crosses; a killed buffer leaves the child."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (ch-mcp-tests--in-territory
+        (let* ((file (ch-mcp-tests--temp-file "(defun one ())\n" ".el"))
+               (buffer (find-file-noselect file))
+               (name (buffer-name buffer)))
+          (should (equal "(emacs-lisp-mode \"(defun one ())\n\")"
+                         (ch-mcp-server--eval-elisp
+                          (format "(with-current-buffer %S (list major-mode (buffer-substring-no-properties (point-min) (point-max))))"
+                                  name))))
+          (with-current-buffer buffer
+            (goto-char (point-max))
+            (insert "(defun two ())\n"))
+          (should (string-match-p
+                   "two"
+                   (ch-mcp-server--eval-elisp
+                    (format "(with-current-buffer %S (buffer-substring-no-properties (point-min) (point-max)))"
+                            name))))
+          ;; The copy visits nothing and is writable.
+          (should (equal "(nil nil)"
+                         (ch-mcp-server--eval-elisp
+                          (format "(with-current-buffer %S (list buffer-file-name buffer-read-only))"
+                                  name))))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (should (equal "nil" (ch-mcp-server--eval-elisp
+                                (format "(get-buffer %S)" name))))))
+    (ch-mcp-server-child-stop)))
+
+(ert-deftest ch-mcp-tools-copies-skip-withheld-buffers ()
+  "A sensitive buffer has no copy, and a buffer marked sensitive after
+its copy was taken leaves the child on the next call."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (progn
+        (with-current-buffer (get-buffer-create "ch-mcp-tests-secret-note")
+          (insert "hush")
+          (setq-local ch-mcp-server-buffer-sensitivity 'sensitive))
+        (with-current-buffer (get-buffer-create "ch-mcp-tests-open-note")
+          (insert "hello"))
+        (should (equal "nil" (ch-mcp-server--eval-elisp
+                              "(get-buffer \"ch-mcp-tests-secret-note\")")))
+        (should (equal "\"hello\""
+                       (ch-mcp-server--eval-elisp
+                        "(with-current-buffer \"ch-mcp-tests-open-note\" (buffer-string))")))
+        (with-current-buffer "ch-mcp-tests-open-note"
+          (setq-local ch-mcp-server-buffer-sensitivity 'sensitive))
+        (should (equal "nil" (ch-mcp-server--eval-elisp
+                              "(get-buffer \"ch-mcp-tests-open-note\")"))))
+    (ch-mcp-server-child-stop)
+    (kill-buffer "ch-mcp-tests-secret-note")
+    (kill-buffer "ch-mcp-tests-open-note")))
+
+(ert-deftest ch-mcp-tools-copies-are-redacted ()
+  "A token the scan recognizes is replaced in the child's copy, which is
+read-only; the parent's buffer is untouched."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (let* ((alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+         (token (concat "ghp_"
+                        (apply #'string
+                               (mapcar (lambda (_) (aref alphabet (random 62)))
+                                       (number-sequence 1 36)))))
+         (name "ch-mcp-tests-leaky"))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create name)
+            (insert "token = " token "\nplain\n"))
+          (let ((copy (ch-mcp-server--eval-elisp
+                       (format "(with-current-buffer %S (list buffer-read-only (buffer-string)))"
+                               name))))
+            (should-not (string-search token copy))
+            (should (string-search "[REDACTED:github-pat]" copy))
+            (should (string-prefix-p "(t " copy)))
+          (should (string-search token (with-current-buffer name (buffer-string))))
+          (should (plist-get (gethash name ch-mcp-server--copies) :redacted)))
+      (ch-mcp-server-child-stop)
+      (kill-buffer name))))
 
 (ert-deftest ch-mcp-tools-eval-elisp-unrestricted-knob ()
   "The resident user's say-so path: `unrestricted' scope evaluates in
