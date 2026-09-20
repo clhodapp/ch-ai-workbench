@@ -145,8 +145,8 @@ Three filters apply, in this order.
    all empty the region, so a tainted window clears itself once it has
    scrolled out.
 
-3. **The secret scan.** gitleaks runs once over the copy directory
-   before the changed copies are sent to the child:
+3. **gitleaks.** It runs once over the copy directory before the
+   changed copies are sent to the child:
 
    ```
    gitleaks dir --no-banner --log-level error \
@@ -165,17 +165,17 @@ Three filters apply, in this order.
    span is replaced by matching the reported secret on its reported
    lines rather than by column, since the columns are byte offsets; a
    match the parent cannot find on those lines (a multi-line one) has
-   its whole line range replaced by one placeholder. A scanner that
-   cannot run is a tool error, and no copy is sent unscanned. gitleaks
-   comes from the pinned nixpkgs. (Landed.)
+   its whole line range replaced by one placeholder. A gitleaks that
+   cannot run is a tool error, and no copy is sent before gitleaks has
+   passed over it. gitleaks comes from the pinned nixpkgs. (Landed.)
 
-The latch and the scan are not alternatives. The scan sees what has a
+The latch and gitleaks are not alternatives. gitleaks sees what has a
 recognizable shape; the latch covers text written under conditions
 known to leak, whatever its shape.
 
 ## Marking a buffer sensitive
 
-The scan is a shape-matcher, so a secret it has no rule for, a bare
+gitleaks matches shapes, so a secret it has no rule for, a bare
 token, a passphrase, an SSH key body, passes it. The user needs a way
 to withhold a buffer by declaration rather than by pattern, decided
 before the secret is in it. One buffer-local state does this,
@@ -286,43 +286,44 @@ The child holds copies only, so it cannot answer questions about the
 parent's own runtime state either, which is why those tools exist
 rather than an escape hatch.
 
-## The scan covers every file view, and is not a boundary
+## Redaction covers every file view, and is not a boundary
 
-The gitleaks scan runs on every path by which content reaches the
-agent's context, not only the copies, and including the CLI's own
-built-in tools (`Read` and `Bash` alike), not only the MCP tools. Any
-tool result that would put bytes in the agent's context is scanned
-first; on a hit the content is returned redacted, the agent is told,
+gitleaks runs on every path by which content reaches the agent's
+context, not only the copies, and including the CLI's own built-in
+tools (`Read` and `Bash` alike), not only the MCP tools. Any tool
+result that would put bytes in the agent's context passes through it
+first; on a finding the content is returned redacted, the agent is told,
 and for `Read` it may resubmit to ask the user for the real bytes
 (`Bash` differs on both counts, see "Redact and tell; resubmit to
 approve"). A buffer's text reaches the agent as a copy (through the
-buffer-read tools, or as the file in the copy directory) and is scanned
-there. A file's content reaches the agent through the MCP file-reading
-tools, the CLI's `Read`, and the output of a shell command run through
-`Bash`; all are scanned, or they are the bypass that makes redacting the
-copy pointless (reading `~/.env` directly, or `cat`-ing it, would
-defeat a redacted copy of it).
+buffer-read tools, or as the file in the copy directory) and gitleaks
+runs there. A file's content reaches the agent through the MCP
+file-reading tools, the CLI's `Read`, and the output of a shell command
+run through `Bash`; all pass through gitleaks, or they are the bypass
+that makes redacting the copy pointless (reading `~/.env` directly, or
+`cat`-ing it, would defeat a redacted copy of it).
 
-There are two enforcement points, in two repos. The MCP server scans
-its own reads before returning them and redacts the matched spans in
-place (workbench). The CLI's built-in tools are handled by a hook in
-the `claude-code` module, and this covers `Bash` as well as `Read`: a
-shell command's output is a tool result before it reaches context, so
-the hook receives its stdout and stderr and scans them the same way. So
-a `cat` of a bound file is covered after all: it is a `Bash` result,
-and it is scanned. The distinction that matters is not tool-read versus
-shell-read; it is whether the bytes pass through the harness at all.
+There are two enforcement points, in two repos. The MCP server runs
+gitleaks over its own reads before returning them and redacts the
+matched spans in place (workbench). The CLI's built-in tools are
+handled by a hook in the `claude-code` module, and this covers `Bash`
+as well as `Read`: a shell command's output is a tool result before it
+reaches context, so the hook receives its stdout and stderr and runs
+gitleaks over them the same way. So a `cat` of a bound file is covered
+after all: it is a `Bash` result, and gitleaks runs over it. The
+distinction that matters is not tool-read versus shell-read; it is
+whether the bytes pass through the harness at all.
 
 What genuinely escapes is only what never becomes a tool result: a
 subprocess the agent's own code spawns whose output the harness does
 not capture, or a byte stream routed around the tool channel entirely.
-That is a narrow residue, and it is the sandbox bind list's to cover,
-not the scan's: a secret in a directory never bound into the jail
-cannot be reached by any means, tool or not.
+That is a narrow residue, and the sandbox bind list covers it, not
+gitleaks: a secret in a directory never bound into the jail cannot be
+reached by any means, tool or not.
 
 ### Redact and tell; resubmit to approve (Read); Bash cannot retry
 
-A scan hit never fails a read. The matched spans come back redacted with
+A finding never fails a read. The matched spans come back redacted with
 a placeholder naming the rule (`[REDACTED:github-pat]`), and the agent
 is told a redaction occurred. The agent proceeds on the redacted text,
 which is the common case: it wanted the file, not the secret in it.
@@ -340,7 +341,7 @@ allow.
 
 `Bash` output is the exception, in two ways. First, a shell stream has
 no file the agent holds to see marked, so its stdout and stderr are
-captured, run through a `gitleaks_redact` step (the scanner writing a
+captured, run through a `gitleaks_redact` step (gitleaks writing a
 marked, redacted copy), and that distinct copy is what the agent
 receives; the separate artifact is what makes the filtering evident
 rather than handing back bytes that silently differ from what the
@@ -353,33 +354,33 @@ output the user runs it themselves, outside the agent's tool channel.
 Either way the boundary is the same: the only way the agent sees a
 secret without a per-read approval is a deliberate user action outside
 the read path, exposing a buffer, binding a path, handing over the
-value. The scan does not decide who may see a secret; the user does, by
+value. gitleaks does not decide who may see a secret; the user does, by
 what is exposed and by answering the resubmit prompt.
 
-The scan is accident-prevention, not access control, and edit is why it
-cannot be more, in two ways. First, an edit verb that reports whether an
+Redaction is accident-prevention, not access control, and edit is why
+it cannot be more, in two ways. First, an edit verb that reports whether an
 `old_string` matched is an oracle: an agent can recover a secret it
 cannot read by proposing replacements and extending the confirmed
 prefix one match-or-no-match at a time, never reading the value.
 Second, and worse, a landed edit lets the agent move the secret past
-the scan in one step: the scan matches known token shapes, so an edit
+gitleaks in one step: gitleaks matches known token shapes, so an edit
 that breaks the shape (split the token across lines, insert a character
-mid-token, base64 or reverse it) makes the next scan pass, and the
-mutated text comes back in full on the next read. This needs no
+mid-token, base64 or reverse it) makes the next run find nothing, and
+the mutated text comes back in full on the next read. This needs no
 guessing; it is one edit and one read, and the mutation space is
-unbounded, so no better scan closes it. Redacting reads does nothing
+unbounded, so no better matcher closes it. Redacting reads does nothing
 against either, and the matching cannot be redacted without breaking
-edit. So the scan stops a secret from landing in the agent's context by
-being read or shown; it does not stop a determined agent from
+edit. So redaction stops a secret from landing in the agent's context
+by being read or shown; it does not stop a determined agent from
 extracting one it can already edit. Both attacks need the secret to be
 in a file the agent can edit, which means already inside the sandbox's
 view, so the confidentiality boundary is isolation, what is never
-copied in and what the sandbox's filesystem view withholds, not the
-scan.
+copied in and what the sandbox's filesystem view withholds, not
+gitleaks.
 
 ## Residual accepted surface
 
-Log text is only as clean as the latch and the scan: a bare secret with
+Log text is only as clean as the latch and gitleaks: a bare secret with
 no recognizable shape passes, and a knob outside the declared list is
 invisible until someone adds it. A copy is a snapshot and can lag the
 screen. A file that mixes a secret with settings the agent needs to
@@ -404,17 +405,17 @@ print a secret into a log.
 - A redaction placeholder never round-trips into a file: a redacted
   buffer is read-only.
 - The child is only a sandbox with the OS sandbox in place.
-- A sensitive buffer is withheld by an explicit user mark, not by the
-  scan; the mark is set before the secret arrives (on open, by command
-  or by pattern), and the scan is not trusted to catch what the user
-  already knows is sensitive.
+- A sensitive buffer is withheld by an explicit user mark, not by
+  gitleaks; the mark is set before the secret arrives (on open, by
+  command or by pattern), and gitleaks is not trusted to catch what the
+  user already knows is sensitive.
 - Sensitivity is one per-buffer state with a computed default:
   terminals and secret-named files start sensitive, everything else
   starts readable, and one generic toggle flips any buffer either way.
   Terminals and `.env` are special cases of the default, not of the
   toggle.
-- Every tool result that reaches the agent's context is scanned and
-  redacted, `Read` and `Bash` alike (a shell command's output is a tool
+- Every tool result that reaches the agent's context passes through
+  gitleaks and is redacted, `Read` and `Bash` alike (a shell command's output is a tool
   result, so `cat` is covered). `Read` and the MCP tools mark the spans
   in place and let the agent resubmit the identical read to raise a user
   prompt for the real bytes (single-use idempotency key over tool,
@@ -462,8 +463,8 @@ print a secret into a log.
   sees a terminal only once the user has exposed it, and asks rather
   than assuming otherwise. Lands with phase 1b.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
-- **The `claude-code` module** gains the hook that scans the CLI's
-  built-in tool results before they reach context: `Read` redacted in
+- **The `claude-code` module** gains the hook that runs gitleaks over
+  the CLI's built-in tool results before they reach context: `Read` redacted in
   place with the resubmit-to-approve prompt, `Bash` output through
   `gitleaks_redact` into a distinct artifact with no retry. It lives
   with the CLI's other hooks, not in the MCP server, and is the second
@@ -490,17 +491,18 @@ print a secret into a log.
    session facts until the named tools exist. (Landed: the lifecycle
    and `eval-elisp` in the child.)
 3. The copying of buffer text (forward contract, incremental sync,
-   secret scan; landed, with the copy directory not yet bound into the
-   jail) and the back channel; both transform modes move to the child,
-   the elisp one and the CLI one; the gated live evaluation is deleted;
-   named tools replace it for session facts. The MCP read tools scan
-   and redact here.
+   gitleaks redaction; landed, with the copy directory not yet bound
+   into the jail) and the back channel; both transform modes move to
+   the child, the elisp one and the CLI one; the gated live evaluation
+   is deleted; named tools replace it for session facts. The MCP read
+   tools run gitleaks and redact here.
 4. The CLI-side hook in the `claude-code` module: `Read` redacted in
    place with the resubmit-to-approve prompt (single-use idempotency
    key), and `Bash` output through `gitleaks_redact` into a distinct
-   artifact with no retry. Depends on the scan existing (phase 3) and on
-   the sandbox bind list (phase 2), and completes "every tool result
-   into context is scanned" for the CLI's own tools.
+   artifact with no retry. Depends on the gitleaks redaction existing
+   (phase 3) and on the sandbox bind list (phase 2), and completes
+   "every tool result into context passes through gitleaks" for the
+   CLI's own tools.
 
 The `parenting` `:sandbox` work can precede phase 2 or land alongside
 it.
