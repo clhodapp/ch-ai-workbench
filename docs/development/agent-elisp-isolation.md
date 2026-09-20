@@ -101,10 +101,13 @@ default, below); what arrives is its text.
 
 Syncing is incremental: `buffer-chars-modified-tick` tells the parent
 which buffers changed since the last copy, and only those are re-sent.
+The copies are refreshed before each evaluation in the child, and a
+buffer that dies or stops passing the filters is removed from the
+child on the next refresh. (Landed.)
 
 The same text is also written to a file in the copy directory, named
-for the buffer (the file name's basename when it has one, else a
-sanitized buffer name). This is the file half of the CLI transform (see
+for the buffer with every character outside letters, digits, dot,
+dash, and underscore replaced by `%`. This is the file half of the CLI transform (see
 "What runs where"): a tool asks for it by buffer name, the parent runs
 the buffer through the same three filters, writes the result into the
 copy directory, and returns the in-jail path. A buffer the filters
@@ -142,24 +145,29 @@ Three filters apply, in this order.
    all empty the region, so a tainted window clears itself once it has
    scrolled out.
 
-3. **The secret scan.** gitleaks runs over the changed copies before
-   the child reads them:
+3. **The secret scan.** gitleaks runs once over the copy directory
+   before the changed copies are sent to the child:
 
    ```
-   gitleaks dir --no-banner --log-level error --redact \
+   gitleaks dir --no-banner --log-level error \
      --report-format json --report-path - --exit-code 0 <copy-dir>
    ```
 
-   The stock rules are used as they are: they flag GitHub tokens,
+   The report carries the matched secret in clear so the parent can
+   find it in the text; it is read by the parent and goes nowhere
+   else. The stock rules are used as they are: they flag GitHub tokens,
    JWTs, provider keys, and PEM blocks, and they leave Nix store paths,
    `narHash` values, and git SHAs alone, so no entropy heuristics are
    enabled and no allowlist is needed. A hit redacts the matched span in
    the copy with a placeholder naming the rule,
    `[REDACTED:github-pat]`, marks the child's buffer read-only, and
-   marks the buffer refused on the back channel. The span is replaced
-   by re-matching on the reported line rather than by column, since the
-   columns are byte offsets. gitleaks comes from the pinned nixpkgs on
-   the profile PATH.
+   records the buffer as redacted, which the back channel refuses. The
+   span is replaced by matching the reported secret on its reported
+   lines rather than by column, since the columns are byte offsets; a
+   match the parent cannot find on those lines (a multi-line one) has
+   its whole line range replaced by one placeholder. A scanner that
+   cannot run is a tool error, and no copy is sent unscanned. gitleaks
+   comes from the pinned nixpkgs. (Landed.)
 
 The latch and the scan are not alternatives. The scan sees what has a
 recognizable shape; the latch covers text written under conditions
@@ -482,11 +490,11 @@ print a secret into a log.
    session facts until the named tools exist. (Landed: the lifecycle
    and `eval-elisp` in the child.)
 3. The copying of buffer text (forward contract, incremental sync,
-   secret scan) and the
-   back channel; both transform modes move to the child, the elisp one
-   and the CLI one; the gated live evaluation is deleted; named tools
-   replace it for session facts. The MCP read tools scan and redact
-   here.
+   secret scan; landed, with the copy directory not yet bound into the
+   jail) and the back channel; both transform modes move to the child,
+   the elisp one and the CLI one; the gated live evaluation is deleted;
+   named tools replace it for session facts. The MCP read tools scan
+   and redact here.
 4. The CLI-side hook in the `claude-code` module: `Read` redacted in
    place with the resubmit-to-approve prompt (single-use idempotency
    key), and `Bash` output through `gitleaks_redact` into a distinct
