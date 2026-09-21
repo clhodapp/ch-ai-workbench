@@ -146,6 +146,9 @@
                 {
                   inherit pkgs;
                 };
+            claudeRedactHook = import ../../../modules/home-manager/claude-code/lib/claude-redact-hook.nix {
+              inherit pkgs;
+            };
 
             # The prompt API tool (its build runs the unittest suite)
             # and the consent hook built on it, from the same files the
@@ -322,6 +325,48 @@
                     quiet 'git pushx'
                     quiet 'ls'
                     [ -z "$(call 'git push' | env -u XDG_RUNTIME_DIR "$hook")" ]
+                    [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
+
+              # The redaction hook: a token in a Read result is replaced
+              # in place with the shape kept and a note naming the rule;
+              # a token in Bash's stderr the same; a clean result, a
+              # PreToolUse payload, and non-JSON stdin are silence. The
+              # token is drawn at build time and checked against gitleaks
+              # first, since gitleaks drops placeholder-looking strings
+              # and a token-shaped string does not belong in the tree.
+              claude-redact-hook =
+                pkgs.runCommand "claude-redact-hook"
+                  {
+                    nativeBuildInputs = [
+                      pkgs.gitleaks
+                      pkgs.jq
+                    ];
+                  }
+                  ''
+                    hook=${lib.getExe claudeRedactHook}
+                    flagged=0
+                    for _ in 1 2 3 4 5 6 7 8; do
+                      tok="ghp_$(head -c 64 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | cut -c1-36)"
+                      n=$(printf 'token = %s\n' "$tok" | gitleaks stdin --no-banner --log-level error --report-format json --report-path - --exit-code 0 | jq 'length')
+                      if [ "$n" = 1 ]; then flagged=1; break; fi
+                    done
+                    [ "$flagged" = 1 ]
+                    read_payload=$(jq -cn --arg t "$tok" '{hook_event_name: "PostToolUse", tool_name: "Read",
+                      tool_response: {type: "text", file: {content: ("token = " + $t + "\nplain\n"), filePath: "/x", numLines: 2, startLine: 1, totalLines: 2}}}')
+                    res=$("$hook" <<<"$read_payload")
+                    jq -e '.hookSpecificOutput.hookEventName == "PostToolUse"' <<<"$res"
+                    jq -e '.hookSpecificOutput.updatedToolOutput.file.content == "token = [REDACTED:github-pat]\nplain\n"' <<<"$res"
+                    jq -e '.hookSpecificOutput.updatedToolOutput.file.numLines == 2' <<<"$res"
+                    jq -e '.hookSpecificOutput.additionalContext | test("redacted 1 span in this Read result: github-pat")' <<<"$res"
+                    bash_payload=$(jq -cn --arg t "$tok" '{hook_event_name: "PostToolUse", tool_name: "Bash",
+                      tool_response: {stdout: "ok\n", stderr: ("leak " + $t + " here\n"), interrupted: false}}')
+                    res=$("$hook" <<<"$bash_payload")
+                    jq -e '.hookSpecificOutput.updatedToolOutput.stderr == "leak [REDACTED:github-pat] here\n"' <<<"$res"
+                    jq -e '.hookSpecificOutput.updatedToolOutput.stdout == "ok\n"' <<<"$res"
+                    [ -z "$("$hook" <<<'{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_response":{"stdout":"hello\n","stderr":""}}')" ]
+                    [ -z "$("$hook" <<<'{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/x"}}')" ]
                     [ -z "$(echo 'not json' | "$hook")" ]
                     touch $out
                   '';
