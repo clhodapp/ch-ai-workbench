@@ -162,16 +162,21 @@ Three filters apply, in this order.
    else. The stock rules are used as they are: they flag GitHub tokens,
    JWTs, provider keys, and PEM blocks, and they leave Nix store paths,
    `narHash` values, and git SHAs alone, so no entropy heuristics are
-   enabled and no allowlist is needed. A hit redacts the matched span in
-   the copy with a placeholder naming the rule,
-   `[REDACTED:github-pat]`, marks the child's buffer read-only, and
-   records the buffer as redacted, which the back channel refuses. The
-   span is replaced by matching the reported secret on its reported
-   lines rather than by column, since the columns are byte offsets; a
-   match the parent cannot find on those lines (a multi-line one) has
-   its whole line range replaced by one placeholder. A gitleaks that
-   cannot run is a tool error, and no copy is sent before gitleaks has
-   passed over it. gitleaks comes from the pinned nixpkgs.
+   enabled and no allowlist is needed. A hit replaces the matched span
+   in the copy with a numbered placeholder naming the rule,
+   `[REDACTED:github-pat:1]`, and the parent keeps the original beside
+   the copy's record. When text from that copy lands, the parent puts
+   each original back in place of its placeholder before anything
+   touches the buffer (see the back contract), so the buffer never
+   receives a placeholder and the agent never sees the secret; a
+   placeholder the record cannot map, altered or invented, refuses the
+   landing. The span is replaced by matching the reported secret on its
+   reported lines rather than by column, since the columns are byte
+   offsets; a match the parent cannot find on those lines (a multi-line
+   one) has its whole line range collapsed to one placeholder line, and
+   the original kept is those lines' text. A gitleaks that cannot run
+   is a tool error, and no copy is sent before gitleaks has passed over
+   it. gitleaks comes from the pinned nixpkgs.
 
 The latch and gitleaks are not alternatives. gitleaks sees what has a
 recognizable shape; the latch covers text written under conditions
@@ -388,18 +393,17 @@ Log text is only as clean as the latch and gitleaks: a bare secret with
 no recognizable shape passes, and a knob outside the declared list is
 invisible until someone adds it. A copy is a snapshot and can lag the
 screen. A file that mixes a secret with settings the agent needs to
-edit has the secret redacted in the copy it sees, so an edit returned
-from that copy would carry the placeholder back; splicing the original
-spans back into returned text is deferred until that blocks real work,
-since it adds a clever path the rest of the design avoids, and until
-then such a buffer is effectively read-only through its copy. The
-edit-oracle extraction above is accepted, not closed. The MCP tools
-have no resubmit-to-approve of their own: a redacted MCP read stays
-redacted, since the prompt would have to come from inside a tool
-handler in the live Emacs, and the CLI's `Read` with its prompt covers
-the file case. Same-user boundaries stay soft. This is accident-surface hardening for an agent
-expected to help debug, not an adversarial sandbox, and any program can
-print a secret into a log.
+edit is editable through its redacted copy, since the parent puts the
+original spans back when text lands; the agent can still delete or
+duplicate a placeholder, and with it the secret, which the returned
+diff shows (redacted) and the user sees in the buffer. The edit-oracle
+extraction above is accepted, not closed. The MCP tools have no
+resubmit-to-approve of their own: a redacted MCP read stays redacted,
+since the prompt would have to come from inside a tool handler in the
+live Emacs, and the CLI's `Read` with its prompt covers the file case.
+Same-user boundaries stay soft. This is accident-surface hardening for
+an agent expected to help debug, not an adversarial sandbox, and any
+program can print a secret into a log.
 
 ## Settled
 
@@ -409,8 +413,10 @@ print a secret into a log.
   designed and is superseded by isolation; only the buffer predicate and
   the secret policy survive, as the filters on what is copied.
 - Variables are never synced.
-- A redaction placeholder never round-trips into a file: a redacted
-  buffer is read-only.
+- A redaction placeholder never round-trips into a buffer: placeholders
+  are numbered, the parent keeps each original beside the copy's
+  record, and a landing puts them back before the text touches the
+  buffer; a placeholder the record cannot map refuses the landing.
 - The child is only a sandbox with the OS sandbox in place.
 - The child never performs a trusted step. The filters, the gitleaks
   run and the redaction, the redaction record, and the landing checks

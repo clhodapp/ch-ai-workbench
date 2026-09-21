@@ -162,11 +162,16 @@ native edit tools stay the default.
   it; that diff is the verification step.
 - **Any elisp runs; only text lands.** Nothing the form does reaches
   the live session except the copy's text, which lands only if the
-  buffer did not change meanwhile, is not read-only, and holds no
-  redacted secret. Motion, search, `replace-match`, computed
-  replacements (string ops, `match-string`, arithmetic), and
-  `indent-region` are the useful moves; `save-buffer` and the kill
-  ring do nothing useful there.
+  buffer did not change meanwhile and is not read-only. Motion, search,
+  `replace-match`, computed replacements (string ops, `match-string`,
+  arithmetic), and `indent-region` are the useful moves; `save-buffer`
+  and the kill ring do nothing useful there.
+- **Redacted spans come back.** A copy in which gitleaks found a
+  secret shows numbered placeholders, `[REDACTED:<rule>:<n>]`. When the
+  text lands, the live Emacs puts the original spans back in their
+  place, so the buffer never receives a placeholder and you never see
+  the secret. Delete or move a placeholder whole if the edit calls for
+  it; a placeholder that was altered or invented refuses the landing.
 - Refuses buffers with unsaved user modifications (use buffer-diff).
 - An error in the form lands nothing.
 - Saves to disk by default (`save: no` to stage in-buffer only).
@@ -200,12 +205,14 @@ native file tools than with elisp: `buffer-file (name)` writes the
 buffer's text to a file under your territory at
 `.claude/claude-code-sandbox/mcp-copies/<name>` (writable inside the
 sandbox, ignored by git) and returns the path. The text passes through
-gitleaks like every copy; a redacted copy says so and cannot be
-landed. Edit the file, then `land-buffer-file (name, save)` puts its
-text into the buffer and returns the unified diff; it is refused if
-the buffer changed since the file was written (ask for the file
-again), if the buffer is read-only or has a process, or if the
-buffer's own file is outside your territory. The file is removed
+gitleaks like every copy; a redacted copy says so, and its secrets
+appear as numbered placeholders that the live Emacs puts back when the
+text lands. Edit the file, then `land-buffer-file (name, save)` puts
+its text into the buffer and returns the unified diff; it is refused
+if the buffer changed since the file was written (ask for the file
+again), if the buffer is read-only or has a process, if a placeholder
+was altered or invented, or if the buffer's own file is outside your
+territory. The file is removed
 either way, so a stale copy never lands later. Reading the file and
 never landing it is a plain read. Editing the file changes nothing in
 Emacs by itself.
@@ -242,8 +249,9 @@ The copies are refreshed before each call and carry the buffer's name
 and text only: the major mode comes from the file name, there are no
 buffer-local values, no processes, and the copy visits no file. A
 buffer the read scope, the sensitivity mark, or the debug-knob latch
-withholds has no copy. A copy in which gitleaks found a token
-has it replaced by `[REDACTED:<rule>]` and is read-only. Use the tool
+withholds has no copy. A copy in which gitleaks found a token has it
+replaced by a numbered placeholder, `[REDACTED:<rule>:<n>]`, which the
+live Emacs turns back into the original when text lands. Use the tool
 for what the configuration and buffer text answer: a default binding,
 a function's definition or docstring, a variable's default, whether a
 mode adds a hook, a computation over a buffer's text. The live
