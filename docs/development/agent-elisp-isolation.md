@@ -68,7 +68,9 @@ would return real keys and `insert-file-contents` would read
 after it. The child is spawned on first use, keyed to the parent's
 configuration store path so that a switch replaces it, stopped after
 idle, and kills itself when the connection closes, which `parenting`
-already does.
+already does. The child never performs a trusted step: every filter and
+check runs in the parent, and what the child returns is data (see
+"Settled").
 
 **The copied text** is the data the child holds. The parent produces it
 per request under the two contracts below.
@@ -406,6 +408,14 @@ print a secret into a log.
 - A redaction placeholder never round-trips into a file: a redacted
   buffer is read-only.
 - The child is only a sandbox with the OS sandbox in place.
+- The child never performs a trusted step. The filters, the gitleaks
+  run and the redaction, the redaction record, and the landing checks
+  (read-only, tick) all run in the parent, before text is sent to the
+  child or after text comes back; the read-only flag on a redacted copy
+  in the child is a courtesy. Everything the child returns is data,
+  read but never evaluated, and type-checked before use. This is a
+  blanket rule from the first spawn, not a state that begins with the
+  first agent form, so no step has to know whether agent code has run.
 - A sensitive buffer is withheld by an explicit user mark, not by
   gitleaks; the mark is set before the secret arrives (on open, by
   command or by pattern), and gitleaks is not trusted to catch what the
