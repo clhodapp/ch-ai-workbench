@@ -108,6 +108,12 @@ let
   # lib/claude-tic-check-display-hook.sh.
   claudeTicCheckDisplayHook = import ./lib/claude-tic-check-display-hook.nix { inherit pkgs; };
 
+  # PostToolUse on every tool: the string leaves of the result pass
+  # through gitleaks and a finding replaces what the model sees, with a
+  # note naming the rules (script: lib/claude-redact-hook.sh; design:
+  # docs/development/agent-elisp-isolation.md).
+  claudeRedactHook = import ./lib/claude-redact-hook.nix { inherit pkgs; };
+
   # PreToolUse hook on Bash: a command that appears to run git push
   # is denied once with a reminder to confirm that the branch's pull
   # request,
@@ -396,9 +402,12 @@ in
         tic-check, the Stop hook driven by ticChecks, and
         tic-check-display, the MessageDisplay hook that renders that
         check's verdict lines ("tic-check: clean" / "tic-check: tic")
-        as status lines on screen, and tic-check-edit, the PreToolUse
+        as status lines on screen, tic-check-edit, the PreToolUse
         hook that applies the same table to the text written by Edit,
-        Write, NotebookEdit, and the emacs server's edit verbs. It
+        Write, NotebookEdit, and the emacs server's edit verbs, and
+        redact, the PostToolUse hook that runs every tool result
+        through gitleaks and replaces a recognized secret with
+        [REDACTED:<rule>] before the model sees it. It
         also seeds push-pr-check, the PreToolUse hook on Bash that
         denies a command that appears to run git push once with a reminder to
         confirm the branch's pull request is not already merged, and
@@ -568,6 +577,11 @@ in
         matcher = "Edit|Write|NotebookEdit|mcp__emacs__edit-file|mcp__emacs__edit-buffer";
         command = "claude-tic-check-edit-hook";
         package = claudeTicCheckEditHook;
+      };
+      redact = {
+        event = "PostToolUse";
+        command = "claude-redact-hook";
+        package = claudeRedactHook;
       };
       push-pr-check = {
         event = "PreToolUse";
