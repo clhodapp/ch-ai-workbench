@@ -114,6 +114,15 @@ let
   # docs/development/agent-elisp-isolation.md).
   claudeRedactHook = import ./lib/claude-redact-hook.nix { inherit pkgs; };
 
+  # PreToolUse on Read, the retry half: an identical Read after a
+  # redaction asks the user through the consent spool whether the model
+  # may see the real text; allow lets that one result through
+  # (script: lib/claude-reveal-hook.sh).
+  claudeRevealHook = import ./lib/claude-reveal-hook.nix {
+    inherit pkgs;
+    claude-consent = claudeConsent;
+  };
+
   # PreToolUse hook on Bash: a command that appears to run git push
   # is denied once with a reminder to confirm that the branch's pull
   # request,
@@ -407,7 +416,10 @@ in
         Write, NotebookEdit, and the emacs server's edit verbs, and
         redact, the PostToolUse hook that runs every tool result
         through gitleaks and replaces a recognized secret with
-        [REDACTED:<rule>] before the model sees it. It
+        [REDACTED:<rule>] before the model sees it, and reveal, the
+        PreToolUse hook on Read that turns an identical re-issue of a
+        redacted Read into a question to the user through the consent
+        spool. It
         also seeds push-pr-check, the PreToolUse hook on Bash that
         denies a command that appears to run git push once with a reminder to
         confirm the branch's pull request is not already merged, and
@@ -582,6 +594,15 @@ in
         event = "PostToolUse";
         command = "claude-redact-hook";
         package = claudeRedactHook;
+      };
+      # Waits on a human; the deadline lives in the ask (300 s), the
+      # declared timeout is only the liveness backstop above it.
+      reveal = {
+        event = "PreToolUse";
+        matcher = "Read";
+        command = "claude-reveal-hook";
+        package = claudeRevealHook;
+        timeout = 3600;
       };
       push-pr-check = {
         event = "PreToolUse";
