@@ -506,8 +506,12 @@ print a secret into a log.
    into the jail) and the back channel (landed); both transform modes
    move to the child, the elisp one (landed, and the gated live
    evaluation is deleted with it) and the CLI one; named tools replace
-   the live evaluation for session facts (landed). The MCP read tools
-   run gitleaks and redact here.
+   the live evaluation for session facts (landed). Every MCP tool
+   result, not only the read tools' text but the diffs the edit verbs
+   return and what the child returns, passes through gitleaks in the
+   parent and is redacted with a note naming the rules (landed);
+   resubmit-to-approve for the MCP tools is not yet built, since it
+   needs a user prompt from inside a tool handler.
 4. The CLI-side hook in the `claude-code` module: `Read` redacted in
    place with the resubmit-to-approve prompt (single-use idempotency
    key), and `Bash` output through `gitleaks_redact` into a distinct
