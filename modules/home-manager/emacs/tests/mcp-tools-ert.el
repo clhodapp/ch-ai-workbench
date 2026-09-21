@@ -856,6 +856,64 @@ the form lands nothing."
             (should (string-match-p "redacted" (error-message-string err))))))
     (ch-mcp-server-child-stop)))
 
+;;; Redaction of tool results
+
+(ert-deftest ch-mcp-tools-every-tool-result-is-filtered ()
+  "Every registered tool function carries the result filter, and the
+filter's list is as long as the registration."
+  (should (= (length ch-mcp-server--tool-functions)
+             (hash-table-count (gethash "emacs" mcp-server-lib--tools))))
+  (dolist (fn ch-mcp-server--tool-functions)
+    (should (advice-member-p #'ch-mcp-server--redact-result fn))))
+
+(ert-deftest ch-mcp-tools-results-are-redacted ()
+  "A token in a tool result is replaced and the note names the rule; a
+clean result is returned as it is."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (let ((token (ch-mcp-tests--random-token)))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create "ch-mcp-tests-leaky-result")
+            (erase-buffer)
+            (insert "token = " token "\nplain\n"))
+          (let ((result (ch-mcp-server--buffer-text "ch-mcp-tests-leaky-result")))
+            (should-not (string-search token result))
+            (should (string-search "token = [REDACTED:github-pat]\nplain\n" result))
+            (should (string-search "[gitleaks redacted 1 span: github-pat]" result)))
+          (with-current-buffer (get-buffer-create "ch-mcp-tests-clean-result")
+            (erase-buffer)
+            (insert "plain\n"))
+          (should (equal "plain\n"
+                         (ch-mcp-server--buffer-text "ch-mcp-tests-clean-result"))))
+      (kill-buffer "ch-mcp-tests-leaky-result")
+      (kill-buffer "ch-mcp-tests-clean-result"))))
+
+(ert-deftest ch-mcp-tools-diffs-are-redacted ()
+  "The context lines of an edit's diff pass through gitleaks too."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (ch-mcp-tests--in-territory
+    (let* ((token (ch-mcp-tests--random-token))
+           (file (ch-mcp-tests--temp-file
+                  (concat "token = " token "\nalpha\n"))))
+      (find-file-noselect file)
+      (let ((diff (ch-mcp-server--edit-file "alpha" "beta" file)))
+        (should (string-search "+beta" diff))
+        (should-not (string-search token diff))
+        (should (string-search "[REDACTED:github-pat]" diff))))))
+
+(ert-deftest ch-mcp-tools-eval-elisp-result-is-redacted ()
+  "What eval-elisp returns passes through gitleaks in the parent."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (let ((ch-mcp-server-elisp-scope 'unrestricted)
+        (token (ch-mcp-tests--random-token)))
+    (let ((result (ch-mcp-server--eval-elisp
+                   (format "(concat \"token = \" %S)" token))))
+      (should-not (string-search token result))
+      (should (string-search "[REDACTED:github-pat]" result)))))
+
 (ert-deftest ch-mcp-tools-knobs-are-risky ()
   "The filter knobs carry `risky-local-variable', so a file-local
 setting is refused."

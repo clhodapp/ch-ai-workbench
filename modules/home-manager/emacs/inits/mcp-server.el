@@ -2215,21 +2215,30 @@ on the first line, the rest emptied."
                 (setq i (1+ i))))))))
     (mapconcat #'identity lines "\n")))
 
-(defun ch-mcp-server--gitleaks-findings ()
-  "Run gitleaks over the copy directory; return findings by copy file name.
-An alist of (BASENAME . FINDINGS), each finding a report entry as
+(defun ch-mcp-server--gitleaks-report (subcommand input &rest args)
+  "Run gitleaks SUBCOMMAND with ARGS; return its findings as a list.
+INPUT, when non-nil, is the text fed to standard input (the `stdin'
+subcommand); ARGS follow the fixed flags (the `dir' subcommand takes
+the path).  Each finding is a report entry as
 `ch-mcp-server--redact-text' takes.  A gitleaks that cannot run, or
-fails, is a tool error: no copy is sent before gitleaks has passed
+fails, is a tool error: no text passes before gitleaks has passed
 over it."
   (with-temp-buffer
-    (let* ((command (append ch-mcp-server-gitleaks-command
-                            (list "dir" "--no-banner" "--log-level" "error"
+    (let* ((output (current-buffer))
+           (command (append ch-mcp-server-gitleaks-command
+                            (list subcommand "--no-banner" "--log-level" "error"
                                   "--report-format" "json"
-                                  "--report-path" "-" "--exit-code" "0"
-                                  ch-mcp-server--copy-directory)))
+                                  "--report-path" "-" "--exit-code" "0")
+                            args))
            (status (condition-case err
-                       (apply #'call-process (car command) nil (list t nil) nil
-                              (cdr command))
+                       (if input
+                           (with-temp-buffer
+                             (insert input)
+                             (apply #'call-process-region (point-min) (point-max)
+                                    (car command) nil (list output nil) nil
+                                    (cdr command)))
+                         (apply #'call-process (car command) nil
+                                (list output nil) nil (cdr command)))
                      (error
                       (mcp-server-lib-tool-throw
                        (format "gitleaks could not run (%s): %s"
@@ -2238,17 +2247,22 @@ over it."
         (mcp-server-lib-tool-throw
          (format "gitleaks failed (exit %s): %s"
                  status (string-trim (buffer-string)))))
-      (let ((report (condition-case nil
-                        (json-parse-string (buffer-string)
-                                           :object-type 'alist
-                                           :array-type 'list
-                                           :null-object nil)
-                      (error nil)))
-            (by-file nil))
-        (dolist (finding report)
-          (let ((file (file-name-nondirectory (alist-get 'File finding))))
-            (push finding (alist-get file by-file nil nil #'equal))))
-        by-file))))
+      (condition-case nil
+          (json-parse-string (buffer-string)
+                             :object-type 'alist
+                             :array-type 'list
+                             :null-object nil)
+        (error nil)))))
+
+(defun ch-mcp-server--gitleaks-findings ()
+  "Run gitleaks over the copy directory; return findings by copy file name.
+An alist of (BASENAME . FINDINGS)."
+  (let ((by-file nil))
+    (dolist (finding (ch-mcp-server--gitleaks-report
+                      "dir" nil ch-mcp-server--copy-directory))
+      (let ((file (file-name-nondirectory (alist-get 'File finding))))
+        (push finding (alist-get file by-file nil nil #'equal))))
+    by-file))
 
 (defun ch-mcp-server--copy-form (name file text read-only)
   "The form the child evaluates to hold TEXT as the buffer named NAME.
@@ -2376,6 +2390,70 @@ The printing happens in the child, so a value with no readable form
     (ch-mcp-server--copies-sync conn)
     (ch-mcp-server--in-child conn (list 'format "%S" form))))
 
+;;; Redaction of tool results
+
+;; Every tool result passes through gitleaks here, in the parent, on its
+;; way to the agent's context (docs/development/agent-elisp-isolation.md,
+;; "Redaction covers every file view"): the read tools, the diffs the
+;; edit verbs return (their context lines are buffer text), and what the
+;; child returns for `eval-elisp'.  Each finding is replaced by
+;; `[REDACTED:<rule>]' and a note naming the rules is appended, so the
+;; agent knows a redaction occurred.  The filter is :filter-return advice
+;; on every registered tool function, which leaves the tool schemas that
+;; mcp-server-lib derives from the functions' docstrings untouched.
+
+(defun ch-mcp-server--redact-result (result)
+  "Return RESULT with the secrets gitleaks finds replaced, plus a note.
+A string result is run through gitleaks; each finding is replaced on
+its lines by `[REDACTED:<rule>]' (`ch-mcp-server--redact-text') and a
+line \"[gitleaks redacted N spans: RULES]\" is appended.  A non-string
+or empty result passes unchanged.  gitleaks failing to run is a tool
+error, so no text reaches the agent without passing through it."
+  (if (or (not (stringp result)) (string-empty-p result))
+      result
+    (let ((findings (ch-mcp-server--gitleaks-report "stdin" result)))
+      (if (null findings)
+          result
+        (concat (ch-mcp-server--redact-text result findings)
+                (format "\n\n[gitleaks redacted %d span%s: %s]"
+                        (length findings)
+                        (if (= 1 (length findings)) "" "s")
+                        (string-join
+                         (seq-uniq (mapcar (lambda (finding)
+                                             (format "%s" (alist-get 'RuleID finding)))
+                                           findings))
+                         ", ")))))))
+
+(defconst ch-mcp-server--tool-functions
+  '(ch-mcp-server--eval-elisp
+    ch-mcp-server--context
+    ch-mcp-server--list-buffers
+    ch-mcp-server--buffer-text
+    ch-mcp-server--diagnostics
+    ch-mcp-server--find-references
+    ch-mcp-server--find-definition
+    ch-mcp-server--symbol-info
+    ch-mcp-server--document-outline
+    ch-mcp-server--modified-buffers
+    ch-mcp-server--buffer-diff
+    ch-mcp-server--feature-loaded
+    ch-mcp-server--hooks
+    ch-mcp-server--buffer-state
+    ch-mcp-server--key-binding
+    ch-mcp-server--present
+    ch-mcp-server--sidebar
+    ch-mcp-server--edit-buffer
+    ch-mcp-server--edit-file
+    ch-mcp-server--transform
+    ch-mcp-server--add-comment
+    ch-mcp-server--list-comments)
+  "Every registered tool function; each carries the result filter.
+Kept beside the registration below, and a test holds the two lists to
+the same length.")
+
+(dolist (fn ch-mcp-server--tool-functions)
+  (advice-add fn :filter-return #'ch-mcp-server--redact-result))
+
 ;;; Server lifecycle and registration
 
 (defun ch-mcp-server-start ()
@@ -2423,7 +2501,10 @@ the others."
            "read, and none of its other state: it answers questions about "
            "the configuration and about buffer text, not about the live "
            "session's variables, and cannot change the session. Writes "
-           "are confined to the session's own project.")
+           "are confined to the session's own project. Every result passes "
+           "through gitleaks first: a recognized secret arrives as "
+           "[REDACTED:<rule>] with a note, and the redaction is a boundary "
+           "like a refusal.")
    :tools
    (list
     (list #'ch-mcp-server--eval-elisp

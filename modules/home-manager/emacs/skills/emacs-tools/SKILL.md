@@ -14,12 +14,16 @@ do well stays native — these are not mirrors of those.
 Design and rationale: `projects/ch-emacs-config/docs/development/emacs-mcp-agent-tools.md`.
 Safety rules: the `live-emacs-safety` skill (read-only tools are fine
 unasked; `present` and buffer auto-open are consented by design).
-Two server-side rules are structural, not etiquette: writes
+Three server-side rules are structural, not etiquette: writes
 (edit-file, transform, edit-buffer on file-backed buffers) are
 confined to your session's territory, the project you were launched
-in; and eval-elisp and transform run in a sandboxed child Emacs, not
-in the live session (below). A refusal is a boundary, not a bug:
-don't route around it; ask the user, who owns the widening knobs.
+in; eval-elisp and transform run in a sandboxed child Emacs, not in
+the live session (below); and every tool result passes through
+gitleaks in the live Emacs before it reaches you, so a recognized
+secret arrives as `[REDACTED:<rule>]` with a note appended naming the
+rules. A refusal or a redaction is a boundary, not a bug: don't route
+around it (no reconstructing a value from its context, no editing
+around a placeholder); ask the user, who owns the widening knobs.
 
 ## Conventions
 
