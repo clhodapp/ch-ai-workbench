@@ -193,6 +193,23 @@ Recipes:
 (indent-region (point-min) (point-max))
 ```
 
+## buffer-file / land-buffer-file: edit a buffer with your own tools
+
+For a buffer you would rather work on with ripgrep, sed, or your
+native file tools than with elisp: `buffer-file (name)` writes the
+buffer's text to a file under your territory at
+`.claude/claude-code-sandbox/mcp-copies/<name>` (writable inside the
+sandbox, ignored by git) and returns the path. The text passes through
+gitleaks like every copy; a redacted copy says so and cannot be
+landed. Edit the file, then `land-buffer-file (name, save)` puts its
+text into the buffer and returns the unified diff; it is refused if
+the buffer changed since the file was written (ask for the file
+again), if the buffer is read-only or has a process, or if the
+buffer's own file is outside your territory. The file is removed
+either way, so a stale copy never lands later. Reading the file and
+never landing it is a plain read. Editing the file changes nothing in
+Emacs by itself.
+
 ## Session facts: named tools, not eval-elisp
 
 Facts about the live session that are not buffer text come from four
