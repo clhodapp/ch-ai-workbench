@@ -344,11 +344,9 @@ allow.
 
 `Bash` output is the exception, in two ways. First, a shell stream has
 no file the agent holds to see marked, so its stdout and stderr are
-captured, run through a `gitleaks_redact` step (gitleaks writing a
-marked, redacted copy), and that distinct copy is what the agent
-receives; the separate artifact is what makes the filtering evident
-rather than handing back bytes that silently differ from what the
-command printed. Second, a `Bash` result carries no retry-for-raw
+redacted in the result itself, and the note beside the result is what
+makes the filtering evident rather than handing back bytes that
+silently differ from what the command printed. Second, a `Bash` result carries no retry-for-raw
 option: there is no resubmit-to-approve for it, because "the identical
 read" has no clean meaning for a command whose output varies run to run
 (a live tail, a timestamped listing). To see a shell command's raw
@@ -430,9 +428,9 @@ print a secret into a log.
   result, so `cat` is covered). `Read` and the MCP tools mark the spans
   in place and let the agent resubmit the identical read to raise a user
   prompt for the real bytes (single-use idempotency key over tool,
-  target, range). `Bash` output goes through `gitleaks_redact` into a
-  distinct redacted artifact and has no retry: to see a command's raw
-  output the user runs it themselves. Either way, the agent sees a
+  target, range). `Bash` output is redacted in the result with the
+  note beside it and has no retry: to see a command's raw output the
+  user runs it themselves. Either way, the agent sees a
   secret without a per-read approval only by a deliberate user action
   outside the read path (exposing a buffer, binding a path, handing over
   the value).
@@ -474,12 +472,17 @@ print a secret into a log.
   sees a terminal only once the user has exposed it, and asks rather
   than assuming otherwise. Lands with phase 1b.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
-- **The `claude-code` module** gains the hook that runs gitleaks over
-  the CLI's built-in tool results before they reach context: `Read` redacted in
-  place with the resubmit-to-approve prompt, `Bash` output through
-  `gitleaks_redact` into a distinct artifact with no retry. It lives
-  with the CLI's other hooks, not in the MCP server, and is the second
-  of the two enforcement points above.
+- **The `claude-code` module** gains the `redact` hook, PostToolUse on
+  every tool: the result's string leaves pass through gitleaks and a
+  finding replaces what the model sees (`updatedToolOutput`, keeping
+  the result's shape), with a note naming the rules beside it
+  (landed; the replacement is probe-verified on 2.1.259, see
+  `claude-cli.md`). The resubmit-to-approve prompt for `Read` is a
+  PreToolUse hook keyed like the tic-check edit hook (a hash of the
+  call, marked when the result was redacted) that asks through the
+  `claude-consent` spool (owed). It lives with the CLI's other hooks,
+  not in the MCP server, and is the second of the two enforcement
+  points above.
 
 ## Phases
 
@@ -512,13 +515,14 @@ print a secret into a log.
    parent and is redacted with a note naming the rules (landed);
    resubmit-to-approve for the MCP tools is not yet built, since it
    needs a user prompt from inside a tool handler.
-4. The CLI-side hook in the `claude-code` module: `Read` redacted in
-   place with the resubmit-to-approve prompt (single-use idempotency
-   key), and `Bash` output through `gitleaks_redact` into a distinct
-   artifact with no retry. Depends on the gitleaks redaction existing
-   (phase 3) and on the sandbox bind list (phase 2), and completes
-   "every tool result into context passes through gitleaks" for the
-   CLI's own tools.
+4. The CLI-side hook in the `claude-code` module: every tool result
+   redacted in place through PostToolUse `updatedToolOutput` with a
+   note beside it, `Bash` with no retry (landed); the
+   resubmit-to-approve prompt for `Read` (single-use idempotency key
+   over the call, asked through the `claude-consent` spool) owed.
+   Depends on the gitleaks redaction existing (phase 3) and on the
+   sandbox bind list (phase 2), and completes "every tool result into
+   context passes through gitleaks" for the CLI's own tools.
 
 The `parenting` `:sandbox` work can precede phase 2 or land alongside
 it.
