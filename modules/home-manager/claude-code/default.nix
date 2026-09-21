@@ -109,7 +109,7 @@ let
   claudeTicCheckDisplayHook = import ./lib/claude-tic-check-display-hook.nix { inherit pkgs; };
 
   # PostToolUse on every tool: the string leaves of the result pass
-  # through gitleaks and a finding replaces what the model sees, with a
+  # through betterleaks and a finding replaces what the model sees, with a
   # note naming the rules (script: lib/claude-redact-hook.sh; design:
   # docs/development/agent-elisp-isolation.md).
   claudeRedactHook = import ./lib/claude-redact-hook.nix { inherit pkgs; };
@@ -415,7 +415,7 @@ in
         hook that applies the same table to the text written by Edit,
         Write, NotebookEdit, and the emacs server's edit verbs, and
         redact, the PostToolUse hook that runs every tool result
-        through gitleaks and replaces a recognized secret with
+        through betterleaks and replaces a recognized secret with
         [REDACTED:<rule>] before the model sees it, and reveal, the
         PreToolUse hook on Read that turns an identical re-issue of a
         redacted Read into a question to the user through the consent

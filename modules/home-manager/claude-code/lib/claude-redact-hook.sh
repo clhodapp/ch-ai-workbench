@@ -1,7 +1,7 @@
 # PostToolUse hook on every tool: the CLI-side enforcement point of the
 # agent-elisp isolation design (docs/development/agent-elisp-isolation.md,
 # "Redaction covers every file view").  Whatever a tool returned, the
-# string leaves of tool_response are run through gitleaks; on a finding
+# string leaves of tool_response are run through betterleaks; on a finding
 # the result the model sees is replaced (updatedToolOutput, which keeps
 # the response's shape) with every occurrence of each secret turned into
 # [REDACTED:<rule>], and a note naming the rules rides along as
@@ -10,10 +10,10 @@
 # and the MCP tools, whose server already redacts and so produce no
 # findings here.
 #
-# A clean result abstains (exit 0, no output).  A gitleaks that cannot
+# A clean result abstains (exit 0, no output).  A betterleaks that cannot
 # run withholds the text: the response is returned with every string
 # emptied and the note says why, since no text may reach the model
-# without passing through gitleaks.  Anything else unexpected (no
+# without passing through betterleaks.  Anything else unexpected (no
 # payload, jq failure) abstains, as the other hooks do.
 #
 # Read has a retry path (claude-reveal-hook.sh): a redacted Read is
@@ -57,11 +57,11 @@ emit() { # $1 = replacement response (JSON), $2 = note
 }
 
 status=0
-report=$(gitleaks stdin --no-banner --log-level error --report-format json \
+report=$(betterleaks stdin --no-banner --log-level error --report-format json \
            --report-path - --exit-code 0 <<<"$text" 2>/dev/null) || status=$?
 if [ "$status" -ne 0 ]; then
   blank=$(jq -c 'walk(if type == "string" then "" else . end)' <<<"$response" 2>/dev/null) || exit 0
-  emit "$blank" "[gitleaks could not run (exit $status), so this ${tool:-tool} result was withheld: no tool result reaches the model without passing through gitleaks. Ask the user to check the gitleaks installation.]"
+  emit "$blank" "[betterleaks could not run (exit $status), so this ${tool:-tool} result was withheld: no tool result reaches the model without passing through betterleaks. Ask the user to check the betterleaks installation.]"
 fi
 
 count=$(jq -r 'length' <<<"$report" 2>/dev/null || echo 0)
@@ -89,4 +89,4 @@ if [ -n "$marker" ]; then
     retry=" To ask the user for the real text, re-issue this identical Read; the user answers, and the answer is final for that one read."
   fi
 fi
-emit "$redacted" "[gitleaks redacted $count span$plural in this ${tool:-tool} result: $rules. A redaction is a boundary: do not reconstruct the value from its context or through another read; the user owns the real text.$retry]"
+emit "$redacted" "[betterleaks redacted $count span$plural in this ${tool:-tool} result: $rules. A redaction is a boundary: do not reconstruct the value from its context or through another read; the user owns the real text.$retry]"

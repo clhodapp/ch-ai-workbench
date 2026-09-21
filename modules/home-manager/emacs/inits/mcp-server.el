@@ -1401,13 +1401,13 @@ module points this at the nix-installed merman (the same drv the
 language-server table spawns); the bare-name default only works when
 an mmdc is on PATH.")
 
-(defvar ch-mcp-server-gitleaks-command '("gitleaks")
-  "Command list prefix for running gitleaks.
+(defvar ch-mcp-server-betterleaks-command '("betterleaks")
+  "Command list prefix for running betterleaks.
 The copies sent to the child are run through it, with the subcommand
 and flags appended.  The
-home-manager module points this at the nix-installed gitleaks from the
+home-manager module points this at the nix-installed betterleaks from the
 pinned nixpkgs, so the rule set moves with the pin; the bare-name
-default only works when a gitleaks is on PATH.")
+default only works when a betterleaks is on PATH.")
 
 (defun ch-mcp-server--render-mermaid (source)
   "Render mermaid SOURCE to an SVG data string via the mmdc CLI.
@@ -1999,7 +1999,7 @@ MCP Parameters:
 ;; readable buffers' text is copied in (next section); the CLI
 ;; transform is a later piece.
 ;;
-;; The child never performs a trusted step.  Every filter, the gitleaks
+;; The child never performs a trusted step.  Every filter, the betterleaks
 ;; run and the redaction, the redaction record, and the landing checks
 ;; run here, before text goes to the child or after text comes back,
 ;; and so does putting the redacted spans back when text lands.
@@ -2152,7 +2152,7 @@ spawn, and by hand when the resident user wants the child gone."
 ;; name, and the file name; nothing else crosses.  The child recreates a
 ;; plain buffer under the same name and picks the major mode from the
 ;; file name.  The same text is written to a file in the copy directory,
-;; where gitleaks runs; a finding replaces the secret in the copy with a
+;; where betterleaks runs; a finding replaces the secret in the copy with a
 ;; numbered placeholder, and the parent keeps the original beside the
 ;; copy's record so a landing puts it back.  Copies are incremental: a buffer is
 ;; re-sent only when `buffer-chars-modified-tick' moved, and a buffer
@@ -2166,7 +2166,7 @@ Created with the child and deleted with it.")
   "Buffer name to the state of its copy in the child.
 Each value is a plist: :tick, the `buffer-chars-modified-tick' the
 copy was taken at; :file, the copy's path; :redacted, non-nil when
-gitleaks found a secret in the copy; :spans, the placeholder-to-original
+betterleaks found a secret in the copy; :spans, the placeholder-to-original
 alist `ch-mcp-server--redact-spans' returned, put back when text
 lands.")
 
@@ -2190,7 +2190,7 @@ each make one plain file."
 
 (defun ch-mcp-server--redact-text (text findings)
   "Return TEXT with each of FINDINGS replaced by a placeholder.
-FINDINGS are gitleaks report entries for this one text, alists with
+FINDINGS are betterleaks report entries for this one text, alists with
 the symbols RuleID, Secret, StartLine, and EndLine (1-based,
 inclusive).  Each secret is replaced on its reported lines by
 `[REDACTED:<rule>]' by matching the reported text, since the report's
@@ -2289,17 +2289,17 @@ receive a placeholder."
              (match-string 0 text))))
   text)
 
-(defun ch-mcp-server--gitleaks-report (subcommand input &rest args)
-  "Run gitleaks SUBCOMMAND with ARGS; return its findings as a list.
+(defun ch-mcp-server--betterleaks-report (subcommand input &rest args)
+  "Run betterleaks SUBCOMMAND with ARGS; return its findings as a list.
 INPUT, when non-nil, is the text fed to standard input (the `stdin'
 subcommand); ARGS follow the fixed flags (the `dir' subcommand takes
 the path).  Each finding is a report entry as
-`ch-mcp-server--redact-text' takes.  A gitleaks that cannot run, or
-fails, is a tool error: no text passes before gitleaks has passed
+`ch-mcp-server--redact-text' takes.  A betterleaks that cannot run, or
+fails, is a tool error: no text passes before betterleaks has passed
 over it."
   (with-temp-buffer
     (let* ((output (current-buffer))
-           (command (append ch-mcp-server-gitleaks-command
+           (command (append ch-mcp-server-betterleaks-command
                             (list subcommand "--no-banner" "--log-level" "error"
                                   "--report-format" "json"
                                   "--report-path" "-" "--exit-code" "0")
@@ -2315,11 +2315,11 @@ over it."
                                 (list output nil) nil (cdr command)))
                      (error
                       (mcp-server-lib-tool-throw
-                       (format "gitleaks could not run (%s): %s"
+                       (format "betterleaks could not run (%s): %s"
                                (car command) (error-message-string err)))))))
       (unless (eq status 0)
         (mcp-server-lib-tool-throw
-         (format "gitleaks failed (exit %s): %s"
+         (format "betterleaks failed (exit %s): %s"
                  status (string-trim (buffer-string)))))
       (condition-case nil
           (json-parse-string (buffer-string)
@@ -2328,11 +2328,11 @@ over it."
                              :null-object nil)
         (error nil)))))
 
-(defun ch-mcp-server--gitleaks-findings ()
-  "Run gitleaks over the copy directory; return findings by copy file name.
+(defun ch-mcp-server--betterleaks-findings ()
+  "Run betterleaks over the copy directory; return findings by copy file name.
 An alist of (BASENAME . FINDINGS)."
   (let ((by-file nil))
-    (dolist (finding (ch-mcp-server--gitleaks-report
+    (dolist (finding (ch-mcp-server--betterleaks-report
                       "dir" nil ch-mcp-server--copy-directory))
       (let ((file (file-name-nondirectory (alist-get 'File finding))))
         (push finding (alist-get file by-file nil nil #'equal))))
@@ -2357,8 +2357,8 @@ the child's buffer visits nothing."
 (defun ch-mcp-server--copies-sync (conn)
   "Bring the child's copies up to date with the buffers the agent may read.
 Writes each changed buffer's text into the copy directory, runs
-gitleaks over the directory, sends every changed copy (redacted where
-gitleaks found a secret) to the child on CONN, and removes from the
+betterleaks over the directory, sends every changed copy (redacted where
+betterleaks found a secret) to the child on CONN, and removes from the
 child each buffer that died or is no longer readable."
   (let ((changed nil)
         (live (make-hash-table :test #'equal)))
@@ -2402,7 +2402,7 @@ child each buffer that died or is no longer readable."
         (ch-mcp-server--in-child
          conn `(when (get-buffer ,name) (kill-buffer ,name)))))
     (when changed
-      (let ((findings (ch-mcp-server--gitleaks-findings)))
+      (let ((findings (ch-mcp-server--betterleaks-findings)))
         (dolist (item (nreverse changed))
           (pcase-let* ((`(,name ,file ,text) item)
                        (entry (gethash name ch-mcp-server--copies))
@@ -2475,7 +2475,7 @@ The printing happens in the child, so a value with no readable form
 ;; checkout and nothing else, and that directory is kept out of `git
 ;; status' through the clone's exclude file, which this writes too where
 ;; the sandbox has not.  The text passes the same filters as every copy
-;; (the buffer predicate, then gitleaks), and the text lands through
+;; (the buffer predicate, then betterleaks), and the text lands through
 ;; `ch-mcp-server--land-text' with the tick recorded when the file was
 ;; written; a redacted file lands nothing.  The file is a copy: editing
 ;; it changes no buffer until land-buffer-file runs, and a landed or
@@ -2484,7 +2484,7 @@ The printing happens in the child, so a value with no readable form
 (defvar ch-mcp-server--cli-copies (make-hash-table :test #'equal)
   "Buffer name to the state of its file for the CLI transform.
 A plist: :file, the path; :tick, the buffer's chars-modified tick when
-the file was written; :redacted, non-nil when gitleaks found a secret
+the file was written; :redacted, non-nil when betterleaks found a secret
 in it; :spans, the placeholder-to-original alist put back when the
 file lands.")
 
@@ -2529,7 +2529,7 @@ without a git directory, or git failing, changes nothing."
   "Write the text of the buffer NAME to a file in the territory; return its path.
 
 The file is for reading or editing with your own command-line tools:
-the buffer's text without properties, passed through gitleaks like
+the buffer's text without properties, passed through betterleaks like
 every copy, so a recognized secret arrives as [REDACTED:<rule>] and
 such a file cannot be landed.  Editing the file changes nothing in
 Emacs; call land-buffer-file with the same name to land its text,
@@ -2553,7 +2553,7 @@ MCP Parameters:
                      (save-restriction
                        (widen)
                        (buffer-substring-no-properties (point-min) (point-max)))))
-             (findings (ch-mcp-server--gitleaks-report "stdin" text))
+             (findings (ch-mcp-server--betterleaks-report "stdin" text))
              (redaction (and findings
                              (ch-mcp-server--redact-spans text findings))))
         (when redaction
@@ -2568,7 +2568,7 @@ MCP Parameters:
                             :spans (cdr redaction))
                  ch-mcp-server--cli-copies)
         (if findings
-            (format "%s\n(gitleaks redacted %d span%s in this copy: %s, as numbered placeholders; the originals are put back when the file lands, so delete or move a placeholder whole, never alter or invent one)"
+            (format "%s\n(betterleaks redacted %d span%s in this copy: %s, as numbered placeholders; the originals are put back when the file lands, so delete or move a placeholder whole, never alter or invent one)"
                     file (length findings) (if (= 1 (length findings)) "" "s")
                     (string-join
                      (seq-uniq (mapcar (lambda (finding)
@@ -2629,7 +2629,7 @@ MCP Parameters:
 
 ;;; Redaction of tool results
 
-;; Every tool result passes through gitleaks here, in the parent, on its
+;; Every tool result passes through betterleaks here, in the parent, on its
 ;; way to the agent's context (docs/development/agent-elisp-isolation.md,
 ;; "Redaction covers every file view"): the read tools, the diffs the
 ;; edit verbs return (their context lines are buffer text), and what the
@@ -2640,19 +2640,19 @@ MCP Parameters:
 ;; mcp-server-lib derives from the functions' docstrings untouched.
 
 (defun ch-mcp-server--redact-result (result)
-  "Return RESULT with the secrets gitleaks finds replaced, plus a note.
-A string result is run through gitleaks; each finding is replaced on
+  "Return RESULT with the secrets betterleaks finds replaced, plus a note.
+A string result is run through betterleaks; each finding is replaced on
 its lines by `[REDACTED:<rule>]' (`ch-mcp-server--redact-text') and a
-line \"[gitleaks redacted N spans: RULES]\" is appended.  A non-string
-or empty result passes unchanged.  gitleaks failing to run is a tool
+line \"[betterleaks redacted N spans: RULES]\" is appended.  A non-string
+or empty result passes unchanged.  betterleaks failing to run is a tool
 error, so no text reaches the agent without passing through it."
   (if (or (not (stringp result)) (string-empty-p result))
       result
-    (let ((findings (ch-mcp-server--gitleaks-report "stdin" result)))
+    (let ((findings (ch-mcp-server--betterleaks-report "stdin" result)))
       (if (null findings)
           result
         (concat (ch-mcp-server--redact-text result findings)
-                (format "\n\n[gitleaks redacted %d span%s: %s]"
+                (format "\n\n[betterleaks redacted %d span%s: %s]"
                         (length findings)
                         (if (= 1 (length findings)) "" "s")
                         (string-join
@@ -2741,7 +2741,7 @@ the others."
            "the configuration and about buffer text, not about the live "
            "session's variables, and cannot change the session. Writes "
            "are confined to the session's own project. Every result passes "
-           "through gitleaks first: a recognized secret arrives as "
+           "through betterleaks first: a recognized secret arrives as "
            "[REDACTED:<rule>] with a note, and the redaction is a boundary "
            "like a refusal.")
    :tools

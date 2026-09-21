@@ -51,7 +51,7 @@ in
       lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
         (import ./bundles-spec.nix {
           inherit lib merman;
-          gitleaks = pkgs.gitleaks;
+          betterleaks = pkgs.betterleaks;
           readInit = name: builtins.readFile ./inits/${name};
         }).emacs;
   };

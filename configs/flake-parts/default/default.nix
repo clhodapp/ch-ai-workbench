@@ -124,7 +124,7 @@
                   inherit lib;
                   readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
                   merman = inputs.merman-nix.packages.${system}.merman;
-                  gitleaks = pkgs.gitleaks;
+                  betterleaks = pkgs.betterleaks;
                 }
               )
             );
@@ -341,14 +341,14 @@
               # marked; a token in Bash's stderr is replaced the same
               # way; a clean result, a PreToolUse payload, and non-JSON
               # stdin are silence. The token is drawn at build time and
-              # checked against gitleaks first, since gitleaks drops
+              # checked against betterleaks first, since betterleaks drops
               # placeholder-looking strings and a token-shaped string
               # does not belong in the tree.
               claude-redact-hook =
                 pkgs.runCommand "claude-redact-hook"
                   {
                     nativeBuildInputs = [
-                      pkgs.gitleaks
+                      pkgs.betterleaks
                       pkgs.jq
                     ];
                   }
@@ -360,7 +360,7 @@
                     flagged=0
                     for _ in 1 2 3 4 5 6 7 8; do
                       tok="ghp_$(head -c 64 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | cut -c1-36)"
-                      n=$(printf 'token = %s\n' "$tok" | gitleaks stdin --no-banner --log-level error --report-format json --report-path - --exit-code 0 | jq 'length')
+                      n=$(printf 'token = %s\n' "$tok" | betterleaks stdin --no-banner --log-level error --report-format json --report-path - --exit-code 0 | jq 'length')
                       if [ "$n" = 1 ]; then flagged=1; break; fi
                     done
                     [ "$flagged" = 1 ]

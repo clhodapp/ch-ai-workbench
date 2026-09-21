@@ -109,7 +109,7 @@ child on the next refresh.
 The same text is also written to a file in the copy directory, a
 parent-internal temporary directory created and deleted with the
 child, named for the buffer with every character outside letters,
-digits, dot, dash, and underscore replaced by `%`; gitleaks runs over
+digits, dot, dash, and underscore replaced by `%`; betterleaks runs over
 that directory (below). The CLI transform's file is a separate write
 of the same filtered text (see "What runs where"): a tool asks for it
 by buffer name, the parent runs the buffer through the same filters,
@@ -149,11 +149,11 @@ Three filters apply, in this order.
    all empty the region, so a tainted window clears itself once it has
    scrolled out.
 
-3. **gitleaks.** It runs once over the copy directory before the
+3. **betterleaks.** It runs once over the copy directory before the
    changed copies are sent to the child:
 
    ```
-   gitleaks dir --no-banner --log-level error \
+   betterleaks dir --no-banner --log-level error \
      --report-format json --report-path - --exit-code 0 <copy-dir>
    ```
 
@@ -174,17 +174,17 @@ Three filters apply, in this order.
    reported lines rather than by column, since the columns are byte
    offsets; a match the parent cannot find on those lines (a multi-line
    one) has its whole line range collapsed to one placeholder line, and
-   the original kept is those lines' text. A gitleaks that cannot run
-   is a tool error, and no copy is sent before gitleaks has passed over
-   it. gitleaks comes from the pinned nixpkgs.
+   the original kept is those lines' text. A betterleaks that cannot run
+   is a tool error, and no copy is sent before betterleaks has passed over
+   it. betterleaks comes from the pinned nixpkgs.
 
-The latch and gitleaks are not alternatives. gitleaks sees what has a
+The latch and betterleaks are not alternatives. betterleaks sees what has a
 recognizable shape; the latch covers text written under conditions
 known to leak, whatever its shape.
 
 ## Marking a buffer sensitive
 
-gitleaks matches shapes, so a secret it has no rule for, a bare
+betterleaks matches shapes, so a secret it has no rule for, a bare
 token, a passphrase, an SSH key body, passes it. The user needs a way
 to withhold a buffer by declaration rather than by pattern, decided
 before the secret is in it. One buffer-local state does this,
@@ -299,7 +299,7 @@ rather than an escape hatch.
 
 ## Redaction covers every file view, and is not a boundary
 
-gitleaks runs on every path by which content reaches the agent's
+betterleaks runs on every path by which content reaches the agent's
 context, not only the copies, and including the CLI's own built-in
 tools (`Read` and `Bash` alike), not only the MCP tools. Any tool
 result that would put bytes in the agent's context passes through it
@@ -307,21 +307,21 @@ first; on a finding the content is returned redacted, the agent is told,
 and for `Read` it may resubmit to ask the user for the real bytes
 (`Bash` differs on both counts, see "Redact and tell; resubmit to
 approve"). A buffer's text reaches the agent as a copy (through the
-buffer-read tools, or as the file in the copy directory) and gitleaks
+buffer-read tools, or as the file in the copy directory) and betterleaks
 runs there. A file's content reaches the agent through the MCP
 file-reading tools, the CLI's `Read`, and the output of a shell command
-run through `Bash`; all pass through gitleaks, or they are the bypass
+run through `Bash`; all pass through betterleaks, or they are the bypass
 that makes redacting the copy pointless (reading `~/.env` directly, or
 `cat`-ing it, would defeat a redacted copy of it).
 
 There are two enforcement points, in two repos. The MCP server runs
-gitleaks over its own reads before returning them and redacts the
+betterleaks over its own reads before returning them and redacts the
 matched spans in place (workbench). The CLI's built-in tools are
 handled by a hook in the `claude-code` module, and this covers `Bash`
 as well as `Read`: a shell command's output is a tool result before it
 reaches context, so the hook receives its stdout and stderr and runs
-gitleaks over them the same way. So a `cat` of a bound file is covered
-after all: it is a `Bash` result, and gitleaks runs over it. The
+betterleaks over them the same way. So a `cat` of a bound file is covered
+after all: it is a `Bash` result, and betterleaks runs over it. The
 distinction that matters is not tool-read versus shell-read; it is
 whether the bytes pass through the harness at all.
 
@@ -329,7 +329,7 @@ What genuinely escapes is only what never becomes a tool result: a
 subprocess the agent's own code spawns whose output the harness does
 not capture, or a byte stream routed around the tool channel entirely.
 That is a narrow residue, and the sandbox bind list covers it, not
-gitleaks: a secret in a directory never bound into the jail cannot be
+betterleaks: a secret in a directory never bound into the jail cannot be
 reached by any means, tool or not.
 
 ### Redact and tell; resubmit to approve (Read); Bash cannot retry
@@ -363,7 +363,7 @@ output the user runs it themselves, outside the agent's tool channel.
 Either way the boundary is the same: the only way the agent sees a
 secret without a per-read approval is a deliberate user action outside
 the read path, exposing a buffer, binding a path, handing over the
-value. gitleaks does not decide who may see a secret; the user does, by
+value. betterleaks does not decide who may see a secret; the user does, by
 what is exposed and by answering the resubmit prompt.
 
 Redaction is accident-prevention, not access control, and edit is why
@@ -372,7 +372,7 @@ it cannot be more, in two ways. First, an edit verb that reports whether an
 cannot read by proposing replacements and extending the confirmed
 prefix one match-or-no-match at a time, never reading the value.
 Second, and worse, a landed edit lets the agent move the secret past
-gitleaks in one step: gitleaks matches known token shapes, so an edit
+betterleaks in one step: betterleaks matches known token shapes, so an edit
 that breaks the shape (split the token across lines, insert a character
 mid-token, base64 or reverse it) makes the next run find nothing, and
 the mutated text comes back in full on the next read. This needs no
@@ -385,11 +385,11 @@ extracting one it can already edit. Both attacks need the secret to be
 in a file the agent can edit, which means already inside the sandbox's
 view, so the confidentiality boundary is isolation, what is never
 copied in and what the sandbox's filesystem view withholds, not
-gitleaks.
+betterleaks.
 
 ## Residual accepted surface
 
-Log text is only as clean as the latch and gitleaks: a bare secret with
+Log text is only as clean as the latch and betterleaks: a bare secret with
 no recognizable shape passes, and a knob outside the declared list is
 invisible until someone adds it. A copy is a snapshot and can lag the
 screen. A file that mixes a secret with settings the agent needs to
@@ -418,7 +418,7 @@ program can print a secret into a log.
   record, and a landing puts them back before the text touches the
   buffer; a placeholder the record cannot map refuses the landing.
 - The child is only a sandbox with the OS sandbox in place.
-- The child never performs a trusted step. The filters, the gitleaks
+- The child never performs a trusted step. The filters, the betterleaks
   run and the redaction, the redaction record, and the landing checks
   (read-only, tick) all run in the parent, before text is sent to the
   child or after text comes back; the read-only flag on a redacted copy
@@ -427,8 +427,8 @@ program can print a secret into a log.
   blanket rule from the first spawn, not a state that begins with the
   first agent form, so no step has to know whether agent code has run.
 - A sensitive buffer is withheld by an explicit user mark, not by
-  gitleaks; the mark is set before the secret arrives (on open, by
-  command or by pattern), and gitleaks is not trusted to catch what the
+  betterleaks; the mark is set before the secret arrives (on open, by
+  command or by pattern), and betterleaks is not trusted to catch what the
   user already knows is sensitive.
 - Sensitivity is one per-buffer state with a computed default:
   terminals and secret-named files start sensitive, everything else
@@ -436,7 +436,7 @@ program can print a secret into a log.
   Terminals and `.env` are special cases of the default, not of the
   toggle.
 - Every tool result that reaches the agent's context passes through
-  gitleaks and is redacted, `Read` and `Bash` alike (a shell command's output is a tool
+  betterleaks and is redacted, `Read` and `Bash` alike (a shell command's output is a tool
   result, so `cat` is covered). `Read` and the MCP tools mark the spans
   in place and let the agent resubmit the identical read to raise a user
   prompt for the real bytes (single-use idempotency key over tool,
@@ -483,9 +483,13 @@ program can print a secret into a log.
   workbench's skills beside `emacs-tools` with matching text: the agent
   sees a terminal only once the user has exposed it, and asks rather
   than assuming otherwise.
-- **gitleaks** on the profile PATH from the pinned nixpkgs.
+- **betterleaks** from the pinned nixpkgs: the successor to gitleaks
+  by the same author, taken up once gitleaks stopped taking features.
+  The `dir` and `stdin` commands, the flags, the report fields, and the
+  rule ids are the same, so the swap changed the package and the name
+  and nothing else.
 - **The `claude-code` module** gains the `redact` hook, PostToolUse on
-  every tool: the result's string leaves pass through gitleaks and a
+  every tool: the result's string leaves pass through betterleaks and a
   finding replaces what the model sees (`updatedToolOutput`, keeping
   the result's shape), with a note naming the rules beside it
   (the replacement is probe-verified on 2.1.259, see
@@ -521,14 +525,14 @@ that every step stood alone.
    static question (keymaps, functions, defaults, features) while the
    named session-fact tools answer the rest.
 4. The copying of buffer text (forward contract, incremental
-   refresh, gitleaks redaction), then `transform` in the child with the
+   refresh, betterleaks redaction), then `transform` in the child with the
    back contract, which deleted the gated live evaluation and the
-   editing registry, then every MCP tool result through gitleaks in the
+   editing registry, then every MCP tool result through betterleaks in the
    parent, then the CLI transform through the territory's sandbox
    scratch.
 5. The CLI-side hooks in the `claude-code` module: every tool result
    redacted in place through PostToolUse `updatedToolOutput` with a
    note beside it, `Bash` with no retry, and the resubmit-to-approve
    prompt for `Read` through the `claude-consent` spool. This completed
-   "every tool result into context passes through gitleaks" for the
+   "every tool result into context passes through betterleaks" for the
    CLI's own tools.

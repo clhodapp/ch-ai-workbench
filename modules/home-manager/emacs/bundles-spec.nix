@@ -11,7 +11,7 @@
   lib,
   readInit,
   merman,
-  gitleaks,
+  betterleaks,
 }:
 {
   emacs = {
@@ -102,8 +102,8 @@
 
         (setq ch-mcp-server-mermaid-command
               (list "${lib.getExe merman}" "mmdc"))
-        (setq ch-mcp-server-gitleaks-command
-              (list "${lib.getExe gitleaks}"))
+        (setq ch-mcp-server-betterleaks-command
+              (list "${lib.getExe betterleaks}"))
       '';
       packages = epkgs: _: [
         epkgs.mcp-server-lib
