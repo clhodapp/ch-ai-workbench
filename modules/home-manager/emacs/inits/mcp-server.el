@@ -1995,6 +1995,15 @@ MCP Parameters:
 ;; connection.  `eval-elisp' and `transform' run in it, after the
 ;; readable buffers' text is copied in (next section); the CLI
 ;; transform is a later piece.
+;;
+;; The child never performs a trusted step.  Every filter, the gitleaks
+;; run and the redaction, the redaction record, and the landing checks
+;; run here, before text goes to the child or after text comes back;
+;; the read-only flag on a redacted copy in the child is a courtesy.
+;; Everything the child returns is data, read but never evaluated, and
+;; type-checked before use.  This holds from the first spawn, not from
+;; the first agent form, so nothing here has to know whether agent code
+;; has run yet.
 
 (defvar ch-mcp-server-child-idle-seconds 600
   "Seconds of no use before the child is shut down.
