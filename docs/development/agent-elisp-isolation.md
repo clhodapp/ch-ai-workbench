@@ -1,7 +1,6 @@
 # Agent Elisp Isolation
 
-Design, 2026-09-07. The phases at the end give the order and mark what
-has landed. The subject is the elisp an agent runs against the
+Design, 2026-09-07, built in the order the section at the end gives. The subject is the elisp an agent runs against the
 resident Emacs through the MCP server
 (`modules/home-manager/emacs/inits/mcp-server.el`): how it is kept from
 changing the session, and how it is kept from seeing what it was not
@@ -105,7 +104,7 @@ Syncing is incremental: `buffer-chars-modified-tick` tells the parent
 which buffers changed since the last copy, and only those are re-sent.
 The copies are refreshed before each evaluation in the child, and a
 buffer that dies or stops passing the filters is removed from the
-child on the next refresh. (Landed.)
+child on the next refresh.
 
 The same text is also written to a file in the copy directory, a
 parent-internal temporary directory created and deleted with the
@@ -172,7 +171,7 @@ Three filters apply, in this order.
    match the parent cannot find on those lines (a multi-line one) has
    its whole line range replaced by one placeholder. A gitleaks that
    cannot run is a tool error, and no copy is sent before gitleaks has
-   passed over it. gitleaks comes from the pinned nixpkgs. (Landed.)
+   passed over it. gitleaks comes from the pinned nixpkgs.
 
 The latch and gitleaks are not alternatives. gitleaks sees what has a
 recognizable shape; the latch covers text written under conditions
@@ -250,7 +249,7 @@ function (`ch-mcp-server--land-text`) before the text touches the
 buffer. No function is registered for the child to call, so it has no
 way to reach the parent at all; the read-only flag in the child is a
 courtesy that stops honest mistakes, and the parent's refusal is the
-enforcement. (Landed.)
+enforcement.
 
 Variables never cross in either direction. Printable data cannot carry a
 closure, but it can carry a symbol naming a function into a hook
@@ -264,14 +263,14 @@ variable, so a synced variable is an effect.
   text; an error in the child is a tool error carrying its message. A
   form still running at the deadline cannot be interrupted in the
   child, so the child is stopped and the next call starts a fresh one;
-  the call returns a tool error saying so. (Landed.)
+  the call returns a tool error saying so.
 - A buffer transform comes in two modes, siblings that differ only in
   what does the editing. Both run in the child against the copied
   buffer and both land the result through the one back channel. The
   **elisp transform** evaluates a form in the child Emacs (the existing
   `transform`, now ungated because the child is the sandbox; the editing
-  registry retired with the gate; landed). The **CLI transform**
-  (`buffer-file` and `land-buffer-file`; landed) writes the buffer as a
+  registry retired with the gate). The **CLI transform**
+  (`buffer-file` and `land-buffer-file`) writes the buffer as a
   file under the client's territory and hands the agent that path; the
   agent edits the file with its own command-line tools, and the file's
   text is what lands. A read is the CLI transform with no landing: ask
@@ -280,7 +279,7 @@ variable, so a synced variable is an effect.
   which is the single write path with all its checks, and the file is
   removed once landed or refused.
 - Session facts that are not text are answered by four named read-only
-  tools in the parent (landed): `feature-loaded` (featurep, fboundp,
+  tools in the parent: `feature-loaded` (featurep, fboundp,
   boundp of a name, never a value), `hooks` (the functions on a hook,
   global and buffer-local, lambdas shown as `<lambda>`), `buffer-state`
   (mode, minor modes, flags, size, point, Evil state, a terminal's input
@@ -394,8 +393,11 @@ from that copy would carry the placeholder back; splicing the original
 spans back into returned text is deferred until that blocks real work,
 since it adds a clever path the rest of the design avoids, and until
 then such a buffer is effectively read-only through its copy. The
-edit-oracle extraction above is accepted, not closed. Same-user
-boundaries stay soft. This is accident-surface hardening for an agent
+edit-oracle extraction above is accepted, not closed. The MCP tools
+have no resubmit-to-approve of their own: a redacted MCP read stays
+redacted, since the prompt would have to come from inside a tool
+handler in the live Emacs, and the CLI's `Read` with its prompt covers
+the file case. Same-user boundaries stay soft. This is accident-surface hardening for an agent
 expected to help debug, not an adversarial sandbox, and any program can
 print a secret into a log.
 
@@ -474,62 +476,53 @@ print a secret into a log.
   sensitive-by-default reverses that, so the skill is adopted into the
   workbench's skills beside `emacs-tools` with matching text: the agent
   sees a terminal only once the user has exposed it, and asks rather
-  than assuming otherwise. Lands with phase 1b.
+  than assuming otherwise.
 - **gitleaks** on the profile PATH from the pinned nixpkgs.
 - **The `claude-code` module** gains the `redact` hook, PostToolUse on
   every tool: the result's string leaves pass through gitleaks and a
   finding replaces what the model sees (`updatedToolOutput`, keeping
   the result's shape), with a note naming the rules beside it
-  (landed; the replacement is probe-verified on 2.1.259, see
+  (the replacement is probe-verified on 2.1.259, see
   `claude-cli.md`). The resubmit-to-approve prompt for `Read` is the
   `reveal` hook, PreToolUse on `Read`, keyed like the tic-check edit
   hook (a hash of the call, marked by the redact hook when the result
   was redacted), asking through the `claude-consent` spool; allow lets
   that one result through unredacted, and deny, a timeout, or no
   attached answerer leaves the redacted view standing with the reason
-  told to the model (landed). It lives with the CLI's other hooks,
+  told to the model. It lives with the CLI's other hooks,
   not in the MCP server, and is the second of the two enforcement
   points above.
 
-## Phases
+## Landing order
+
+The pieces landed in this order, each as its own pull request, so
+that every step stood alone.
 
 1. Parent side only: the buffer predicate at every resolver with
-   `list-buffers` filtering, and the debug-knob latch. Stands alone and
-   narrows the tools that stay in the parent regardless. (Landed.)
-1b. Buffer sensitivity: the buffer-local
+   `list-buffers` filtering, and the debug-knob latch. These narrow
+   the tools that stay in the parent regardless of the child.
+2. Buffer sensitivity: the buffer-local
    `ch-mcp-server-buffer-sensitivity` (unset, `sensitive`, `exposed`),
    the predicate refusing the effective state first, a computed default
    (terminal modes and `ch-mcp-server-sensitive-file-patterns` matches
    start sensitive), the generic `ch-mcp-server-toggle-buffer-sensitive`
    on `<leader> a t`, the `ch-mcp-server-visit-sensitive` command, and
    the `ghostel-terminals` skill adopted into the workbench with
-   matching text. Parent-side and independent of the child, so it lands
-   next to phase 1; the copying in phase 3 already refuses through the
-   same predicate.
-2. The child with configuration only, sandboxed, as the target for
-   `eval-elisp`. This already answers every static question (keymaps,
-   functions, defaults, features); the gated live path remains for
-   session facts until the named tools exist. (Landed: the lifecycle
-   and `eval-elisp` in the child.)
-3. The copying of buffer text (forward contract, incremental sync,
-   gitleaks redaction; landed) and the back channel (landed); both
-   transform modes, the elisp one in the child (landed, and the gated
-   live evaluation is deleted with it) and the CLI one through the
-   territory's sandbox scratch (landed); named tools replace
-   the live evaluation for session facts (landed). Every MCP tool
-   result, not only the read tools' text but the diffs the edit verbs
-   return and what the child returns, passes through gitleaks in the
-   parent and is redacted with a note naming the rules (landed);
-   resubmit-to-approve for the MCP tools is not yet built, since it
-   needs a user prompt from inside a tool handler.
-4. The CLI-side hook in the `claude-code` module: every tool result
+   matching text. Parent-side and independent of the child; the
+   copying later refuses through the same predicate.
+3. `parenting`'s `:sandbox` keyword, then the child's lifecycle, then
+   `eval-elisp` routed to the child, which already answers every
+   static question (keymaps, functions, defaults, features) while the
+   named session-fact tools answer the rest.
+4. The copying of buffer text (forward contract, incremental
+   refresh, gitleaks redaction), then `transform` in the child with the
+   back contract, which deleted the gated live evaluation and the
+   editing registry, then every MCP tool result through gitleaks in the
+   parent, then the CLI transform through the territory's sandbox
+   scratch.
+5. The CLI-side hooks in the `claude-code` module: every tool result
    redacted in place through PostToolUse `updatedToolOutput` with a
-   note beside it, `Bash` with no retry (landed); the
-   resubmit-to-approve prompt for `Read` (single-use idempotency key
-   over the call, asked through the `claude-consent` spool; landed).
-   Depends on the gitleaks redaction existing (phase 3) and on the
-   sandbox bind list (phase 2), and completes "every tool result into
-   context passes through gitleaks" for the CLI's own tools.
-
-The `parenting` `:sandbox` work can precede phase 2 or land alongside
-it.
+   note beside it, `Bash` with no retry, and the resubmit-to-approve
+   prompt for `Read` through the `claude-consent` spool. This completed
+   "every tool result into context passes through gitleaks" for the
+   CLI's own tools.
