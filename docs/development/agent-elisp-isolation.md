@@ -477,10 +477,13 @@ print a secret into a log.
   finding replaces what the model sees (`updatedToolOutput`, keeping
   the result's shape), with a note naming the rules beside it
   (landed; the replacement is probe-verified on 2.1.259, see
-  `claude-cli.md`). The resubmit-to-approve prompt for `Read` is a
-  PreToolUse hook keyed like the tic-check edit hook (a hash of the
-  call, marked when the result was redacted) that asks through the
-  `claude-consent` spool (owed). It lives with the CLI's other hooks,
+  `claude-cli.md`). The resubmit-to-approve prompt for `Read` is the
+  `reveal` hook, PreToolUse on `Read`, keyed like the tic-check edit
+  hook (a hash of the call, marked by the redact hook when the result
+  was redacted), asking through the `claude-consent` spool; allow lets
+  that one result through unredacted, and deny, a timeout, or no
+  attached answerer leaves the redacted view standing with the reason
+  told to the model (landed). It lives with the CLI's other hooks,
   not in the MCP server, and is the second of the two enforcement
   points above.
 
@@ -519,7 +522,7 @@ print a secret into a log.
    redacted in place through PostToolUse `updatedToolOutput` with a
    note beside it, `Bash` with no retry (landed); the
    resubmit-to-approve prompt for `Read` (single-use idempotency key
-   over the call, asked through the `claude-consent` spool) owed.
+   over the call, asked through the `claude-consent` spool; landed).
    Depends on the gitleaks redaction existing (phase 3) and on the
    sandbox bind list (phase 2), and completes "every tool result into
    context passes through gitleaks" for the CLI's own tools.
