@@ -1683,9 +1683,9 @@ buffer is restored untouched."
 The `agent-safe' path of `ch-mcp-server--transform': the copies are
 refreshed, FORM runs with the copy current, and the copy's text comes
 back to `ch-mcp-server--land-text' with the tick the copy was taken
-at.  A buffer with no copy (withheld from the agent) or with a
-redacted copy is refused.  The copy is re-sent on the next refresh
-whatever happened, since FORM may have changed it."
+at and the redacted spans to put back.  A buffer with no copy
+(withheld from the agent) is refused.  The copy is re-sent on the next
+refresh whatever happened, since FORM may have changed it."
   (let* ((name (buffer-name buffer))
          (conn (ch-mcp-server--child-connection)))
     (ch-mcp-server--copies-sync conn)
@@ -1693,10 +1693,6 @@ whatever happened, since FORM may have changed it."
       (unless entry
         (mcp-server-lib-tool-throw
          (format "%s is withheld from the agent, so it cannot be transformed"
-                 file)))
-      (when (plist-get entry :redacted)
-        (mcp-server-lib-tool-throw
-         (format "%s holds a redacted secret; its copy is read-only, so it cannot be transformed"
                  file)))
       (let ((tick (plist-get entry :tick))
             (new (unwind-protect
@@ -1712,16 +1708,23 @@ whatever happened, since FORM may have changed it."
                    (remhash name ch-mcp-server--copies))))
         (unless (stringp new)
           (mcp-server-lib-tool-throw "transform: the child returned no text"))
-        (ch-mcp-server--land-text buffer file new tick save)))))
+        (ch-mcp-server--land-text buffer file new tick save
+                                  (plist-get entry :spans))))))
 
-(defun ch-mcp-server--land-text (buffer file new tick save)
+(defun ch-mcp-server--land-text (buffer file new tick save &optional spans)
   "Put NEW into BUFFER, visiting FILE, if its text is still the one at TICK.
 The back contract: text from the child lands only in a buffer that is
 not read-only and whose `buffer-chars-modified-tick' still equals
 TICK, the tick its copy was taken at, so a change made meanwhile is
-never overwritten.  Returns a unified diff, or \"No changes\"; saves
-unless SAVE is no.  The replacement keeps point and markers where the
+never overwritten.  SPANS, when non-nil, are the redacted spans of the
+copy NEW came from (`ch-mcp-server--redact-spans'); their originals
+are put back in place of the placeholders here, in the parent, before
+anything touches the buffer, so the buffer never receives a
+placeholder.  Returns a unified diff, or \"No changes\"; saves unless
+SAVE is no.  The replacement keeps point and markers where the
 unchanged text allows."
+  (when spans
+    (setq new (ch-mcp-server--splice-spans new spans)))
   (with-current-buffer buffer
     (when buffer-read-only
       (mcp-server-lib-tool-throw (format "%s is read-only" file)))
@@ -1998,8 +2001,8 @@ MCP Parameters:
 ;;
 ;; The child never performs a trusted step.  Every filter, the gitleaks
 ;; run and the redaction, the redaction record, and the landing checks
-;; run here, before text goes to the child or after text comes back;
-;; the read-only flag on a redacted copy in the child is a courtesy.
+;; run here, before text goes to the child or after text comes back,
+;; and so does putting the redacted spans back when text lands.
 ;; Everything the child returns is data, read but never evaluated, and
 ;; type-checked before use.  This holds from the first spawn, not from
 ;; the first agent form, so nothing here has to know whether agent code
@@ -2149,8 +2152,9 @@ spawn, and by hand when the resident user wants the child gone."
 ;; name, and the file name; nothing else crosses.  The child recreates a
 ;; plain buffer under the same name and picks the major mode from the
 ;; file name.  The same text is written to a file in the copy directory,
-;; where gitleaks runs; a finding redacts the copy in place and makes
-;; the child's buffer read-only.  Copies are incremental: a buffer is
+;; where gitleaks runs; a finding replaces the secret in the copy with a
+;; numbered placeholder, and the parent keeps the original beside the
+;; copy's record so a landing puts it back.  Copies are incremental: a buffer is
 ;; re-sent only when `buffer-chars-modified-tick' moved, and a buffer
 ;; that died or stopped being readable is removed from the child.
 
@@ -2162,8 +2166,9 @@ Created with the child and deleted with it.")
   "Buffer name to the state of its copy in the child.
 Each value is a plist: :tick, the `buffer-chars-modified-tick' the
 copy was taken at; :file, the copy's path; :redacted, non-nil when
-gitleaks found a secret in the copy, which also makes the child's
-buffer read-only.")
+gitleaks found a secret in the copy; :spans, the placeholder-to-original
+alist `ch-mcp-server--redact-spans' returned, put back when text
+lands.")
 
 (defun ch-mcp-server--copies-reset (create)
   "Forget every copy and delete the copy directory; with CREATE, make a new one."
@@ -2216,6 +2221,74 @@ on the first line, the rest emptied."
                 (setq i (1+ i))))))))
     (mapconcat #'identity lines "\n")))
 
+(defun ch-mcp-server--redact-spans (text findings)
+  "Return (TEXT . SPANS): TEXT with FINDINGS replaced by numbered placeholders.
+Like `ch-mcp-server--redact-text', but every placeholder is unique,
+`[REDACTED:<rule>:<n>]' with n counting the findings from 1, and SPANS
+is an alist of (PLACEHOLDER . ORIGINAL) that
+`ch-mcp-server--splice-spans' puts back when text lands.  A secret
+found on its reported lines is replaced where it stands; one not found
+there (a multi-line match) has its line range collapsed to one
+placeholder line, and ORIGINAL is those lines' text.  A finding whose
+secret is already mapped adds nothing."
+  (let ((lines (vconcat (split-string text "\n")))
+        (spans nil)
+        (ranges nil)
+        (n 0))
+    (dolist (finding findings)
+      (let ((rule (alist-get 'RuleID finding))
+            (secret (alist-get 'Secret finding))
+            (start (alist-get 'StartLine finding))
+            (end (alist-get 'EndLine finding)))
+        (when (and (integerp start) (integerp end)
+                   (stringp secret) (not (string-empty-p secret))
+                   (<= 1 start end (length lines)))
+          (let ((i (1- start))
+                (hit nil))
+            (while (< i end)
+              (when (string-search secret (aref lines i))
+                (setq hit t))
+              (setq i (1+ i)))
+            (cond
+             (hit
+              (setq n (1+ n))
+              (let ((placeholder (format "[REDACTED:%s:%d]" rule n)))
+                (setq i (1- start))
+                (while (< i end)
+                  (aset lines i (string-replace secret placeholder (aref lines i)))
+                  (setq i (1+ i)))
+                (push (cons placeholder secret) spans)))
+             ((rassoc secret spans) nil)
+             (t (push (list start end rule) ranges)))))))
+    ;; Collapse the multi-line ranges from the bottom up, so the line
+    ;; numbers of the ranges above stay true.
+    (let ((list (append lines nil)))
+      (dolist (range (sort ranges (lambda (a b) (> (car a) (car b)))))
+        (pcase-let ((`(,start ,end ,rule) range))
+          (setq n (1+ n))
+          (let ((placeholder (format "[REDACTED:%s:%d]" rule n))
+                (original (mapconcat #'identity
+                                     (seq-subseq list (1- start) end) "\n")))
+            (push (cons placeholder original) spans)
+            (setq list (append (seq-take list (1- start))
+                               (list placeholder)
+                               (seq-drop list end))))))
+      (cons (mapconcat #'identity list "\n") (nreverse spans)))))
+
+(defun ch-mcp-server--splice-spans (text spans)
+  "Return TEXT with each placeholder in SPANS replaced by its original.
+SPANS is the alist `ch-mcp-server--redact-spans' returned.  A numbered
+placeholder left in TEXT that SPANS does not map (altered, or from
+another copy) is a tool error, and nothing lands: a buffer must never
+receive a placeholder."
+  (dolist (span spans)
+    (setq text (string-replace (car span) (cdr span) text)))
+  (when (string-match "\\[REDACTED:[A-Za-z0-9._-]+:[0-9]+\\]" text)
+    (mcp-server-lib-tool-throw
+     (format "the text holds a redaction placeholder this copy cannot map (%s); nothing landed. Delete or move a placeholder whole, never alter or invent one"
+             (match-string 0 text))))
+  text)
+
 (defun ch-mcp-server--gitleaks-report (subcommand input &rest args)
   "Run gitleaks SUBCOMMAND with ARGS; return its findings as a list.
 INPUT, when non-nil, is the text fed to standard input (the `stdin'
@@ -2265,10 +2338,10 @@ An alist of (BASENAME . FINDINGS)."
         (push finding (alist-get file by-file nil nil #'equal))))
     by-file))
 
-(defun ch-mcp-server--copy-form (name file text read-only)
+(defun ch-mcp-server--copy-form (name file text)
   "The form the child evaluates to hold TEXT as the buffer named NAME.
 FILE, when non-nil, only picks the major mode through `set-auto-mode';
-the child's buffer visits nothing.  READ-ONLY marks a redacted copy."
+the child's buffer visits nothing."
   `(let ((buffer (get-buffer-create ,name)))
      (with-current-buffer buffer
        (setq buffer-read-only nil)
@@ -2278,8 +2351,7 @@ the child's buffer visits nothing.  READ-ONLY marks a redacted copy."
        ,@(and file
               `((let ((buffer-file-name ,file))
                   (set-auto-mode))))
-       (set-buffer-modified-p nil)
-       (setq buffer-read-only ,read-only))
+       (set-buffer-modified-p nil))
      t))
 
 (defun ch-mcp-server--copies-sync (conn)
@@ -2315,7 +2387,7 @@ child each buffer that died or is no longer readable."
                                                             (point-max))))))
               (let ((coding-system-for-write 'utf-8-unix))
                 (with-temp-file file (insert text)))
-              (puthash name (list :tick tick :file file :redacted nil)
+              (puthash name (list :tick tick :file file :redacted nil :spans nil)
                        ch-mcp-server--copies)
               (push (list name (buffer-file-name buffer) text) changed))))))
     (let ((gone nil))
@@ -2338,13 +2410,14 @@ child each buffer that died or is no longer readable."
                        (hits (alist-get (file-name-nondirectory copy) findings
                                         nil nil #'equal)))
             (when hits
-              (setq text (ch-mcp-server--redact-text text hits))
+              (let ((redaction (ch-mcp-server--redact-spans text hits)))
+                (setq text (car redaction))
+                (plist-put entry :spans (cdr redaction))
+                (plist-put entry :redacted t))
               (let ((coding-system-for-write 'utf-8-unix))
-                (with-temp-file copy (insert text)))
-              (plist-put entry :redacted t))
+                (with-temp-file copy (insert text))))
             (ch-mcp-server--in-child
-             conn (ch-mcp-server--copy-form
-                   name file text (plist-get entry :redacted)))))))))
+             conn (ch-mcp-server--copy-form name file text))))))))
 
 (defun ch-mcp-server--child-connection ()
   "The live connection to the child, spawning one if needed.
@@ -2412,7 +2485,8 @@ The printing happens in the child, so a value with no readable form
   "Buffer name to the state of its file for the CLI transform.
 A plist: :file, the path; :tick, the buffer's chars-modified tick when
 the file was written; :redacted, non-nil when gitleaks found a secret
-in it.")
+in it; :spans, the placeholder-to-original alist put back when the
+file lands.")
 
 (defconst ch-mcp-server--cli-copy-subdirectory
   ".claude/claude-code-sandbox/mcp-copies"
@@ -2479,19 +2553,22 @@ MCP Parameters:
                      (save-restriction
                        (widen)
                        (buffer-substring-no-properties (point-min) (point-max)))))
-             (findings (ch-mcp-server--gitleaks-report "stdin" text)))
-        (when findings
-          (setq text (ch-mcp-server--redact-text text findings)))
+             (findings (ch-mcp-server--gitleaks-report "stdin" text))
+             (redaction (and findings
+                             (ch-mcp-server--redact-spans text findings))))
+        (when redaction
+          (setq text (car redaction)))
         (make-directory directory t)
         (set-file-modes directory #o700)
         (ch-mcp-server--exclude-scratch root)
         (let ((coding-system-for-write 'utf-8-unix))
           (with-temp-file file (insert text)))
         (set-file-modes file #o600)
-        (puthash name (list :file file :tick tick :redacted (and findings t))
+        (puthash name (list :file file :tick tick :redacted (and findings t)
+                            :spans (cdr redaction))
                  ch-mcp-server--cli-copies)
         (if findings
-            (format "%s\n(gitleaks redacted %d span%s in this copy: %s; a redacted copy is read-only and cannot be landed)"
+            (format "%s\n(gitleaks redacted %d span%s in this copy: %s, as numbered placeholders; the originals are put back when the file lands, so delete or move a placeholder whole, never alter or invent one)"
                     file (length findings) (if (= 1 (length findings)) "" "s")
                     (string-join
                      (seq-uniq (mapcar (lambda (finding)
@@ -2506,10 +2583,12 @@ MCP Parameters:
 Returns a unified diff, or \"No changes\".  Refused when no file was
 requested for NAME, when the buffer changed since the file was written
 (ask for the file again), when the buffer is read-only or has a
-process, when the file was redacted, and, for a file-visiting buffer,
-when its file lies outside the client's territory.  The file is
-removed afterwards, landed or refused, so a stale copy never lands
-later.  Saves a file-visiting buffer unless SAVE is no.
+process, and, for a file-visiting buffer, when its file lies outside
+the client's territory.  A redacted file lands with its original
+spans put back in place of the placeholders; a placeholder altered or
+invented refuses the landing.  The file is removed afterwards, landed
+or refused, so a stale copy never lands later.  Saves a file-visiting
+buffer unless SAVE is no.
 
 MCP Parameters:
   name - the buffer name given to buffer-file
@@ -2528,10 +2607,6 @@ MCP Parameters:
             (unless buffer
               (mcp-server-lib-tool-throw
                (format "Buffer %s no longer exists" name)))
-            (when (plist-get entry :redacted)
-              (mcp-server-lib-tool-throw
-               (format "The file for %s was redacted by gitleaks, so its text cannot land"
-                       name)))
             (unless (file-readable-p path)
               (mcp-server-lib-tool-throw
                (format "The file for %s is gone (%s); call buffer-file again"
@@ -2548,7 +2623,8 @@ MCP Parameters:
                           (buffer-string))))
               (ch-mcp-server--land-text buffer (or file name) text
                                         (plist-get entry :tick)
-                                        (if file save "no"))))
+                                        (if file save "no")
+                                        (plist-get entry :spans))))
         (ignore-errors (delete-file (plist-get entry :file)))))))
 
 ;;; Redaction of tool results
@@ -2761,15 +2837,15 @@ the others."
     (list #'ch-mcp-server--transform
           :id "transform"
           :description
-          "Run elisp against a file's buffer for bulk/structural edits: the form runs in the sandboxed child on the buffer's copy and only the resulting text lands (refused if the buffer changed meanwhile); returns a unified diff; saves unless save=no")
+          "Run elisp against a file's buffer for bulk/structural edits: the form runs in the sandboxed child on the buffer's copy and only the resulting text lands (refused if the buffer changed meanwhile; redacted spans are put back on landing); returns a unified diff; saves unless save=no")
     (list #'ch-mcp-server--buffer-file
           :id "buffer-file"
           :description
-          "A plain-text copy of a buffer as a file under this session's territory (.claude/claude-code-sandbox/mcp-copies/), for reading or editing with your own tools; secrets redacted; land the edited text with land-buffer-file")
+          "A plain-text copy of a buffer as a file under this session's territory (.claude/claude-code-sandbox/mcp-copies/), for reading or editing with your own tools; secrets appear as numbered placeholders that are put back when the text lands; land the edited text with land-buffer-file")
     (list #'ch-mcp-server--land-buffer-file
           :id "land-buffer-file"
           :description
-          "Land the edited text of a buffer-file copy into its buffer (refused if the buffer changed meanwhile or the copy was redacted; the file is removed either way); returns a unified diff; saves unless save=no")
+          "Land the edited text of a buffer-file copy into its buffer, with redacted spans put back in place of their placeholders (refused if the buffer changed meanwhile or a placeholder was altered; the file is removed either way); returns a unified diff; saves unless save=no")
     (list #'ch-mcp-server--add-comment
           :id "add-comment"
           :description

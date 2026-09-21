@@ -786,8 +786,9 @@ read-only; the parent's buffer is untouched."
                        (format "(with-current-buffer %S (list buffer-read-only (buffer-string)))"
                                name))))
             (should-not (string-search token copy))
-            (should (string-search "[REDACTED:github-pat]" copy))
-            (should (string-prefix-p "(t " copy)))
+            (should (string-search "[REDACTED:github-pat:1]" copy))
+            ;; Editable: the original comes back when text lands.
+            (should (string-prefix-p "(nil " copy)))
           (should (string-search token (with-current-buffer name (buffer-string))))
           (should (plist-get (gethash name ch-mcp-server--copies) :redacted)))
       (ch-mcp-server-child-stop)
@@ -841,20 +842,36 @@ the form lands nothing."
                          (ch-mcp-server--transform file "(ignore)")))))
     (ch-mcp-server-child-stop)))
 
-(ert-deftest ch-mcp-tools-transform-refuses-redacted-copy ()
-  "A buffer whose copy gitleaks redacted cannot be transformed."
+(ert-deftest ch-mcp-tools-transform-keeps-the-secret ()
+  "A buffer whose copy gitleaks redacted is transformed through the
+copy: the form sees a placeholder, the buffer gets the edit with its
+secret intact, and the returned diff carries no secret."
   (unless (ch-mcp-tests--bwrap-usable-p)
     (ert-skip "bwrap cannot create a user namespace here"))
   (unless (executable-find (car ch-mcp-server-gitleaks-command))
     (ert-skip "no gitleaks to run"))
   (unwind-protect
       (ch-mcp-tests--in-territory
-        (let ((file (ch-mcp-tests--temp-file
-                     (concat "token = " (ch-mcp-tests--random-token) "\n"))))
-          (find-file-noselect file)
-          (let ((err (should-error (ch-mcp-server--transform file "(ignore)")
-                                   :type 'mcp-server-lib-tool-error)))
-            (should (string-match-p "redacted" (error-message-string err))))))
+        (let* ((token (ch-mcp-tests--random-token))
+               (file (ch-mcp-tests--temp-file
+                      (concat "token = " token "\nalpha\n")))
+               (buffer (find-file-noselect file))
+               (diff (ch-mcp-server--transform
+                      file
+                      (concat "(goto-char (point-min))"
+                              "(unless (search-forward \"[REDACTED:github-pat:1]\" nil t)"
+                              "  (error \"the copy shows no placeholder\"))"
+                              "(goto-char (point-min))"
+                              "(search-forward \"alpha\")"
+                              "(replace-match \"beta\")"))))
+          (should (string-match-p "^\\+beta" diff))
+          (should-not (string-search token diff))
+          (with-current-buffer buffer
+            (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                           (concat "token = " token "\nbeta\n"))))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) (concat "token = " token "\nbeta\n"))))))
     (ch-mcp-server-child-stop)))
 
 ;;; Copies for the CLI
@@ -906,24 +923,95 @@ and the file is consumed."
         (should (equal (buffer-substring-no-properties (point-min) (point-max))
                        "alpha\nuser\n"))))))
 
-(ert-deftest ch-mcp-tools-buffer-file-redacted-cannot-land ()
-  "A copy gitleaks redacted says so, holds no token, and cannot land."
+(ert-deftest ch-mcp-tools-buffer-file-keeps-the-secret ()
+  "A copy gitleaks redacted says so and holds a numbered placeholder;
+an edit around it lands with the secret put back, the returned diff
+carries no secret, and an altered placeholder refuses the landing."
   (unless (executable-find (car ch-mcp-server-gitleaks-command))
     (ert-skip "no gitleaks to run"))
   (ch-mcp-tests--in-territory
     (let* ((token (ch-mcp-tests--random-token))
-           (file (ch-mcp-tests--temp-file (concat "token = " token "\n")))
+           (file (ch-mcp-tests--temp-file (concat "token = " token "\nalpha\n")))
            (buffer (find-file-noselect file))
            (name (buffer-name buffer))
            (result (ch-mcp-server--buffer-file name))
            (path (car (split-string result "\n"))))
       (should (string-match-p "redacted" result))
-      (should-not (string-search
-                   token
-                   (with-temp-buffer (insert-file-contents path) (buffer-string))))
-      (should-error (ch-mcp-server--land-buffer-file name)
+      (should (equal (concat "token = [REDACTED:github-pat:1]\nalpha\n")
+                     (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (with-temp-file path (insert "token = [REDACTED:github-pat:1]\nbeta\n"))
+      (let ((diff (ch-mcp-server--land-buffer-file name)))
+        (should (string-match-p "^\\+beta" diff))
+        (should-not (string-search token diff)))
+      (with-current-buffer buffer
+        (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                       (concat "token = " token "\nbeta\n"))))
+      ;; An altered placeholder cannot be mapped: nothing lands.
+      (setq path (car (split-string (ch-mcp-server--buffer-file name) "\n")))
+      (with-temp-file path (insert "token = [REDACTED:github-pat:7]\ngamma\n"))
+      (let ((err (should-error (ch-mcp-server--land-buffer-file name)
+                               :type 'mcp-server-lib-tool-error)))
+        (should (string-match-p "cannot map" (error-message-string err))))
+      (with-current-buffer buffer
+        (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                       (concat "token = " token "\nbeta\n")))))))
+
+(ert-deftest ch-mcp-tools-redact-spans-and-splice ()
+  "Numbered placeholders map one to one onto originals; a multi-line
+match collapses to one placeholder line; splicing restores the text
+exactly; a placeholder outside the map refuses."
+  (let* ((text "a = ghp_one\nb = ghp_two\n-----BEGIN\nxyz\n-----END\ntail\n")
+         (findings '(((RuleID . "github-pat") (Secret . "ghp_one")
+                      (StartLine . 1) (EndLine . 1))
+                     ((RuleID . "github-pat") (Secret . "ghp_two")
+                      (StartLine . 2) (EndLine . 2))
+                     ((RuleID . "private-key")
+                      (Secret . "-----BEGIN\nxyz\n-----END")
+                      (StartLine . 3) (EndLine . 5))))
+         (redaction (ch-mcp-server--redact-spans text findings)))
+    (should (equal (car redaction)
+                   (concat "a = [REDACTED:github-pat:1]\n"
+                           "b = [REDACTED:github-pat:2]\n"
+                           "[REDACTED:private-key:3]\ntail\n")))
+    (should (equal (cdr redaction)
+                   '(("[REDACTED:github-pat:1]" . "ghp_one")
+                     ("[REDACTED:github-pat:2]" . "ghp_two")
+                     ("[REDACTED:private-key:3]" . "-----BEGIN\nxyz\n-----END"))))
+    (should (equal text (ch-mcp-server--splice-spans (car redaction)
+                                                     (cdr redaction))))
+    ;; An edit around the placeholders keeps them mappable.
+    (should (equal "a = ghp_one\nB = ghp_two\ntail\n"
+                   (ch-mcp-server--splice-spans
+                    "a = [REDACTED:github-pat:1]\nB = [REDACTED:github-pat:2]\ntail\n"
+                    (cdr redaction))))
+    (should-error (ch-mcp-server--splice-spans "x [REDACTED:github-pat:9] y"
+                                               (cdr redaction))
+                  :type 'mcp-server-lib-tool-error)))
+
+(ert-deftest ch-mcp-tools-land-text-splices-spans ()
+  "Landing with spans puts the originals back before the buffer is
+touched; a placeholder outside the map lands nothing."
+  (ch-mcp-tests--in-territory
+    (let* ((file (ch-mcp-tests--temp-file "token = SECRET-1\nalpha\n"))
+           (buffer (find-file-noselect file))
+           (spans '(("[REDACTED:x:1]" . "SECRET-1"))))
+      (should (string-match-p
+               "^\\+beta"
+               (ch-mcp-server--land-text buffer file
+                                         "token = [REDACTED:x:1]\nbeta\n"
+                                         (buffer-chars-modified-tick buffer)
+                                         "no" spans)))
+      (with-current-buffer buffer
+        (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                       "token = SECRET-1\nbeta\n")))
+      (should-error (ch-mcp-server--land-text buffer file
+                                              "token = [REDACTED:x:2]\n"
+                                              (buffer-chars-modified-tick buffer)
+                                              "no" spans)
                     :type 'mcp-server-lib-tool-error)
-      (should-not (file-exists-p path)))))
+      (with-current-buffer buffer
+        (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                       "token = SECRET-1\nbeta\n"))))))
 
 (ert-deftest ch-mcp-tools-buffer-file-refuses-withheld ()
   "A withheld buffer gets no file."
