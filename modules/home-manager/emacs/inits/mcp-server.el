@@ -2174,13 +2174,14 @@ buffer read-only.")
   (setq ch-mcp-server--copy-directory
         (and create (make-temp-file "ch-mcp-copies-" t))))
 
-(defun ch-mcp-server--copy-file-name (name)
-  "The path of the copy for the buffer named NAME.
-The buffer name is the file name, with every character outside
-letters, digits, dot, dash, and underscore replaced by `%', so
-`modules/default.nix' and `*Messages*' each make one plain file."
+(defun ch-mcp-server--copy-file-name (name &optional directory)
+  "The path of the copy for the buffer named NAME, in DIRECTORY.
+DIRECTORY defaults to the copy directory.  The buffer name is the file
+name, with every character outside letters, digits, dot, dash, and
+underscore replaced by `%', so `modules/default.nix' and `*Messages*'
+each make one plain file."
   (expand-file-name (replace-regexp-in-string "[^A-Za-z0-9._-]" "%" name)
-                    ch-mcp-server--copy-directory))
+                    (or directory ch-mcp-server--copy-directory)))
 
 (defun ch-mcp-server--redact-text (text findings)
   "Return TEXT with each of FINDINGS replaced by a placeholder.
@@ -2390,6 +2391,166 @@ The printing happens in the child, so a value with no readable form
     (ch-mcp-server--copies-sync conn)
     (ch-mcp-server--in-child conn (list 'format "%S" form))))
 
+;;; Copies for the CLI
+
+;; The CLI transform (docs/development/agent-elisp-isolation.md, "What
+;; runs where"): the agent asks for a buffer as a file, edits it with
+;; its own command-line tools, and asks for the text to land.  The file
+;; lives in the calling client's territory under
+;; .claude/claude-code-sandbox/, the directory the CLI's sandbox already
+;; uses as per-checkout scratch: sandboxed commands can write the
+;; checkout and nothing else, and that directory is kept out of `git
+;; status' through the clone's exclude file, which this writes too where
+;; the sandbox has not.  The text passes the same filters as every copy
+;; (the buffer predicate, then gitleaks), and the text lands through
+;; `ch-mcp-server--land-text' with the tick recorded when the file was
+;; written; a redacted file lands nothing.  The file is a copy: editing
+;; it changes no buffer until land-buffer-file runs, and a landed or
+;; refused file is removed.
+
+(defvar ch-mcp-server--cli-copies (make-hash-table :test #'equal)
+  "Buffer name to the state of its file for the CLI transform.
+A plist: :file, the path; :tick, the buffer's chars-modified tick when
+the file was written; :redacted, non-nil when gitleaks found a secret
+in it.")
+
+(defconst ch-mcp-server--cli-copy-subdirectory
+  ".claude/claude-code-sandbox/mcp-copies"
+  "Where, under the client's territory, the CLI transform's files live.
+Under the directory the CLI's sandbox uses for per-checkout scratch, so
+the exclude-file line the sandbox writes covers it.")
+
+(defun ch-mcp-server--exclude-scratch (root)
+  "Keep the sandbox scratch directory under ROOT out of `git status'.
+Appends the line the sandbox itself writes to the clone's info/exclude,
+resolved through git so a worktree shares the main clone's file.  ROOT
+without a git directory, or git failing, changes nothing."
+  (let ((exclude (condition-case nil
+                     (with-temp-buffer
+                       (when (eq 0 (call-process "git" nil t nil "-C" root
+                                                 "rev-parse" "--git-path"
+                                                 "info/exclude"))
+                         (expand-file-name (string-trim (buffer-string)) root)))
+                   (error nil)))
+        (line "/.claude/claude-code-sandbox/"))
+    (when exclude
+      (condition-case nil
+          (let ((existing (if (file-exists-p exclude)
+                              (with-temp-buffer
+                                (insert-file-contents exclude)
+                                (buffer-string))
+                            "")))
+            (unless (member line (split-string existing "\n"))
+              (make-directory (file-name-directory exclude) t)
+              (with-temp-buffer
+                (insert existing)
+                (unless (or (string-empty-p existing)
+                            (string-suffix-p "\n" existing))
+                  (insert "\n"))
+                (insert line "\n")
+                (write-region (point-min) (point-max) exclude nil 'quiet))))
+        (error nil)))))
+
+(defun ch-mcp-server--buffer-file (name)
+  "Write the text of the buffer NAME to a file in the territory; return its path.
+
+The file is for reading or editing with your own command-line tools:
+the buffer's text without properties, passed through gitleaks like
+every copy, so a recognized secret arrives as [REDACTED:<rule>] and
+such a file cannot be landed.  Editing the file changes nothing in
+Emacs; call land-buffer-file with the same name to land its text,
+which is refused if the buffer changed meanwhile.  The file lives under
+the client's territory in .claude/claude-code-sandbox/mcp-copies/, which
+the CLI's sandbox can write and git ignores.
+
+MCP Parameters:
+  name - name of a live buffer, as listed by the list-buffers tool"
+  (mcp-server-lib-with-error-handling
+    (let ((buffer (get-buffer name)))
+      (unless buffer
+        (mcp-server-lib-tool-throw (format "No buffer named %s" name)))
+      (ch-mcp-server--buffer-accessible-or-throw buffer)
+      (let* ((root (ch-mcp-server--client-territory))
+             (directory (expand-file-name ch-mcp-server--cli-copy-subdirectory
+                                          root))
+             (file (ch-mcp-server--copy-file-name name directory))
+             (tick (buffer-chars-modified-tick buffer))
+             (text (with-current-buffer buffer
+                     (save-restriction
+                       (widen)
+                       (buffer-substring-no-properties (point-min) (point-max)))))
+             (findings (ch-mcp-server--gitleaks-report "stdin" text)))
+        (when findings
+          (setq text (ch-mcp-server--redact-text text findings)))
+        (make-directory directory t)
+        (set-file-modes directory #o700)
+        (ch-mcp-server--exclude-scratch root)
+        (let ((coding-system-for-write 'utf-8-unix))
+          (with-temp-file file (insert text)))
+        (set-file-modes file #o600)
+        (puthash name (list :file file :tick tick :redacted (and findings t))
+                 ch-mcp-server--cli-copies)
+        (if findings
+            (format "%s\n(gitleaks redacted %d span%s in this copy: %s; a redacted copy is read-only and cannot be landed)"
+                    file (length findings) (if (= 1 (length findings)) "" "s")
+                    (string-join
+                     (seq-uniq (mapcar (lambda (finding)
+                                         (format "%s" (alist-get 'RuleID finding)))
+                                       findings))
+                     ", "))
+          file)))))
+
+(defun ch-mcp-server--land-buffer-file (name &optional save)
+  "Land the text of the file buffer-file wrote for the buffer NAME.
+
+Returns a unified diff, or \"No changes\".  Refused when no file was
+requested for NAME, when the buffer changed since the file was written
+(ask for the file again), when the buffer is read-only or has a
+process, when the file was redacted, and, for a file-visiting buffer,
+when its file lies outside the client's territory.  The file is
+removed afterwards, landed or refused, so a stale copy never lands
+later.  Saves a file-visiting buffer unless SAVE is no.
+
+MCP Parameters:
+  name - the buffer name given to buffer-file
+  save - no to leave the change unsaved in the buffer (default: save)"
+  (mcp-server-lib-with-error-handling
+    (let ((entry (gethash name ch-mcp-server--cli-copies))
+          (buffer (get-buffer name)))
+      (unless entry
+        (mcp-server-lib-tool-throw
+         (format "No file was requested for buffer %s; call buffer-file first"
+                 name)))
+      (remhash name ch-mcp-server--cli-copies)
+      (unwind-protect
+          (let ((path (plist-get entry :file))
+                (file (and buffer (buffer-file-name buffer))))
+            (unless buffer
+              (mcp-server-lib-tool-throw
+               (format "Buffer %s no longer exists" name)))
+            (when (plist-get entry :redacted)
+              (mcp-server-lib-tool-throw
+               (format "The file for %s was redacted by gitleaks, so its text cannot land"
+                       name)))
+            (unless (file-readable-p path)
+              (mcp-server-lib-tool-throw
+               (format "The file for %s is gone (%s); call buffer-file again"
+                       name path)))
+            (when (get-buffer-process buffer)
+              (mcp-server-lib-tool-throw
+               (format "%s has a process attached; text lands only in file-visiting or plain buffers"
+                       name)))
+            (when file
+              (ch-mcp-server--check-file-write file))
+            (let ((text (with-temp-buffer
+                          (let ((coding-system-for-read 'utf-8-unix))
+                            (insert-file-contents path))
+                          (buffer-string))))
+              (ch-mcp-server--land-text buffer (or file name) text
+                                        (plist-get entry :tick)
+                                        (if file save "no"))))
+        (ignore-errors (delete-file (plist-get entry :file)))))))
+
 ;;; Redaction of tool results
 
 ;; Every tool result passes through gitleaks here, in the parent, on its
@@ -2445,6 +2606,8 @@ error, so no text reaches the agent without passing through it."
     ch-mcp-server--edit-buffer
     ch-mcp-server--edit-file
     ch-mcp-server--transform
+    ch-mcp-server--buffer-file
+    ch-mcp-server--land-buffer-file
     ch-mcp-server--add-comment
     ch-mcp-server--list-comments)
   "Every registered tool function; each carries the result filter.
@@ -2599,6 +2762,14 @@ the others."
           :id "transform"
           :description
           "Run elisp against a file's buffer for bulk/structural edits: the form runs in the sandboxed child on the buffer's copy and only the resulting text lands (refused if the buffer changed meanwhile); returns a unified diff; saves unless save=no")
+    (list #'ch-mcp-server--buffer-file
+          :id "buffer-file"
+          :description
+          "A plain-text copy of a buffer as a file under this session's territory (.claude/claude-code-sandbox/mcp-copies/), for reading or editing with your own tools; secrets redacted; land the edited text with land-buffer-file")
+    (list #'ch-mcp-server--land-buffer-file
+          :id "land-buffer-file"
+          :description
+          "Land the edited text of a buffer-file copy into its buffer (refused if the buffer changed meanwhile or the copy was redacted; the file is removed either way); returns a unified diff; saves unless save=no")
     (list #'ch-mcp-server--add-comment
           :id "add-comment"
           :description

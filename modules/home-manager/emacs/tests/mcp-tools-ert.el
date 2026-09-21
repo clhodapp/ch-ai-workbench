@@ -95,7 +95,8 @@ this isolates one test's revisions from every other test's."
                   "diagnostics" "find-references" "find-definition"
                   "symbol-info" "document-outline" "modified-buffers"
                   "buffer-diff" "present" "sidebar" "edit-buffer" "edit-file"
-                  "transform" "add-comment" "list-comments"
+                  "transform" "buffer-file" "land-buffer-file"
+                  "add-comment" "list-comments"
                   "feature-loaded" "hooks" "buffer-state" "key-binding"))
       (should (gethash id tools)))
     ;; The disk-writing verb is a separate name from buffer mutation so
@@ -855,6 +856,107 @@ the form lands nothing."
                                    :type 'mcp-server-lib-tool-error)))
             (should (string-match-p "redacted" (error-message-string err))))))
     (ch-mcp-server-child-stop)))
+
+;;; Copies for the CLI
+
+(ert-deftest ch-mcp-tools-buffer-file-and-land ()
+  "A buffer's text goes to a file in the territory's sandbox scratch;
+the edited file's text lands as a diff and is saved; the file is
+consumed, so landing again is refused."
+  (ch-mcp-tests--in-territory
+    (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n"))
+           (buffer (find-file-noselect file))
+           (name (buffer-name buffer))
+           (path (ch-mcp-server--buffer-file name)))
+      (should (string-prefix-p
+               (expand-file-name ".claude/claude-code-sandbox/mcp-copies/"
+                                 (ch-mcp-server--client-territory))
+               path))
+      (should (equal "alpha\nbeta\n"
+                     (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (with-temp-file path (insert "alpha\ngamma\n"))
+      (let ((diff (ch-mcp-server--land-buffer-file name)))
+        (should (string-match-p "^-beta" diff))
+        (should (string-match-p "^\\+gamma" diff)))
+      (should-not (file-exists-p path))
+      (should-not (buffer-modified-p buffer))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (equal (buffer-string) "alpha\ngamma\n")))
+      (should-error (ch-mcp-server--land-buffer-file name)
+                    :type 'mcp-server-lib-tool-error))))
+
+(ert-deftest ch-mcp-tools-land-buffer-file-refuses-stale ()
+  "A buffer that changed after its file was written refuses the landing,
+and the file is consumed."
+  (ch-mcp-tests--in-territory
+    (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
+           (buffer (find-file-noselect file))
+           (name (buffer-name buffer))
+           (path (ch-mcp-server--buffer-file name)))
+      (with-current-buffer buffer
+        (goto-char (point-max))
+        (insert "user\n")
+        (set-buffer-modified-p nil))
+      (with-temp-file path (insert "agent\n"))
+      (should-error (ch-mcp-server--land-buffer-file name)
+                    :type 'mcp-server-lib-tool-error)
+      (should-not (file-exists-p path))
+      (with-current-buffer buffer
+        (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                       "alpha\nuser\n"))))))
+
+(ert-deftest ch-mcp-tools-buffer-file-redacted-cannot-land ()
+  "A copy gitleaks redacted says so, holds no token, and cannot land."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (ch-mcp-tests--in-territory
+    (let* ((token (ch-mcp-tests--random-token))
+           (file (ch-mcp-tests--temp-file (concat "token = " token "\n")))
+           (buffer (find-file-noselect file))
+           (name (buffer-name buffer))
+           (result (ch-mcp-server--buffer-file name))
+           (path (car (split-string result "\n"))))
+      (should (string-match-p "redacted" result))
+      (should-not (string-search
+                   token
+                   (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (should-error (ch-mcp-server--land-buffer-file name)
+                    :type 'mcp-server-lib-tool-error)
+      (should-not (file-exists-p path)))))
+
+(ert-deftest ch-mcp-tools-buffer-file-refuses-withheld ()
+  "A withheld buffer gets no file."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-hidden-copy")
+    (insert "hush")
+    (setq-local ch-mcp-server-buffer-sensitivity 'sensitive))
+  (unwind-protect
+      (should-error (ch-mcp-server--buffer-file "ch-mcp-tests-hidden-copy")
+                    :type 'mcp-server-lib-tool-error)
+    (kill-buffer "ch-mcp-tests-hidden-copy")))
+
+(ert-deftest ch-mcp-tools-buffer-file-excludes-scratch-from-git ()
+  "In a git checkout, the scratch directory is added to the clone's
+exclude file, with the line the sandbox itself writes."
+  (unless (executable-find "git")
+    (ert-skip "no git to run"))
+  (let ((root (file-name-as-directory (make-temp-file "mcp-scratch" t))))
+    (call-process "git" nil nil nil "init" "-q" root)
+    (let ((default-directory root))
+      (with-current-buffer (get-buffer-create "ch-mcp-tests-scratch-note")
+        (erase-buffer)
+        (insert "hi"))
+      (unwind-protect
+          (progn
+            (ch-mcp-server--buffer-file "ch-mcp-tests-scratch-note")
+            (should (member "/.claude/claude-code-sandbox/"
+                            (split-string
+                             (with-temp-buffer
+                               (insert-file-contents
+                                (expand-file-name ".git/info/exclude" root))
+                               (buffer-string))
+                             "\n"))))
+        (kill-buffer "ch-mcp-tests-scratch-note")))))
 
 ;;; Redaction of tool results
 
