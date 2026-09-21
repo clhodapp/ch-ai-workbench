@@ -7,9 +7,9 @@
 }:
 {
 
-  debug = false;
-  systems = [ "x86_64-linux" ];
+  imports = [ inputs.flake-parts.flakeModules.partitions ];
 
+  debug = false;
   caisson.configInfo.configName = "ch-ai-workbench";
   caisson.modules.homeManager.exported = modules: {
     inherit (modules)
@@ -29,7 +29,7 @@
     packages = lib.caisson.nixpkgs.mkPackagesOverlay (
       { callPackage, ... }: import ../../../pkgs/ch-ai-workbench { inherit callPackage; }
     );
-    merman = _name: inputs.merman.overlays.packages;
+    merman-nix = _name: inputs.merman-nix.overlays.packages;
     # The editor's Emacs bases and ELPA pins: the checks below build
     # this layer's packages against the same Emacs the editor
     # configures, since they load into it.
@@ -47,7 +47,7 @@
     overlayImports = overlays: [
       overlays.emacs-packages
       overlays.emacs
-      overlays.merman
+      overlays.merman-nix
       overlays.packages
     ];
   };
@@ -79,7 +79,7 @@
         perSystem =
           { pkgs, system, ... }:
           let
-            merman = inputs.merman.packages.${system}.merman;
+            merman = inputs.merman-nix.packages.${system}.merman;
 
             # An Emacs carrying both layers' bundles, built the way the
             # editor builds its own check Emacs: the ERT suites below run
@@ -123,7 +123,8 @@
                 import ../../../modules/home-manager/emacs/bundles-spec.nix {
                   inherit lib;
                   readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
-                  merman = inputs.merman.packages.${system}.merman;
+                  merman = inputs.merman-nix.packages.${system}.merman;
+                  gitleaks = pkgs.gitleaks;
                 }
               )
             );
@@ -145,6 +146,13 @@
                 {
                   inherit pkgs;
                 };
+            claudeRedactHook = import ../../../modules/home-manager/claude-code/lib/claude-redact-hook.nix {
+              inherit pkgs;
+            };
+            claudeRevealHook = import ../../../modules/home-manager/claude-code/lib/claude-reveal-hook.nix {
+              inherit pkgs;
+              claude-consent = claudeConsent;
+            };
 
             # The prompt API tool (its build runs the unittest suite)
             # and the consent hook built on it, from the same files the
@@ -321,6 +329,142 @@
                     quiet 'git pushx'
                     quiet 'ls'
                     [ -z "$(call 'git push' | env -u XDG_RUNTIME_DIR "$hook")" ]
+                    [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
+
+              # The redaction hook: a token in a Read result is replaced
+              # in place with the shape kept and a note naming the rule,
+              # and the Read is marked for the retry path; an approved
+              # marker lets the identical Read through once and is
+              # consumed; a Read without a session is redacted but not
+              # marked; a token in Bash's stderr is replaced the same
+              # way; a clean result, a PreToolUse payload, and non-JSON
+              # stdin are silence. The token is drawn at build time and
+              # checked against gitleaks first, since gitleaks drops
+              # placeholder-looking strings and a token-shaped string
+              # does not belong in the tree.
+              claude-redact-hook =
+                pkgs.runCommand "claude-redact-hook"
+                  {
+                    nativeBuildInputs = [
+                      pkgs.gitleaks
+                      pkgs.jq
+                    ];
+                  }
+                  ''
+                    hook=${lib.getExe claudeRedactHook}
+                    export XDG_RUNTIME_DIR="$TMPDIR/run"
+                    mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    session=0123456789abcdef-0000-4000-8000-000000000000
+                    flagged=0
+                    for _ in 1 2 3 4 5 6 7 8; do
+                      tok="ghp_$(head -c 64 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | cut -c1-36)"
+                      n=$(printf 'token = %s\n' "$tok" | gitleaks stdin --no-banner --log-level error --report-format json --report-path - --exit-code 0 | jq 'length')
+                      if [ "$n" = 1 ]; then flagged=1; break; fi
+                    done
+                    [ "$flagged" = 1 ]
+                    read_payload=$(jq -cn --arg t "$tok" --arg s "$session" '{hook_event_name: "PostToolUse", tool_name: "Read", session_id: $s,
+                      tool_input: {file_path: "/x"},
+                      tool_response: {type: "text", file: {content: ("token = " + $t + "\nplain\n"), filePath: "/x", numLines: 2, startLine: 1, totalLines: 2}}}')
+                    res=$("$hook" <<<"$read_payload")
+                    jq -e '.hookSpecificOutput.hookEventName == "PostToolUse"' <<<"$res"
+                    jq -e '.hookSpecificOutput.updatedToolOutput.file.content == "token = [REDACTED:github-pat]\nplain\n"' <<<"$res"
+                    jq -e '.hookSpecificOutput.updatedToolOutput.file.numLines == 2' <<<"$res"
+                    jq -e '.hookSpecificOutput.additionalContext | test("redacted 1 span in this Read result: github-pat")' <<<"$res"
+                    jq -e '.hookSpecificOutput.additionalContext | test("re-issue this identical Read")' <<<"$res"
+                    key=$(jq -c '{tool_name, tool_input}' <<<"$read_payload" | sha256sum | cut -c1-64)
+                    marker="$XDG_RUNTIME_DIR/claude-redact/redacted/01234567-$key"
+                    jq -e '.count == 1 and .rules == "github-pat"' "$marker"
+                    # The user allowed: the approved marker lets the identical Read through once.
+                    approved="$XDG_RUNTIME_DIR/claude-redact/approved/01234567-$key"
+                    mkdir -p "$(dirname "$approved")"
+                    : > "$approved"
+                    [ -z "$("$hook" <<<"$read_payload")" ]
+                    [ ! -e "$approved" ]
+                    [ -n "$("$hook" <<<"$read_payload")" ]
+                    # No session: redacted, but no retry path is offered.
+                    res=$("$hook" <<<"$(jq -c 'del(.session_id)' <<<"$read_payload")")
+                    jq -e '.hookSpecificOutput.additionalContext | test("re-issue") | not' <<<"$res"
+                    bash_payload=$(jq -cn --arg t "$tok" '{hook_event_name: "PostToolUse", tool_name: "Bash",
+                      tool_response: {stdout: "ok\n", stderr: ("leak " + $t + " here\n"), interrupted: false}}')
+                    res=$("$hook" <<<"$bash_payload")
+                    jq -e '.hookSpecificOutput.updatedToolOutput.stderr == "leak [REDACTED:github-pat] here\n"' <<<"$res"
+                    jq -e '.hookSpecificOutput.updatedToolOutput.stdout == "ok\n"' <<<"$res"
+                    [ -z "$("$hook" <<<'{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_response":{"stdout":"hello\n","stderr":""}}')" ]
+                    [ -z "$("$hook" <<<'{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/x"}}')" ]
+                    [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
+
+              # The reveal hook: a Read with no marker is none of its
+              # business; a marked Read with no answerer attached is a
+              # deny naming the spool; with an answerer, allow writes the
+              # approved marker and abstains, an approved Read is left
+              # alone, and deny with a reason reaches the model; non-JSON
+              # stdin is silence.
+              claude-reveal-hook =
+                pkgs.runCommand "claude-reveal-hook"
+                  {
+                    nativeBuildInputs = [ pkgs.jq ];
+                  }
+                  ''
+                    hook=${lib.getExe claudeRevealHook}
+                    export XDG_RUNTIME_DIR="$TMPDIR/run"
+                    spool="$XDG_RUNTIME_DIR/claude-consent"
+                    mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    mkdir -p "$spool/handlers" "$spool/pending" "$spool/answers"
+                    mkdir -p "$XDG_RUNTIME_DIR/claude-redact/redacted" "$XDG_RUNTIME_DIR/claude-redact/approved"
+                    session=0123456789abcdef-0000-4000-8000-000000000000
+                    payload=$(jq -cn --arg s "$session" '{session_id: $s, hook_event_name: "PreToolUse", tool_name: "Read", tool_input: {file_path: "/x"}, cwd: "/proj"}')
+                    key=$(jq -c '{tool_name, tool_input}' <<<"$payload" | sha256sum | cut -c1-64)
+                    redacted="$XDG_RUNTIME_DIR/claude-redact/redacted/01234567-$key"
+                    approved="$XDG_RUNTIME_DIR/claude-redact/approved/01234567-$key"
+                    decision() { jq -r .hookSpecificOutput.permissionDecision <<<"$1"; }
+                    reason() { jq -r .hookSpecificOutput.permissionDecisionReason <<<"$1"; }
+                    # Never redacted: silence.
+                    [ -z "$("$hook" <<<"$payload")" ]
+                    # Redacted before, nobody to ask: the redacted view stands.
+                    jq -cn '{count: 1, rules: "github-pat"}' > "$redacted"
+                    res=$("$hook" <<<"$payload")
+                    [ "$(decision "$res")" = deny ]
+                    reason "$res" | grep -q 'no answerer'
+                    [ ! -e "$approved" ]
+                    # An answerer is attached.
+                    sleep 120 & sleeper=$!
+                    jq -cn --argjson p "$sleeper" '{name: "test", pid: $p}' > "$spool/handlers/test.json"
+                    answer() { # $1 = value, $2 = text; answers the first pending prompt
+                      for _ in $(seq 1 100); do
+                        f=$(find "$spool/pending" -name '*.json' | head -1)
+                        if [ -n "$f" ]; then
+                          [ "$(jq -r .prompt.title "$f")" = "Reveal redacted text to the model" ]
+                          [ "$(jq -r .hook.tool_input.file_path "$f")" = /x ]
+                          id=$(jq -r .id "$f")
+                          jq -cn --arg id "$id" --arg v "$1" --arg t "$2" '{id: $id, value: $v} + (if $t == "" then {} else {text: $t} end)' > "$spool/answers/$id.json.tmp"
+                          mv "$spool/answers/$id.json.tmp" "$spool/answers/$id.json"
+                          exit 0
+                        fi
+                        sleep 0.1
+                      done
+                      exit 1
+                    }
+                    # Allow: the approval is recorded and the hook abstains.
+                    (answer allow "") & answerer=$!
+                    [ -z "$("$hook" <<<"$payload")" ]
+                    wait $answerer
+                    [ -e "$approved" ]
+                    # An approved Read still pending consumption is left alone.
+                    [ -z "$("$hook" <<<"$payload")" ]
+                    rm "$approved"
+                    # Deny with a reason: the reason reaches the model.
+                    (answer deny "not now") & answerer=$!
+                    res=$("$hook" <<<"$payload")
+                    wait $answerer
+                    [ "$(decision "$res")" = deny ]
+                    reason "$res" | grep -q 'kept the text redacted: not now'
+                    [ ! -e "$approved" ]
+                    kill $sleeper
+                    # Garbage in: nothing out.
                     [ -z "$(echo 'not json' | "$hook")" ]
                     touch $out
                   '';

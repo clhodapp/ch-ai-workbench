@@ -14,7 +14,7 @@ let
   # Claude Code's lspServers shape, and the editor's eglot renders the
   # same table, so the two cannot disagree about how to spawn a server.
   languageServers = closure-inputs.ch-emacs-config.languageServerTable pkgs {
-    merman = closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+    merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
   };
 
   # A personal-scope skills-directory plugin: any folder under
@@ -107,6 +107,21 @@ let
   # (display-only; the transcript keeps the token).  Script:
   # lib/claude-tic-check-display-hook.sh.
   claudeTicCheckDisplayHook = import ./lib/claude-tic-check-display-hook.nix { inherit pkgs; };
+
+  # PostToolUse on every tool: the string leaves of the result pass
+  # through gitleaks and a finding replaces what the model sees, with a
+  # note naming the rules (script: lib/claude-redact-hook.sh; design:
+  # docs/development/agent-elisp-isolation.md).
+  claudeRedactHook = import ./lib/claude-redact-hook.nix { inherit pkgs; };
+
+  # PreToolUse on Read, the retry half: an identical Read after a
+  # redaction asks the user through the consent spool whether the model
+  # may see the real text; allow lets that one result through
+  # (script: lib/claude-reveal-hook.sh).
+  claudeRevealHook = import ./lib/claude-reveal-hook.nix {
+    inherit pkgs;
+    claude-consent = claudeConsent;
+  };
 
   # PreToolUse hook on Bash: a command that appears to run git push
   # is denied once with a reminder to confirm that the branch's pull
@@ -396,9 +411,15 @@ in
         tic-check, the Stop hook driven by ticChecks, and
         tic-check-display, the MessageDisplay hook that renders that
         check's verdict lines ("tic-check: clean" / "tic-check: tic")
-        as status lines on screen, and tic-check-edit, the PreToolUse
+        as status lines on screen, tic-check-edit, the PreToolUse
         hook that applies the same table to the text written by Edit,
-        Write, NotebookEdit, and the emacs server's edit verbs. It
+        Write, NotebookEdit, and the emacs server's edit verbs, and
+        redact, the PostToolUse hook that runs every tool result
+        through gitleaks and replaces a recognized secret with
+        [REDACTED:<rule>] before the model sees it, and reveal, the
+        PreToolUse hook on Read that turns an identical re-issue of a
+        redacted Read into a question to the user through the consent
+        spool. It
         also seeds push-pr-check, the PreToolUse hook on Bash that
         denies a command that appears to run git push once with a reminder to
         confirm the branch's pull request is not already merged, and
@@ -568,6 +589,20 @@ in
         matcher = "Edit|Write|NotebookEdit|mcp__emacs__edit-file|mcp__emacs__edit-buffer";
         command = "claude-tic-check-edit-hook";
         package = claudeTicCheckEditHook;
+      };
+      redact = {
+        event = "PostToolUse";
+        command = "claude-redact-hook";
+        package = claudeRedactHook;
+      };
+      # Waits on a human; the deadline lives in the ask (300 s), the
+      # declared timeout is only the liveness backstop above it.
+      reveal = {
+        event = "PreToolUse";
+        matcher = "Read";
+        command = "claude-reveal-hook";
+        package = claudeRevealHook;
+        timeout = 3600;
       };
       push-pr-check = {
         event = "PreToolUse";

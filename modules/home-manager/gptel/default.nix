@@ -14,7 +14,7 @@
 let
   cfg = config.ch-ai-workbench.gptel;
 
-  merman = closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
 in
 {
   options.ch-ai-workbench.gptel = {
@@ -55,6 +55,7 @@ in
       (lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
         (import ../emacs/bundles-spec.nix {
           inherit lib merman;
+          gitleaks = pkgs.gitleaks;
           readInit = name: builtins.readFile ../emacs/inits/${name};
         }).gptel
       )

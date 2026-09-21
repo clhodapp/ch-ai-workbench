@@ -1,6 +1,6 @@
 ---
 name: emacs-tools
-description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, edit-buffer/edit-file, transform, add-comment/list-comments, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers — especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
+description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, edit-buffer/edit-file, transform, add-comment/list-comments, the session-fact tools feature-loaded/hooks/buffer-state/key-binding, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers — especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
 ---
 
 # Emacs agent tools
@@ -14,12 +14,16 @@ do well stays native — these are not mirrors of those.
 Design and rationale: `projects/ch-emacs-config/docs/development/emacs-mcp-agent-tools.md`.
 Safety rules: the `live-emacs-safety` skill (read-only tools are fine
 unasked; `present` and buffer auto-open are consented by design).
-Two server-side filters are structural, not etiquette: writes
+Three server-side rules are structural, not etiquette: writes
 (edit-file, transform, edit-buffer on file-backed buffers) are
-confined to your session's territory — the project you were launched
-in — and eval-elisp/transform accept only elisp the server can prove
-safe (below). A filter refusal is a boundary, not a bug: don't route
-around it; ask the user, who owns the widening knobs.
+confined to your session's territory, the project you were launched
+in; eval-elisp and transform run in a sandboxed child Emacs, not in
+the live session (below); and every tool result passes through
+gitleaks in the live Emacs before it reaches you, so a recognized
+secret arrives as `[REDACTED:<rule>]` with a note appended naming the
+rules. A refusal or a redaction is a boundary, not a bug: don't route
+around it (no reconstructing a value from its context, no editing
+around a placeholder); ask the user, who owns the widening knobs.
 
 ## Conventions
 
@@ -84,7 +88,9 @@ terse labels referencing it. Also for "here's what I found, organized".
   DAGs. Render errors return mmdc's own message — fix the source and
   re-present under the same name.
 - Buffers are named `*agent/<name>*`; reusing a name rewrites the
-  buffer (fine for iterating on the same artifact).
+  buffer (fine for iterating on the same artifact). The overwritten
+  text is not lost: every write is appended to the history store
+  described below.
 - `display: no` writes without raising a window. Display never steals
   focus; the user's display-buffer-alist rules govern placement.
 
@@ -96,7 +102,28 @@ the buffer. Use it for anticipated questions with answers, a glossary,
 a checklist — things read once alongside the reply. Use `present` for
 artifacts the user keeps. Write paragraphs as single long lines; the
 window soft-wraps. Buffers are `*agent/sidebar/<name>*`; reusing a
-name rewrites the sidebar.
+name rewrites the sidebar. A sidebar the user dismisses with `q` is
+gone from the session but stays in the history store below.
+
+## History: presentations survive the buffer
+
+Every `present` and `sidebar` write is appended as a timestamped
+revision to `ch-mcp-server-history-file` (default
+`$XDG_DATA_HOME/Emacs/agent-buffer-history.eld`), so a presentation
+survives being overwritten under the same name, being dismissed, and
+an Emacs daemon restart. The user reaches revisions with
+`ch-mcp-server-history` (`<leader> a h`), which lists them newest
+first and opens the chosen one read-only in a separate
+`*agent-history/...*` buffer, leaving the live buffer alone.
+
+Two consequences for how you write. Content presented under a name you
+reuse is kept, so iterating on an artifact costs the user nothing and
+needs no "superseding the earlier version" note. Mermaid revisions
+store the source rather than the rendered SVG, so a stored diagram is
+re-renderable and the store stays small. Revisions past
+`ch-mcp-server-history-limit` (200) are dropped oldest-first, and a
+body over `ch-mcp-server-history-max-bytes` (1000000) is stored
+truncated with a marker line.
 
 ## edit-buffer / edit-file: the single surgical change
 
@@ -128,19 +155,23 @@ wrap/raise/splice, computed replacements, reindentation) — one short
 form instead of N native edits. Not for one or two ordinary edits;
 native edit tools stay the default.
 
-- Runs your elisp with the buffer current, returns a **unified diff**
-  of what changed — read it; that diff is the verification step.
-- **Gated elisp**: only motion, search, and current-buffer editing
-  functions are accepted (the server's agent-safe registries; the
-  rejection names the offender). No `set-buffer`, no kill ring (use
-  `delete-region`), no `replace-regexp`/`query-replace-regexp` (their
-  replacement strings evaluate embedded elisp) — write the
-  re-search-forward + replace-match loop instead. Computation in the
-  replacement (string ops, `match-string`, arithmetic) is fine.
+- Runs your elisp in the sandboxed child with the buffer's copy
+  current (the same copy eval-elisp sees: the text, the mode from the
+  file name, no buffer-locals, no file), lands the copy's text in the
+  live buffer, and returns a **unified diff** of what changed. Read
+  it; that diff is the verification step.
+- **Any elisp runs; only text lands.** Nothing the form does reaches
+  the live session except the copy's text, which lands only if the
+  buffer did not change meanwhile, is not read-only, and holds no
+  redacted secret. Motion, search, `replace-match`, computed
+  replacements (string ops, `match-string`, arithmetic), and
+  `indent-region` are the useful moves; `save-buffer` and the kill
+  ring do nothing useful there.
 - Refuses buffers with unsaved user modifications (use buffer-diff).
-- Errors restore the buffer untouched.
+- An error in the form lands nothing.
 - Saves to disk by default (`save: no` to stage in-buffer only).
-- Point starts wherever it was: begin with `(goto-char (point-min))`.
+- Point is wherever the last form left it in the copy: begin with
+  `(goto-char (point-min))`.
 - **After a transform, re-read the file before further native edits** —
   the harness requires re-reading files changed outside its own tools.
 
@@ -162,13 +193,66 @@ Recipes:
 (indent-region (point-min) (point-max))
 ```
 
-`eval-elisp` remains the escape hatch for **reading** session state
-the dedicated tools don't cover — variables, buffer facts, window
-layout. It accepts only elisp the server can prove side-effect-free,
-so it is structurally not an editing interface; mutation belongs to
-the edit verbs and transform. If a legitimately innocuous function is
-rejected, the user can add it to
-`ch-mcp-server-agent-safe-functions`.
+## buffer-file / land-buffer-file: edit a buffer with your own tools
+
+For a buffer you would rather work on with ripgrep, sed, or your
+native file tools than with elisp: `buffer-file (name)` writes the
+buffer's text to a file under your territory at
+`.claude/claude-code-sandbox/mcp-copies/<name>` (writable inside the
+sandbox, ignored by git) and returns the path. The text passes through
+gitleaks like every copy; a redacted copy says so and cannot be
+landed. Edit the file, then `land-buffer-file (name, save)` puts its
+text into the buffer and returns the unified diff; it is refused if
+the buffer changed since the file was written (ask for the file
+again), if the buffer is read-only or has a process, or if the
+buffer's own file is outside your territory. The file is removed
+either way, so a stale copy never lands later. Reading the file and
+never landing it is a plain read. Editing the file changes nothing in
+Emacs by itself.
+
+## Session facts: named tools, not eval-elisp
+
+Facts about the live session that are not buffer text come from four
+read-only tools; reach for them before `eval-elisp`. Each returns
+`key: value` lines and never the value of a variable.
+
+- **feature-loaded** (`feature`): is the feature loaded (`featurep`),
+  and is its symbol `fboundp` / `boundp`.
+- **hooks** (`hook`, optional `buffer`): the functions on a hook, the
+  global value plus the buffer-local value when a buffer is named
+  (`t` shows as "run the global hook too"; lambdas print as
+  `<lambda>`, never their bodies).
+- **buffer-state** (`buffer`): file, major mode, enabled minor modes,
+  read-only, modified, size, point as `line:col`, evil state, a
+  terminal's input mode, sensitivity mark, agent visibility.
+- **key-binding** (`keys`, optional `buffer`): what a chord resolves to
+  in the live context of that buffer (default: the buffer in the
+  selected window), as a command, `<keymap (prefix)>`, `<lambda>`, or
+  `unbound`. Under evil the leader is `SPC` in motion state, so write
+  `SPC p p`.
+
+A named buffer passes the same read scope as `buffer-text`: a
+withheld buffer is refused, not described.
+
+`eval-elisp` runs in a sandboxed child Emacs: the same configuration
+as the live session, loaded fresh, plus plain-text copies of the
+buffers you may read, and none of the session's variables,
+environment, or files (no network, and only the Nix store on disk).
+The copies are refreshed before each call and carry the buffer's name
+and text only: the major mode comes from the file name, there are no
+buffer-local values, no processes, and the copy visits no file. A
+buffer the read scope, the sensitivity mark, or the debug-knob latch
+withholds has no copy. A copy in which gitleaks found a token
+has it replaced by `[REDACTED:<rule>]` and is read-only. Use the tool
+for what the configuration and buffer text answer: a default binding,
+a function's definition or docstring, a variable's default, whether a
+mode adds a hook, a computation over a buffer's text. The live
+session's variables and window state are not there; the four tools
+above answer those. A stateful form runs and changes only the child.
+A form past `ch-mcp-server-eval-timeout` (30 s) is a tool error and
+the child is replaced; an error in the child comes back as a tool
+error with its message. Mutation of the session belongs to the edit
+verbs and transform.
 
 ## add-comment / list-comments: the margin, not the page
 

@@ -7,8 +7,9 @@
 ;; (package activation fires the autoload hook).  Covers: registration of
 ;; every tool (which also validates the MCP Parameters docstrings),
 ;; the non-LSP tools end to end on temp files, the auto-open scope
-;; policy, the security filters (client-territory write scope and the
-;; agent-safe elisp gate), and a clean tool error — not a hang — from
+;; policy, the security filters (client-territory write scope, agent
+;; elisp in the sandboxed child), and a clean tool
+;; error, not a hang, from
 ;; the LSP-backed tools when no server is available.
 
 ;;; Code:
@@ -46,6 +47,15 @@ launched where the temp files live."
   `(let ((default-directory temporary-file-directory))
      ,@body))
 
+(defun ch-mcp-tests--random-token ()
+  "A GitHub-token-shaped string gitleaks flags.
+Random, because the stock allowlist drops placeholder-looking ones."
+  (let ((alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"))
+    (concat "ghp_"
+            (apply #'string
+                   (mapcar (lambda (_) (aref alphabet (random 62)))
+                           (number-sequence 1 36))))))
+
 (defun ch-mcp-tests--project-dir (parent &rest children)
   "Create a project directory under PARENT: a `.git' dir plus CHILDREN.
 Returns the project root.  project.el's vc detection is filesystem-only,
@@ -57,6 +67,26 @@ so a bare `.git' directory suffices without a git binary."
       (make-directory (expand-file-name child root) t))
     root))
 
+;; Every `present' and `sidebar' call records a revision of the buffer it
+;; writes.  Point the store at a throwaway file for the whole batch run so
+;; no test, here or added later, writes the real history under
+;; XDG_DATA_HOME.
+(setq ch-mcp-server-history-file
+      (make-temp-file "mcp-tools-test-history" nil ".eld"))
+
+(defmacro ch-mcp-tests--with-history (&rest body)
+  "Run BODY against a history store of its own, empty at entry.
+The session-wide store above keeps tests out of the user's real file;
+this isolates one test's revisions from every other test's."
+  (declare (indent 0))
+  `(let ((ch-mcp-server-history-file (make-temp-file "mcp-history" nil ".eld"))
+         (ch-mcp-server--history nil)
+         (ch-mcp-server--history-loaded nil))
+     (unwind-protect
+         (progn ,@body)
+       (when (file-exists-p ch-mcp-server-history-file)
+         (delete-file ch-mcp-server-history-file)))))
+
 (ert-deftest ch-mcp-tools-all-registered ()
   "Every designed tool is registered under the emacs server id."
   (let ((tools (gethash "emacs" mcp-server-lib--tools)))
@@ -65,15 +95,14 @@ so a bare `.git' directory suffices without a git binary."
                   "diagnostics" "find-references" "find-definition"
                   "symbol-info" "document-outline" "modified-buffers"
                   "buffer-diff" "present" "sidebar" "edit-buffer" "edit-file"
-                  "transform" "add-comment" "list-comments"))
+                  "transform" "buffer-file" "land-buffer-file"
+                  "add-comment" "list-comments"
+                  "feature-loaded" "hooks" "buffer-state" "key-binding"))
       (should (gethash id tools)))
     ;; The disk-writing verb is a separate name from buffer mutation so
     ;; restricted dispatch profiles can deny it structurally; a rejoined
     ;; "edit" would silently re-widen every profile built on the split.
     (should-not (gethash "edit" tools))))
-
-(ert-deftest ch-mcp-tools-eval-elisp ()
-  (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)"))))
 
 (ert-deftest ch-mcp-tools-context-smoke ()
   (let ((context (ch-mcp-server--context)))
@@ -417,38 +446,42 @@ reach disk from here."
         (insert-file-contents file)
         (should (equal (buffer-string) "alpha\n"))))))
 
-(ert-deftest ch-mcp-tools-transform ()
-  (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n")))
-      (find-file-noselect file)
-      (let ((diff (ch-mcp-server--transform
-                   file
-                   (concat "(goto-char (point-min))"
-                           "(while (re-search-forward \"beta\" nil t)"
-                           "  (replace-match \"gamma\"))"))))
-        (should (string-match-p "^-beta" diff))
-        (should (string-match-p "^\\+gamma" diff)))
-      ;; Saved by default: the change reached disk and the buffer is clean.
-      (with-temp-buffer
-        (insert-file-contents file)
-        (should (equal (buffer-string) "alpha\ngamma\n")))
-      (should-not (buffer-modified-p (find-buffer-visiting file))))))
+(ert-deftest ch-mcp-tools-transform-here ()
+  "In `unrestricted' scope the form runs in this Emacs, in the buffer."
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n")))
+        (find-file-noselect file)
+        (let ((diff (ch-mcp-server--transform
+                     file
+                     (concat "(goto-char (point-min))"
+                             "(while (re-search-forward \"beta\" nil t)"
+                             "  (replace-match \"gamma\"))"))))
+          (should (string-match-p "^-beta" diff))
+          (should (string-match-p "^\\+gamma" diff)))
+        ;; Saved by default: the change reached disk and the buffer is clean.
+        (with-temp-buffer
+          (insert-file-contents file)
+          (should (equal (buffer-string) "alpha\ngamma\n")))
+        (should-not (buffer-modified-p (find-buffer-visiting file)))))))
 
-(ert-deftest ch-mcp-tools-transform-no-save ()
-  (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
-      (find-file-noselect file)
-      (let ((diff (ch-mcp-server--transform
-                   file
-                   "(goto-char (point-max)) (insert \"omega\\n\")"
-                   "no")))
-        (should (string-match-p "^\\+omega" diff)))
-      (should (buffer-modified-p (find-buffer-visiting file)))
-      (with-temp-buffer
-        (insert-file-contents file)
-        (should (equal (buffer-string) "alpha\n"))))))
+(ert-deftest ch-mcp-tools-transform-here-no-save ()
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
+        (find-file-noselect file)
+        (let ((diff (ch-mcp-server--transform
+                     file
+                     "(goto-char (point-max)) (insert \"omega\\n\")"
+                     "no")))
+          (should (string-match-p "^\\+omega" diff)))
+        (should (buffer-modified-p (find-buffer-visiting file)))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (should (equal (buffer-string) "alpha\n")))))))
 
 (ert-deftest ch-mcp-tools-transform-refuses-dirty-buffer ()
+  "Unsaved user modifications refuse the transform before either path."
   (ch-mcp-tests--in-territory
     (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
            (buffer (find-file-noselect file)))
@@ -458,25 +491,65 @@ reach disk from here."
       (should-error (ch-mcp-server--transform file "(ignore)")
                     :type 'mcp-server-lib-tool-error))))
 
-(ert-deftest ch-mcp-tools-transform-restores-on-error ()
-  (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
-           (buffer (find-file-noselect file)))
-      (should-error (ch-mcp-server--transform
-                     file
-                     "(goto-char (point-max)) (insert \"junk\") (error \"boom\")")
-                    :type 'mcp-server-lib-tool-error)
-      (with-current-buffer buffer
-        (should (equal (buffer-substring-no-properties (point-min) (point-max))
-                       "alpha\n"))
-        (should-not (buffer-modified-p))))))
+(ert-deftest ch-mcp-tools-transform-here-restores-on-error ()
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
+             (buffer (find-file-noselect file)))
+        (should-error (ch-mcp-server--transform
+                       file
+                       "(goto-char (point-max)) (insert \"junk\") (error \"boom\")")
+                      :type 'mcp-server-lib-tool-error)
+        (with-current-buffer buffer
+          (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                         "alpha\n"))
+          (should-not (buffer-modified-p)))))))
 
-(ert-deftest ch-mcp-tools-transform-no-changes ()
+(ert-deftest ch-mcp-tools-transform-here-no-changes ()
+  (let ((ch-mcp-server-elisp-scope 'unrestricted))
+    (ch-mcp-tests--in-territory
+      (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
+        (find-file-noselect file)
+        (should (equal "No changes"
+                       (ch-mcp-server--transform file "(ignore)")))))))
+
+(ert-deftest ch-mcp-tools-land-text ()
+  "Text lands when the buffer still stands at the tick its copy was taken
+at, as a diff, saved unless asked not to; identical text is no change;
+a buffer that changed meanwhile or is read-only refuses."
   (ch-mcp-tests--in-territory
-    (let* ((file (ch-mcp-tests--temp-file "alpha\n")))
-      (find-file-noselect file)
+    (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n"))
+           (buffer (find-file-noselect file))
+           (tick (buffer-chars-modified-tick buffer)))
       (should (equal "No changes"
-                     (ch-mcp-server--transform file "(ignore)"))))))
+                     (ch-mcp-server--land-text buffer file "alpha\nbeta\n"
+                                               tick nil)))
+      (should (string-match-p
+               "^\\+gamma"
+               (ch-mcp-server--land-text buffer file "alpha\ngamma\n"
+                                         tick "no")))
+      (should (buffer-modified-p buffer))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (equal (buffer-string) "alpha\nbeta\n")))
+      ;; That landing moved the tick, so the old tick is stale.
+      (should-error (ch-mcp-server--land-text buffer file "alpha\ndelta\n"
+                                              tick nil)
+                    :type 'mcp-server-lib-tool-error)
+      (should (string-match-p
+               "^\\+delta"
+               (ch-mcp-server--land-text buffer file "alpha\ndelta\n"
+                                         (buffer-chars-modified-tick buffer)
+                                         nil)))
+      (should-not (buffer-modified-p buffer))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (equal (buffer-string) "alpha\ndelta\n")))
+      (with-current-buffer buffer (setq buffer-read-only t))
+      (should-error (ch-mcp-server--land-text buffer file "x"
+                                              (buffer-chars-modified-tick buffer)
+                                              nil)
+                    :type 'mcp-server-lib-tool-error))))
 
 ;;; Security filters: client-territory write scope
 
@@ -559,83 +632,395 @@ though it never writes disk; non-file buffers stay editable."
                               (ch-mcp-server--edit-file
                                "alpha" "beta" file))))))
 
-;;; Security filters: the agent-safe elisp gate
+;;; Security filters: eval-elisp and transform in the child
 
-(ert-deftest ch-mcp-tools-eval-elisp-gate-allows-reads ()
-  "The read surface stays open: session inspection is the tool's job."
-  (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)")))
-  (should (stringp (ch-mcp-server--eval-elisp "(buffer-name)")))
-  (should (ch-mcp-server--eval-elisp
-           "(let ((n 0)) (dolist (b (buffer-list) n) (setq n (1+ n))))")))
+(ert-deftest ch-mcp-tools-eval-elisp-runs-in-the-child ()
+  "eval-elisp answers from the sandboxed child: the configuration is
+there, this session's state is not, and a stateful form changes only
+the child."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (progn
+        (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)")))
+        (should (equal "t" (ch-mcp-server--eval-elisp
+                            "(featurep 'ch-emacs-config-default)")))
+        ;; A value with no readable form still prints, in the child.
+        (should (string-prefix-p "#<buffer"
+                                 (ch-mcp-server--eval-elisp "(current-buffer)")))
+        ;; This session's withheld buffers and environment are not there
+        ;; (a leading space marks an internal buffer, never copied).
+        (get-buffer-create " ch-mcp-tests-parent-only")
+        (should (equal "nil" (ch-mcp-server--eval-elisp
+                              "(get-buffer \" ch-mcp-tests-parent-only\")")))
+        (should-not (equal (format "%S" (getenv "HOME"))
+                           (ch-mcp-server--eval-elisp "(getenv \"HOME\")")))
+        ;; A stateful form runs, and changes only the child.
+        (should (equal "1" (ch-mcp-server--eval-elisp
+                            "(setq ch-mcp-tests--child-only 1)")))
+        (should-not (boundp 'ch-mcp-tests--child-only)))
+    (ch-mcp-server-child-stop)))
 
-(ert-deftest ch-mcp-tools-eval-elisp-gate-blocks-side-effects ()
-  "Mutation, I/O, and indirect calls are rejected before evaluation,
-naming the offender."
-  (dolist (bad '("(delete-file \"/tmp/x\")"
-                 "(setq some-global-var 1)"
-                 "(funcall (intern \"delete-file\") \"/tmp/x\")"
-                 "(eval '(delete-file \"/tmp/x\"))"
-                 "(shell-command \"true\")"
-                 "(insert \"x\")"))
-    (let ((err (should-error (ch-mcp-server--eval-elisp bad)
-                             :type 'mcp-server-lib-tool-error)))
-      (should (string-match-p "unsafe" (error-message-string err))))))
+(ert-deftest ch-mcp-tools-eval-elisp-child-error-is-a-tool-error ()
+  "An error signalled in the child comes back as a tool error carrying
+the child's message."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (let ((err (should-error (ch-mcp-server--eval-elisp
+                                "(error \"boom %d\" 7)")
+                               :type 'mcp-server-lib-tool-error)))
+        (should (string-match-p "boom 7" (error-message-string err))))
+    (ch-mcp-server-child-stop)))
 
-(ert-deftest ch-mcp-tools-eval-elisp-gate-protects-its-own-knobs ()
-  "Gated elisp can neither set nor bind the filter configuration."
-  (dolist (bad '("(setq ch-mcp-server-elisp-scope 'unrestricted)"
-                 "(let ((ch-mcp-server-elisp-scope 'unrestricted)) (eval '(+ 1 2)))"
-                 "(setq ch-mcp-server-write-scope 'unrestricted)"
-                 "(push 'shell-command ch-mcp-server-agent-safe-functions)"))
-    (should-error (ch-mcp-server--eval-elisp bad)
-                  :type 'mcp-server-lib-tool-error)))
+(ert-deftest ch-mcp-tools-eval-elisp-timeout-discards-the-child ()
+  "A form past the deadline is a tool error, the child is stopped, and
+the next call answers from a fresh one."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (progn
+        (let ((ch-mcp-server-eval-timeout 1))
+          (let ((err (should-error (ch-mcp-server--eval-elisp "(sleep-for 3)")
+                                   :type 'mcp-server-lib-tool-error)))
+            (should (string-match-p "timed out" (error-message-string err)))))
+        (should-not ch-mcp-server--child)
+        (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)"))))
+    (ch-mcp-server-child-stop)))
 
-(ert-deftest ch-mcp-tools-eval-elisp-agent-safe-registry ()
-  "The user-extensible registry admits functions unsafep does not know."
-  (defun ch-mcp-tests--blessed () "blessed")
-  (should-error (ch-mcp-server--eval-elisp "(ch-mcp-tests--blessed)")
-                :type 'mcp-server-lib-tool-error)
-  (let ((ch-mcp-server-agent-safe-functions
-         (cons 'ch-mcp-tests--blessed ch-mcp-server-agent-safe-functions)))
-    (should (equal "\"blessed\""
-                   (ch-mcp-server--eval-elisp "(ch-mcp-tests--blessed)")))))
+(ert-deftest ch-mcp-tools-redact-text ()
+  "A secret is replaced on its reported line; a multi-line match has its
+line range replaced by one placeholder and empty lines."
+  (let ((findings '(((RuleID . "github-pat") (Secret . "ghp_abc")
+                     (StartLine . 1) (EndLine . 1))
+                    ((RuleID . "private-key")
+                     (Secret . "-----BEGIN\nxyz\n-----END")
+                     (StartLine . 3) (EndLine . 5)))))
+    (should (equal (concat "t = [REDACTED:github-pat] ok\nplain\n"
+                           "[REDACTED:private-key]\n\n\ntail")
+                   (ch-mcp-server--redact-text
+                    "t = ghp_abc ok\nplain\n-----BEGIN\nxyz\n-----END\ntail"
+                    findings)))))
+
+(ert-deftest ch-mcp-tools-copy-file-name-is-plain ()
+  "A buffer name becomes one plain file name in the copy directory."
+  (let ((ch-mcp-server--copy-directory "/copies"))
+    (should (equal "/copies/modules%default.nix"
+                   (ch-mcp-server--copy-file-name "modules/default.nix")))
+    (should (equal "/copies/%Messages%"
+                   (ch-mcp-server--copy-file-name "*Messages*")))))
+
+(ert-deftest ch-mcp-tools-eval-elisp-sees-buffer-copies ()
+  "A readable buffer reaches the child as plain text under its name with
+the mode from its file name; a change is re-sent; nothing but text
+crosses; a killed buffer leaves the child."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (ch-mcp-tests--in-territory
+        (let* ((file (ch-mcp-tests--temp-file "(defun one ())\n" ".el"))
+               (buffer (find-file-noselect file))
+               (name (buffer-name buffer)))
+          (should (equal "(emacs-lisp-mode \"(defun one ())\n\")"
+                         (ch-mcp-server--eval-elisp
+                          (format "(with-current-buffer %S (list major-mode (buffer-substring-no-properties (point-min) (point-max))))"
+                                  name))))
+          (with-current-buffer buffer
+            (goto-char (point-max))
+            (insert "(defun two ())\n"))
+          (should (string-match-p
+                   "two"
+                   (ch-mcp-server--eval-elisp
+                    (format "(with-current-buffer %S (buffer-substring-no-properties (point-min) (point-max)))"
+                            name))))
+          ;; The copy visits nothing and is writable.
+          (should (equal "(nil nil)"
+                         (ch-mcp-server--eval-elisp
+                          (format "(with-current-buffer %S (list buffer-file-name buffer-read-only))"
+                                  name))))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (should (equal "nil" (ch-mcp-server--eval-elisp
+                                (format "(get-buffer %S)" name))))))
+    (ch-mcp-server-child-stop)))
+
+(ert-deftest ch-mcp-tools-copies-skip-withheld-buffers ()
+  "A sensitive buffer has no copy, and a buffer marked sensitive after
+its copy was taken leaves the child on the next call."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (progn
+        (with-current-buffer (get-buffer-create "ch-mcp-tests-secret-note")
+          (insert "hush")
+          (setq-local ch-mcp-server-buffer-sensitivity 'sensitive))
+        (with-current-buffer (get-buffer-create "ch-mcp-tests-open-note")
+          (insert "hello"))
+        (should (equal "nil" (ch-mcp-server--eval-elisp
+                              "(get-buffer \"ch-mcp-tests-secret-note\")")))
+        (should (equal "\"hello\""
+                       (ch-mcp-server--eval-elisp
+                        "(with-current-buffer \"ch-mcp-tests-open-note\" (buffer-string))")))
+        (with-current-buffer "ch-mcp-tests-open-note"
+          (setq-local ch-mcp-server-buffer-sensitivity 'sensitive))
+        (should (equal "nil" (ch-mcp-server--eval-elisp
+                              "(get-buffer \"ch-mcp-tests-open-note\")"))))
+    (ch-mcp-server-child-stop)
+    (kill-buffer "ch-mcp-tests-secret-note")
+    (kill-buffer "ch-mcp-tests-open-note")))
+
+(ert-deftest ch-mcp-tools-copies-are-redacted ()
+  "A token gitleaks recognizes is replaced in the child's copy, which is
+read-only; the parent's buffer is untouched."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (let* ((token (ch-mcp-tests--random-token))
+         (name "ch-mcp-tests-leaky"))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create name)
+            (insert "token = " token "\nplain\n"))
+          (let ((copy (ch-mcp-server--eval-elisp
+                       (format "(with-current-buffer %S (list buffer-read-only (buffer-string)))"
+                               name))))
+            (should-not (string-search token copy))
+            (should (string-search "[REDACTED:github-pat]" copy))
+            (should (string-prefix-p "(t " copy)))
+          (should (string-search token (with-current-buffer name (buffer-string))))
+          (should (plist-get (gethash name ch-mcp-server--copies) :redacted)))
+      (ch-mcp-server-child-stop)
+      (kill-buffer name))))
 
 (ert-deftest ch-mcp-tools-eval-elisp-unrestricted-knob ()
-  "The resident user's say-so path: `unrestricted' scope evaluates
-stateful elisp again."
+  "The resident user's say-so path: `unrestricted' scope evaluates in
+this Emacs, ungated."
   (let ((ch-mcp-server-elisp-scope 'unrestricted))
     (should (equal "42" (ch-mcp-server--eval-elisp
                          "(with-temp-buffer (insert \"42\") (string-to-number (buffer-string)))")))))
 
-(ert-deftest ch-mcp-tools-transform-gate-blocks-escapes ()
-  "transform's elisp may move and edit in the target buffer only: no
-shell, no other buffers, no replace-regexp (its replacements evaluate
-embedded elisp), no kill ring."
+(ert-deftest ch-mcp-tools-transform-runs-in-the-child ()
+  "transform runs the form in the child against the copy: any elisp
+runs there, only the text lands (as a diff, saved), and an error in
+the form lands nothing."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unwind-protect
+      (ch-mcp-tests--in-territory
+        (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n"))
+               (buffer (find-file-noselect file)))
+          (let ((diff (ch-mcp-server--transform
+                       file
+                       (concat "(setq ch-mcp-tests--transform-side 1)"
+                               "(goto-char (point-min))"
+                               "(while (re-search-forward \"beta\" nil t)"
+                               "  (replace-match \"gamma\"))"))))
+            (should (string-match-p "^-beta" diff))
+            (should (string-match-p "^\\+gamma" diff)))
+          ;; The form's side effect stayed in the child; the text landed
+          ;; and was saved.
+          (should-not (boundp 'ch-mcp-tests--transform-side))
+          (should-not (buffer-modified-p buffer))
+          (with-temp-buffer
+            (insert-file-contents file)
+            (should (equal (buffer-string) "alpha\ngamma\n")))
+          (let ((err (should-error
+                      (ch-mcp-server--transform
+                       file
+                       "(goto-char (point-max)) (insert \"junk\") (error \"boom\")")
+                      :type 'mcp-server-lib-tool-error)))
+            (should (string-match-p "boom" (error-message-string err))))
+          (with-current-buffer buffer
+            (should (equal (buffer-substring-no-properties (point-min)
+                                                           (point-max))
+                           "alpha\ngamma\n")))
+          ;; The copy the failed form dirtied is re-sent before the next
+          ;; form runs, so an idle form sees clean text.
+          (should (equal "No changes"
+                         (ch-mcp-server--transform file "(ignore)")))))
+    (ch-mcp-server-child-stop)))
+
+(ert-deftest ch-mcp-tools-transform-refuses-redacted-copy ()
+  "A buffer whose copy gitleaks redacted cannot be transformed."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (unwind-protect
+      (ch-mcp-tests--in-territory
+        (let ((file (ch-mcp-tests--temp-file
+                     (concat "token = " (ch-mcp-tests--random-token) "\n"))))
+          (find-file-noselect file)
+          (let ((err (should-error (ch-mcp-server--transform file "(ignore)")
+                                   :type 'mcp-server-lib-tool-error)))
+            (should (string-match-p "redacted" (error-message-string err))))))
+    (ch-mcp-server-child-stop)))
+
+;;; Copies for the CLI
+
+(ert-deftest ch-mcp-tools-buffer-file-and-land ()
+  "A buffer's text goes to a file in the territory's sandbox scratch;
+the edited file's text lands as a diff and is saved; the file is
+consumed, so landing again is refused."
   (ch-mcp-tests--in-territory
-    (let ((file (ch-mcp-tests--temp-file "alpha\n")))
-      (find-file-noselect file)
-      (dolist (bad '("(shell-command \"true\")"
-                     "(set-buffer (other-buffer))"
-                     "(with-current-buffer (other-buffer) (insert \"x\"))"
-                     "(replace-regexp \"a\" \"b\")"
-                     "(kill-region (point-min) (point-max))"
-                     "(save-buffer)"
-                     "(write-region (point-min) (point-max) \"/tmp/out\")"))
-        (let ((err (should-error (ch-mcp-server--transform file bad)
-                                 :type 'mcp-server-lib-tool-error)))
-          (should (string-match-p "unsafe" (error-message-string err)))))
-      ;; And the buffer never moved.
+    (let* ((file (ch-mcp-tests--temp-file "alpha\nbeta\n"))
+           (buffer (find-file-noselect file))
+           (name (buffer-name buffer))
+           (path (ch-mcp-server--buffer-file name)))
+      (should (string-prefix-p
+               (expand-file-name ".claude/claude-code-sandbox/mcp-copies/"
+                                 (ch-mcp-server--client-territory))
+               path))
+      (should (equal "alpha\nbeta\n"
+                     (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (with-temp-file path (insert "alpha\ngamma\n"))
+      (let ((diff (ch-mcp-server--land-buffer-file name)))
+        (should (string-match-p "^-beta" diff))
+        (should (string-match-p "^\\+gamma" diff)))
+      (should-not (file-exists-p path))
+      (should-not (buffer-modified-p buffer))
       (with-temp-buffer
         (insert-file-contents file)
-        (should (equal (buffer-string) "alpha\n"))))))
+        (should (equal (buffer-string) "alpha\ngamma\n")))
+      (should-error (ch-mcp-server--land-buffer-file name)
+                    :type 'mcp-server-lib-tool-error))))
+
+(ert-deftest ch-mcp-tools-land-buffer-file-refuses-stale ()
+  "A buffer that changed after its file was written refuses the landing,
+and the file is consumed."
+  (ch-mcp-tests--in-territory
+    (let* ((file (ch-mcp-tests--temp-file "alpha\n"))
+           (buffer (find-file-noselect file))
+           (name (buffer-name buffer))
+           (path (ch-mcp-server--buffer-file name)))
+      (with-current-buffer buffer
+        (goto-char (point-max))
+        (insert "user\n")
+        (set-buffer-modified-p nil))
+      (with-temp-file path (insert "agent\n"))
+      (should-error (ch-mcp-server--land-buffer-file name)
+                    :type 'mcp-server-lib-tool-error)
+      (should-not (file-exists-p path))
+      (with-current-buffer buffer
+        (should (equal (buffer-substring-no-properties (point-min) (point-max))
+                       "alpha\nuser\n"))))))
+
+(ert-deftest ch-mcp-tools-buffer-file-redacted-cannot-land ()
+  "A copy gitleaks redacted says so, holds no token, and cannot land."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (ch-mcp-tests--in-territory
+    (let* ((token (ch-mcp-tests--random-token))
+           (file (ch-mcp-tests--temp-file (concat "token = " token "\n")))
+           (buffer (find-file-noselect file))
+           (name (buffer-name buffer))
+           (result (ch-mcp-server--buffer-file name))
+           (path (car (split-string result "\n"))))
+      (should (string-match-p "redacted" result))
+      (should-not (string-search
+                   token
+                   (with-temp-buffer (insert-file-contents path) (buffer-string))))
+      (should-error (ch-mcp-server--land-buffer-file name)
+                    :type 'mcp-server-lib-tool-error)
+      (should-not (file-exists-p path)))))
+
+(ert-deftest ch-mcp-tools-buffer-file-refuses-withheld ()
+  "A withheld buffer gets no file."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-hidden-copy")
+    (insert "hush")
+    (setq-local ch-mcp-server-buffer-sensitivity 'sensitive))
+  (unwind-protect
+      (should-error (ch-mcp-server--buffer-file "ch-mcp-tests-hidden-copy")
+                    :type 'mcp-server-lib-tool-error)
+    (kill-buffer "ch-mcp-tests-hidden-copy")))
+
+(ert-deftest ch-mcp-tools-buffer-file-excludes-scratch-from-git ()
+  "In a git checkout, the scratch directory is added to the clone's
+exclude file, with the line the sandbox itself writes."
+  (unless (executable-find "git")
+    (ert-skip "no git to run"))
+  (let ((root (file-name-as-directory (make-temp-file "mcp-scratch" t))))
+    (call-process "git" nil nil nil "init" "-q" root)
+    (let ((default-directory root))
+      (with-current-buffer (get-buffer-create "ch-mcp-tests-scratch-note")
+        (erase-buffer)
+        (insert "hi"))
+      (unwind-protect
+          (progn
+            (ch-mcp-server--buffer-file "ch-mcp-tests-scratch-note")
+            (should (member "/.claude/claude-code-sandbox/"
+                            (split-string
+                             (with-temp-buffer
+                               (insert-file-contents
+                                (expand-file-name ".git/info/exclude" root))
+                               (buffer-string))
+                             "\n"))))
+        (kill-buffer "ch-mcp-tests-scratch-note")))))
+
+;;; Redaction of tool results
+
+(ert-deftest ch-mcp-tools-every-tool-result-is-filtered ()
+  "Every registered tool function carries the result filter, and the
+filter's list is as long as the registration."
+  (should (= (length ch-mcp-server--tool-functions)
+             (hash-table-count (gethash "emacs" mcp-server-lib--tools))))
+  (dolist (fn ch-mcp-server--tool-functions)
+    (should (advice-member-p #'ch-mcp-server--redact-result fn))))
+
+(ert-deftest ch-mcp-tools-results-are-redacted ()
+  "A token in a tool result is replaced and the note names the rule; a
+clean result is returned as it is."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (let ((token (ch-mcp-tests--random-token)))
+    (unwind-protect
+        (progn
+          (with-current-buffer (get-buffer-create "ch-mcp-tests-leaky-result")
+            (erase-buffer)
+            (insert "token = " token "\nplain\n"))
+          (let ((result (ch-mcp-server--buffer-text "ch-mcp-tests-leaky-result")))
+            (should-not (string-search token result))
+            (should (string-search "token = [REDACTED:github-pat]\nplain\n" result))
+            (should (string-search "[gitleaks redacted 1 span: github-pat]" result)))
+          (with-current-buffer (get-buffer-create "ch-mcp-tests-clean-result")
+            (erase-buffer)
+            (insert "plain\n"))
+          (should (equal "plain\n"
+                         (ch-mcp-server--buffer-text "ch-mcp-tests-clean-result"))))
+      (kill-buffer "ch-mcp-tests-leaky-result")
+      (kill-buffer "ch-mcp-tests-clean-result"))))
+
+(ert-deftest ch-mcp-tools-diffs-are-redacted ()
+  "The context lines of an edit's diff pass through gitleaks too."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (ch-mcp-tests--in-territory
+    (let* ((token (ch-mcp-tests--random-token))
+           (file (ch-mcp-tests--temp-file
+                  (concat "token = " token "\nalpha\n"))))
+      (find-file-noselect file)
+      (let ((diff (ch-mcp-server--edit-file "alpha" "beta" file)))
+        (should (string-search "+beta" diff))
+        (should-not (string-search token diff))
+        (should (string-search "[REDACTED:github-pat]" diff))))))
+
+(ert-deftest ch-mcp-tools-eval-elisp-result-is-redacted ()
+  "What eval-elisp returns passes through gitleaks in the parent."
+  (unless (executable-find (car ch-mcp-server-gitleaks-command))
+    (ert-skip "no gitleaks to run"))
+  (let ((ch-mcp-server-elisp-scope 'unrestricted)
+        (token (ch-mcp-tests--random-token)))
+    (let ((result (ch-mcp-server--eval-elisp
+                   (format "(concat \"token = \" %S)" token))))
+      (should-not (string-search token result))
+      (should (string-search "[REDACTED:github-pat]" result)))))
 
 (ert-deftest ch-mcp-tools-knobs-are-risky ()
-  "The filter knobs and registries carry `risky-local-variable', the
-property unsafep keys its binding refusals on."
+  "The filter knobs carry `risky-local-variable', so a file-local
+setting is refused."
   (dolist (var '(ch-mcp-server-write-scope
                  ch-mcp-server-elisp-scope
-                 ch-mcp-server-agent-safe-functions
-                 ch-mcp-server-agent-safe-editing-functions
                  ch-mcp-server-hidden-buffer-names
                  ch-mcp-server-debug-leak-knobs))
     (should (get var 'risky-local-variable))))
@@ -685,6 +1070,139 @@ buffer squatting on the name is refused, not erased."
            '("\\`ch-mcp-tests-secret\\'")))
       (should-not (ch-mcp-server--buffer-readable-p (current-buffer))))))
 
+;;; Read scope: the sensitive-buffer mark and the terminal default
+
+(ert-deftest ch-mcp-tools-buffer-sensitivity-explicit ()
+  "A normal buffer is readable; an explicit `sensitive' withholds it."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-sensitive")
+    (should (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (setq ch-mcp-server-buffer-sensitivity 'sensitive)
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (should (ch-mcp-server--buffer-sensitive-p (current-buffer)))))
+
+(ert-deftest ch-mcp-tools-terminal-sensitive-by-default ()
+  "A ghostel terminal is withheld by default; the toggle exposes and withholds."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-terminal")
+    ;; `derived-mode-p' reads the buffer-local `major-mode', so setting it
+    ;; makes the buffer look like a terminal without the package.
+    (setq-local major-mode 'ghostel-mode)
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (should (ch-mcp-server--buffer-sensitive-p (current-buffer)))
+    (ch-mcp-server-toggle-buffer-sensitive)
+    (should (eq ch-mcp-server-buffer-sensitivity 'exposed))
+    (should (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (ch-mcp-server-toggle-buffer-sensitive)
+    (should (eq ch-mcp-server-buffer-sensitivity 'sensitive))
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))))
+
+(ert-deftest ch-mcp-tools-toggle-works-in-any-buffer ()
+  "The toggle is generic: it withholds a readable buffer and exposes it again."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-not-terminal")
+    (should (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (ch-mcp-server-toggle-buffer-sensitive)
+    (should (eq ch-mcp-server-buffer-sensitivity 'sensitive))
+    (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+    (ch-mcp-server-toggle-buffer-sensitive)
+    (should (eq ch-mcp-server-buffer-sensitivity 'exposed))
+    (should (ch-mcp-server--buffer-readable-p (current-buffer)))))
+
+(ert-deftest ch-mcp-tools-mode-line-shows-visibility ()
+  "The mode-line fragment says hidden for a withheld buffer and visible
+otherwise, tracks the toggle, and is installed in `global-mode-string'."
+  (should (memq ch-mcp-server--mode-line-construct global-mode-string))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-modeline-plain")
+    (should (equal (ch-mcp-server--mode-line)
+                   ch-mcp-server-mode-line-visible))
+    (ch-mcp-server-toggle-buffer-sensitive)
+    (should (equal (ch-mcp-server--mode-line)
+                   ch-mcp-server-mode-line-withheld)))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-modeline-term")
+    (setq-local major-mode 'ghostel-mode)
+    (should (equal (ch-mcp-server--mode-line)
+                   ch-mcp-server-mode-line-withheld))))
+
+(ert-deftest ch-mcp-tools-terminal-modes-beyond-ghostel ()
+  "Every mode in `ch-mcp-server-terminal-modes' is gated, others are not.
+Uses `define-derived-mode' so the parent chain is real (what
+`derived-mode-p' walks), covering a comint-derived shell as well as the
+listed modes; a mode outside the list stays readable."
+  ;; A throwaway comint child, to prove `comint-mode' in the list gates
+  ;; shells/REPLs derived from it without each being listed.
+  (define-derived-mode ch-mcp-tests--fake-shell-mode comint-mode "FakeShell")
+  (define-derived-mode ch-mcp-tests--plain-mode fundamental-mode "Plain")
+  (let ((ch-mcp-server-terminal-modes '(comint-mode eshell-mode term-mode)))
+    (with-current-buffer (get-buffer-create "ch-mcp-tests-fake-shell")
+      (ch-mcp-tests--fake-shell-mode)
+      (should (ch-mcp-server--terminal-p))
+      (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+      (ch-mcp-server-toggle-buffer-sensitive)
+      (should (ch-mcp-server--buffer-readable-p (current-buffer))))
+    (with-current-buffer (get-buffer-create "ch-mcp-tests-plain")
+      (ch-mcp-tests--plain-mode)
+      (should-not (ch-mcp-server--terminal-p))
+      (should (ch-mcp-server--buffer-readable-p (current-buffer))))))
+
+(ert-deftest ch-mcp-tools-sensitive-file-patterns-are-a-default ()
+  "A buffer visiting a matching file name is sensitive by default, with
+the state still unset; the toggle exposes it like a terminal."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-authinfo")
+    (setq ch-mcp-server-buffer-sensitivity nil)
+    (let ((buffer-file-name (expand-file-name ".authinfo" temporary-file-directory)))
+      (should (ch-mcp-server--buffer-sensitive-p (current-buffer)))
+      (should-not ch-mcp-server-buffer-sensitivity)
+      (should-not (ch-mcp-server--buffer-readable-p (current-buffer)))
+      (ch-mcp-server-toggle-buffer-sensitive)
+      (should (eq ch-mcp-server-buffer-sensitivity 'exposed))
+      (should (ch-mcp-server--buffer-readable-p (current-buffer)))))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-env")
+    (setq ch-mcp-server-buffer-sensitivity nil)
+    (let ((buffer-file-name (expand-file-name ".env.local" temporary-file-directory)))
+      (should (ch-mcp-server--buffer-sensitive-p (current-buffer)))))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-plain")
+    (setq ch-mcp-server-buffer-sensitivity nil)
+    (let ((buffer-file-name (expand-file-name "notes.txt" temporary-file-directory)))
+      (should-not (ch-mcp-server--buffer-sensitive-p (current-buffer))))))
+
+(ert-deftest ch-mcp-tools-buffer-sensitivity-safe-local-variable ()
+  "A file cannot expose itself via a file-local variable: the
+`safe-local-variable' guard admits only nil (unset)."
+  (should (eq (get 'ch-mcp-server-buffer-sensitivity 'safe-local-variable)
+              #'null))
+  (should (safe-local-variable-p 'ch-mcp-server-buffer-sensitivity nil))
+  (should-not (safe-local-variable-p 'ch-mcp-server-buffer-sensitivity 'exposed))
+  (should-not (safe-local-variable-p 'ch-mcp-server-buffer-sensitivity 'sensitive)))
+
+(ert-deftest ch-mcp-tools-buffer-text-refuses-sensitive ()
+  "buffer-text throws for a flagged buffer and for a default terminal."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-bt-sensitive")
+    (erase-buffer)
+    (insert "secret\n")
+    (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+  (let ((err (should-error
+              (ch-mcp-server--buffer-text "ch-mcp-tests-bt-sensitive")
+              :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err))))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-bt-terminal")
+    (erase-buffer)
+    (insert "prompt$\n")
+    (setq-local major-mode 'ghostel-mode))
+  (let ((err (should-error
+              (ch-mcp-server--buffer-text "ch-mcp-tests-bt-terminal")
+              :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-list-buffers-omits-sensitive ()
+  "list-buffers omits a flagged buffer and a default terminal."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-lb-sensitive")
+    (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-lb-terminal")
+    (setq-local major-mode 'ghostel-mode))
+  (get-buffer-create "ch-mcp-tests-lb-visible")
+  (let ((listing (ch-mcp-server--list-buffers)))
+    (should (string-match-p "ch-mcp-tests-lb-visible" listing))
+    (should-not (string-match-p "ch-mcp-tests-lb-sensitive" listing))
+    (should-not (string-match-p "ch-mcp-tests-lb-terminal" listing))))
+
 (ert-deftest ch-mcp-tools-buffer-text-refuses-unreadable ()
   "buffer-text throws on an out-of-scope file buffer, and still throws the
 missing-buffer error for a name with no buffer."
@@ -714,6 +1232,131 @@ missing-buffer error for a name with no buffer."
         (should-not (string-match-p "gptel-log" listing))
         (should-not (string-match-p (regexp-quote (buffer-name buffer))
                                     listing))))))
+
+;;; Session facts: the four named read-only tools
+
+(ert-deftest ch-mcp-tools-feature-loaded ()
+  "A loaded feature reports loaded; a made-up one does not; a defined
+function reports fboundp, and no value is ever printed."
+  (let ((result (ch-mcp-server--feature-loaded "ert")))
+    (should (string-match-p "^feature: ert$" result))
+    (should (string-match-p "^loaded: yes$" result)))
+  (let ((result (ch-mcp-server--feature-loaded "ch-mcp-tests-no-such-feature")))
+    (should (string-match-p "^loaded: no$" result))
+    (should (string-match-p "^fboundp: no$" result))
+    (should (string-match-p "^boundp: no$" result)))
+  (let ((result (ch-mcp-server--feature-loaded "ch-mcp-server--capped")))
+    (should (string-match-p "^loaded: no$" result))
+    (should (string-match-p "^fboundp: yes$" result)))
+  ;; A variable reports boundp, and only that: never its value.
+  (defvar ch-mcp-tests--secret-var "hunter2")
+  (let ((result (ch-mcp-server--feature-loaded "ch-mcp-tests--secret-var")))
+    (should (string-match-p "^boundp: yes$" result))
+    (should-not (string-match-p "hunter2" result))))
+
+(defvar ch-mcp-tests--hook nil
+  "A hook variable for the hooks tool tests.")
+
+(defun ch-mcp-tests--hook-fn ()
+  "A named function to put on `ch-mcp-tests--hook'."
+  nil)
+
+(ert-deftest ch-mcp-tools-hooks-global ()
+  "A named function shows by name, a lambda as <lambda> with no body."
+  (let ((ch-mcp-tests--hook (list #'ch-mcp-tests--hook-fn
+                                  (lambda () 'closed-over-secret))))
+    (let ((result (ch-mcp-server--hooks "ch-mcp-tests--hook")))
+      (should (string-match-p "^hook: ch-mcp-tests--hook$" result))
+      (should (string-match-p "^global: ch-mcp-tests--hook-fn$" result))
+      (should (string-match-p "^global: <lambda>$" result))
+      (should-not (string-match-p "closed-over-secret" result)))))
+
+(ert-deftest ch-mcp-tools-hooks-unbound-symbol-is-refused ()
+  (let ((err (should-error (ch-mcp-server--hooks "ch-mcp-tests-no-such-hook")
+                           :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "not a bound variable" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-hooks-buffer-local ()
+  "A buffer-local value lists its functions and the t that means run the
+global hook too."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-hooks-local")
+    (add-hook 'ch-mcp-tests--hook #'ch-mcp-tests--hook-fn nil t))
+  (let ((result (ch-mcp-server--hooks "ch-mcp-tests--hook"
+                                      "ch-mcp-tests-hooks-local")))
+    (should (string-match-p "^buffer: ch-mcp-tests-hooks-local$" result))
+    (should (string-match-p "^local: ch-mcp-tests--hook-fn$" result))
+    (should (string-match-p "^local: t (run the global hook too)$" result))))
+
+(ert-deftest ch-mcp-tools-hooks-refuses-withheld-buffer ()
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-hooks-sensitive")
+    (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+  (let ((err (should-error (ch-mcp-server--hooks "find-file-hook"
+                                                 "ch-mcp-tests-hooks-sensitive")
+                           :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-buffer-state ()
+  "A file-visiting buffer reports its mode, size, point, and visibility."
+  (ch-mcp-tests--in-territory
+    (let* ((file (ch-mcp-tests--temp-file "one\ntwo\nthree\n"))
+           (buffer (find-file-noselect file)))
+      (with-current-buffer buffer
+        (goto-char (point-min))
+        (forward-line 1)
+        (forward-char 2))
+      (let ((result (ch-mcp-server--buffer-state (buffer-name buffer))))
+        (should (string-match-p (format "^buffer: %s$"
+                                        (regexp-quote (buffer-name buffer)))
+                                result))
+        (should (string-match-p (format "^file: %s$" (regexp-quote file))
+                                result))
+        (should (string-match-p "^major-mode: [a-z-]+-mode$" result))
+        (should (string-match-p "^minor-modes: " result))
+        (should (string-match-p "^read-only: no$" result))
+        (should (string-match-p "^modified: no$" result))
+        (should (string-match-p "^size: 14$" result))
+        (should (string-match-p "^point: 2:3$" result))
+        (should (string-match-p "^evil-state: " result))
+        (should (string-match-p "^input-mode: none$" result))
+        (should (string-match-p "^sensitivity: unset$" result))
+        (should (string-match-p "^agent-visible: yes$" result))))))
+
+(ert-deftest ch-mcp-tools-buffer-state-refuses-terminal ()
+  "A terminal is withheld from buffer-state like every other read tool."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-state-terminal")
+    (setq-local major-mode 'ghostel-mode))
+  (let ((err (should-error
+              (ch-mcp-server--buffer-state "ch-mcp-tests-state-terminal")
+              :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "sensitive" (error-message-string err))))
+  (let ((err (should-error (ch-mcp-server--buffer-state "ch-mcp-tests-no-such")
+                           :type 'mcp-server-lib-tool-error)))
+    (should (string-match-p "No buffer named" (error-message-string err)))))
+
+(ert-deftest ch-mcp-tools-key-binding ()
+  "A bound chord resolves to a command symbol; a nonsense chord does not
+error."
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-keys")
+    (fundamental-mode))
+  (let ((result (ch-mcp-server--key-binding "C-x C-f" "ch-mcp-tests-keys")))
+    (should (string-match-p "^keys: C-x C-f$" result))
+    (should (string-match-p "^buffer: ch-mcp-tests-keys$" result))
+    (should (string-match-p "^binding: [a-z][a-z0-9/-]*$" result))
+    (should-not (string-match-p "^binding: unbound$" result)))
+  (let ((result (ch-mcp-server--key-binding "C-c C-M-S-q" "ch-mcp-tests-keys")))
+    (should (string-match-p "^binding: \\(unbound\\|<keymap (prefix)>\\)$"
+                            result)))
+  ;; A prefix key is named as one.
+  (should (string-match-p "^binding: <keymap (prefix)>$"
+                          (ch-mcp-server--key-binding "C-x" "ch-mcp-tests-keys")))
+  ;; No buffer named: the selected window's buffer answers.
+  (should (string-match-p "^binding: " (ch-mcp-server--key-binding "C-x C-f"))))
+
+(ert-deftest ch-mcp-tools-key-binding-refuses-withheld-buffer ()
+  (with-current-buffer (get-buffer-create "ch-mcp-tests-keys-sensitive")
+    (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+  (should-error (ch-mcp-server--key-binding "C-x C-f" "ch-mcp-tests-keys-sensitive")
+                :type 'mcp-server-lib-tool-error))
 
 ;;; Read scope: the debug-knob latch
 
@@ -812,5 +1455,161 @@ The latch keeps module-level markers; tests must not leak them."
                     (lambda (w)
                       (eq w #'ch-mcp-server--log-knob-watcher))
                     watchers))))))
+
+
+(ert-deftest ch-mcp-tools-history-records-every-write ()
+  "Each present is a revision of its own, so a superseded one survives."
+  (ch-mcp-tests--with-history
+    (ch-mcp-server--present "ert-hist" "# v1" "markdown" "no")
+    (ch-mcp-server--present "ert-hist" "# v2" "markdown" "no")
+    (ch-mcp-server--sidebar "ert-hist-side" "# QA" "no")
+    ;; Force a read back from disk rather than trusting the cache.
+    (setq ch-mcp-server--history nil
+          ch-mcp-server--history-loaded nil)
+    (let ((history (ch-mcp-server--history-load)))
+      (should (= (length history) 3))
+      ;; Newest first.
+      (should (equal (plist-get (nth 0 history) :name)
+                     "*agent/sidebar/ert-hist-side*"))
+      (should (equal (plist-get (nth 1 history) :content) "# v2"))
+      (should (equal (plist-get (nth 2 history) :content) "# v1")))))
+
+(ert-deftest ch-mcp-tools-history-stores-mermaid-source ()
+  "A mermaid revision keeps the source, not the rendered SVG."
+  (skip-unless (executable-find "mmdc"))
+  (ch-mcp-tests--with-history
+    (ch-mcp-server--present "ert-hist-mmd" "graph LR\n a --> b" "mermaid" "no")
+    (let ((revision (car (ch-mcp-server--history-load))))
+      (should (equal (plist-get revision :mode) "mermaid"))
+      (should (equal (plist-get revision :content) "graph LR\n a --> b")))))
+
+(ert-deftest ch-mcp-tools-history-caps-revisions ()
+  "The oldest revisions fall off once the limit is reached."
+  (ch-mcp-tests--with-history
+    (let ((ch-mcp-server-history-limit 2))
+      (dolist (n '("1" "2" "3"))
+        (ch-mcp-server--history-record "*agent/ert-cap*" n "markdown"))
+      (setq ch-mcp-server--history nil
+            ch-mcp-server--history-loaded nil)
+      (let ((history (ch-mcp-server--history-load)))
+        (should (= (length history) 2))
+        (should (equal (mapcar (lambda (r) (plist-get r :content)) history)
+                       '("3" "2")))))))
+
+(ert-deftest ch-mcp-tools-history-truncates-on-bytes ()
+  "An oversized body is cut to the byte limit without splitting a character."
+  (ch-mcp-tests--with-history
+    (let ((ch-mcp-server-history-max-bytes 10))
+      ;; Two bytes per character in UTF-8, so ten bytes is five of them.
+      (ch-mcp-server--history-record "*agent/ert-big*" (make-string 50 ?é)
+                                     "markdown")
+      (let ((content (plist-get (car (ch-mcp-server--history-load)) :content)))
+        (should (string-prefix-p (make-string 5 ?é) content))
+        (should (string-match-p "truncated" content))))))
+
+(ert-deftest ch-mcp-tools-history-survives-a-corrupt-store ()
+  "A store that will not read starts an empty history instead of signalling.
+Presenting must not become a tool error because the file was truncated."
+  (ch-mcp-tests--with-history
+    (with-temp-file ch-mcp-server-history-file (insert "((:name broken"))
+    (setq ch-mcp-server--history nil
+          ch-mcp-server--history-loaded nil)
+    (should-not (ch-mcp-server--history-load))
+    (ch-mcp-server--present "ert-hist-corrupt" "# fresh" "markdown" "no")
+    (setq ch-mcp-server--history nil
+          ch-mcp-server--history-loaded nil)
+    (should (= (length (ch-mcp-server--history-load)) 1))))
+
+(ert-deftest ch-mcp-tools-history-picker-opens-a-separate-buffer ()
+  "Reviewing a revision must not overwrite the live *agent/...* buffer."
+  (ch-mcp-tests--with-history
+    (ch-mcp-server--present "ert-hist-pick" "# old" "markdown" "no")
+    (ch-mcp-server--present "ert-hist-pick" "# new" "markdown" "no")
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read)
+                   ;; Take the second (older) candidate.
+                   (lambda (_prompt collection &rest _)
+                     (nth 1 (all-completions "" collection))))
+                  ((symbol-function 'pop-to-buffer) #'ignore))
+          (ch-mcp-server-history)
+          (with-current-buffer "*agent-history/*agent/ert-hist-pick**"
+            (should (string-match-p "old" (buffer-string)))
+            (should buffer-read-only))
+          ;; The live buffer still holds the newest presentation.
+          (with-current-buffer "*agent/ert-hist-pick*"
+            (should (string-match-p "new" (buffer-string)))))
+      (when-let* ((buffer (get-buffer "*agent-history/*agent/ert-hist-pick**")))
+        (kill-buffer buffer)))))
+
+(ert-deftest ch-mcp-tools-history-picker-reaches-duplicate-labels ()
+  "Two revisions that label identically must both be selectable.
+Same buffer, same minute, same first line: without a distinguishing
+suffix the completion alist would resolve both to the newer one."
+  (ch-mcp-tests--with-history
+    (cl-letf (((symbol-function 'current-time) (lambda () '(26000 0 0 0))))
+      (ch-mcp-server--history-record "*agent/ert-dup*" "same\nfirst" "markdown")
+      (ch-mcp-server--history-record "*agent/ert-dup*" "same\nsecond" "markdown"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'completing-read)
+                   ;; The older of the two identical-looking candidates.
+                   (lambda (_prompt collection &rest _)
+                     (nth 1 (all-completions "" collection))))
+                  ((symbol-function 'pop-to-buffer) #'ignore))
+          (ch-mcp-server-history)
+          (with-current-buffer "*agent-history/*agent/ert-dup**"
+            (should (string-match-p "first" (buffer-string)))))
+      (when-let* ((buffer (get-buffer "*agent-history/*agent/ert-dup**")))
+        (kill-buffer buffer)))))
+
+;;; The child
+
+(ert-deftest ch-mcp-tools-config-key ()
+  "The configuration identity is a non-empty string, stable across calls."
+  (let ((key (ch-mcp-server--config-key)))
+    (should (stringp key))
+    (should-not (string-empty-p key))
+    (should (equal key (ch-mcp-server--config-key)))))
+
+(ert-deftest ch-mcp-tools-child-bootstrap-shape ()
+  "The bootstrap is one progn that loads the configuration and unhooks
+eglot-ensure; the unhooking must stay in the form the child evaluates."
+  (should (eq (car ch-mcp-server--child-bootstrap) 'progn))
+  (let ((text (format "%S" ch-mcp-server--child-bootstrap)))
+    (should (string-match-p "ch-emacs-config-default" text))
+    (should (string-match-p "eglot-ensure" text))))
+
+(defun ch-mcp-tests--bwrap-usable-p ()
+  "Whether bwrap is present and can create a user namespace here.
+The jail needs one; the nix build sandbox denies it, so the lifecycle
+test skips there and runs for real outside it."
+  (and (executable-find "bwrap")
+       (eq 0 (call-process "bwrap" nil nil nil "--ro-bind" "/" "/" "true"))))
+
+(ert-deftest ch-mcp-tools-child-lifecycle ()
+  "Spawn, bootstrap, reuse, and stop of the sandboxed child.
+The child answers arithmetic, has the configuration loaded, carries no
+eglot-ensure on a mode hook, and has a real HOME in the jail; a second
+ensure returns the same connection; stop leaves nothing live."
+  (unless (ch-mcp-tests--bwrap-usable-p)
+    (ert-skip "bwrap cannot create a user namespace here"))
+  ;; The config load is slow; give the spawn room.
+  (let ((ch-mcp-server-child-spawn-timeout 120)
+        (conn nil))
+    (unwind-protect
+        (progn
+          (setq conn (ch-mcp-server--child-ensure))
+          (should (parenting-connection-live-p conn))
+          (should (equal 3 (parenting-eval conn '(+ 1 2))))
+          (should (eq t (parenting-eval
+                         conn '(featurep 'ch-emacs-config-default))))
+          (should-not (parenting-eval
+                       conn '(memq 'eglot-ensure nix-ts-mode-hook)))
+          (should (eq t (parenting-eval
+                         conn '(file-directory-p (getenv "HOME")))))
+          (should (eq conn (ch-mcp-server--child-ensure))))
+      (ch-mcp-server-child-stop))
+    (should-not ch-mcp-server--child)
+    (should-not ch-mcp-server--child-key)
+    (should-not (parenting-connection-live-p conn))))
 
 ;;; mcp-tools-ert.el ends here

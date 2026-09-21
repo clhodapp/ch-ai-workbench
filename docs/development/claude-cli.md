@@ -416,6 +416,21 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   seen/`, so the identical re-issue abstains (legitimate use costs one
   retry) while a rewritten re-issue is a new hash and is checked on
   its own.
+- **A PostToolUse hook replaces what the model sees.** Its
+  `hookSpecificOutput.updatedToolOutput` stands in for the tool result
+  before it reaches the model, for built-in and MCP tools alike; the
+  value must keep the tool's output shape (Read's is `{type, file:
+  {content, filePath, numLines, startLine, totalLines}}`, Bash's
+  carries `stdout` and `stderr`). Probe-verified 2.1.259 (2026-09-20):
+  a hook that rewrote Read's `file.content` to a sentinel produced a
+  model reply carrying only the sentinel, and the original text
+  appeared nowhere in the stream-json transcript. `additionalContext`
+  adds a string to the model's context beside the result; `decision:
+  "block"` only adds its reason beside the original, which the model
+  still sees. The claude-code module's `redact` hook
+  (`claude-redact-hook`, PostToolUse on every tool) stands on this: the
+  result's string leaves pass through gitleaks and a finding is
+  replaced in place with a note.
 - **A deny is also a checklist gate.** The same module's
   `claude-push-pr-check-hook` (matcher `Bash`) denies a command that
   appears to run `git push` (the word `git`, any global options such

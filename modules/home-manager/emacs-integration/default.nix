@@ -72,7 +72,7 @@ let
       pkgs.gawk
       pkgs.gnugrep
       pkgs.jq
-      closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman
+      closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman
     ];
     text = builtins.readFile ./claude-mermaid-display-hook.sh;
   };
@@ -145,6 +145,11 @@ in
 
     ch-ai-workbench.claude-code.skills = lib.mkIf cfg.skill.enable {
       emacs-tools.source = ../emacs/skills/emacs-tools;
+      # Terminals are sensitive by default (the MCP server withholds them
+      # until the user exposes one); this skill tells the agent what it
+      # can read and how the user grants access, so it is gated with the
+      # rest of the MCP-server documentation.
+      ghostel-terminals.source = ../emacs/skills/ghostel-terminals;
     };
 
     ch-ai-workbench.claude-code.hooks =

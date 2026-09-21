@@ -11,6 +11,7 @@
   lib,
   readInit,
   merman,
+  gitleaks,
 }:
 {
   emacs = {
@@ -87,19 +88,27 @@
     };
 
     # Needs collab-comments from the `emacs` group for its comment-thread
-    # tools.
+    # tools. Carries parenting itself: the sandboxed child Emacs is
+    # spawned from this init, so a configuration with only this group
+    # has it too.
     mcp-server = {
       enable = true;
-      # The renderer is appended to this bundle's own init rather than to
-      # the configuration's, so the `defvar` above it is in scope when the
-      # file compiles. The init's bare-name default finds an mmdc only if
-      # something else installed one.
+      # The programs the init spawns are appended to this bundle's own
+      # init rather than to the configuration-wide init, so the `defvar`s
+      # above them are in scope when the file compiles. The bare-name
+      # defaults in the init find a program only if something else
+      # installed one.
       init = readInit "mcp-server.el" + ''
 
         (setq ch-mcp-server-mermaid-command
               (list "${lib.getExe merman}" "mmdc"))
+        (setq ch-mcp-server-gitleaks-command
+              (list "${lib.getExe gitleaks}"))
       '';
-      packages = epkgs: _: [ epkgs.mcp-server-lib ];
+      packages = epkgs: _: [
+        epkgs.mcp-server-lib
+        epkgs.parenting
+      ];
     };
   };
 }

@@ -22,7 +22,7 @@
 let
   cfg = config.ch-ai-workbench.claude;
 
-  merman = closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
 
   # The editor's package scope, read from its module rather than rebuilt:
   # the bridge below is built against the same Emacs the editor
@@ -75,6 +75,7 @@ in
       lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
         (import ../emacs/bundles-spec.nix {
           inherit lib merman;
+          gitleaks = pkgs.gitleaks;
           readInit = name: builtins.readFile ../emacs/inits/${name};
         }).claude;
 

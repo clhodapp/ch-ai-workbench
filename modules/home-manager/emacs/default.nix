@@ -19,7 +19,7 @@
 let
   cfg = config.ch-ai-workbench.emacs;
 
-  merman = closure-inputs.merman.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
 in
 {
   options.ch-ai-workbench.emacs = {
@@ -51,6 +51,7 @@ in
       lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
         (import ./bundles-spec.nix {
           inherit lib merman;
+          gitleaks = pkgs.gitleaks;
           readInit = name: builtins.readFile ./inits/${name};
         }).emacs;
   };

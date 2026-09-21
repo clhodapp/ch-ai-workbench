@@ -7,7 +7,8 @@
 ;; (warm LSP, unsaved buffer state, user attention, the editing engine),
 ;; positions in as 1-based file/line/col, locations out as grep-format
 ;; lines, results capped with true totals.  Server-side security filters
-;; (client-territory write scope, the agent-safe elisp gate) extend the
+;; (client-territory write scope, agent elisp confined to a sandboxed
+;; child Emacs) extend the
 ;; consent-gate design (workspace docs/development/consent-gate.md): the
 ;; MCP server is a side-channel around the CLI's permission machinery,
 ;; so the filters live here, where every client passes.
@@ -20,7 +21,6 @@
   (require 'project)
   (require 'imenu)
   (require 'which-func)
-  (require 'unsafep)
   (require 'markdown-ts-mode))
 ;; The compile-time requires above make these known to the byte compiler,
 ;; but each is loaded lazily at runtime (mode activation, package
@@ -60,8 +60,17 @@
 (declare-function collab-comments-render-thread "collab-comments")
 (declare-function collab-comments-threads "collab-comments")
 (declare-function collab-comments-all-threads "collab-comments")
-(declare-function unsafep "unsafep")
+;; The child's lifecycle loads parenting on first spawn.
+(declare-function parenting-spawn "parenting-parent")
+(declare-function parenting-eval "parenting-parent")
+(declare-function parenting-shutdown "parenting")
+(declare-function parenting-connection-live-p "parenting")
 (defvar safe-functions)
+;; Read by the session-fact tools through `bound-and-true-p' only: evil
+;; and ghostel are never required here, so a session without either
+;; reports "none".
+(defvar evil-state)
+(defvar ghostel--input-mode)
 
 (defvar ch-mcp-server-auto-open-scope 'session-projects
   "Scope of files the MCP tools may open into new buffers.
@@ -82,50 +91,15 @@ gated elisp cannot reach it.")
 (put 'ch-mcp-server-write-scope 'risky-local-variable t)
 
 (defvar ch-mcp-server-elisp-scope 'agent-safe
-  "Which elisp the MCP elisp-taking tools will evaluate.
-`agent-safe' (the default) accepts only forms `unsafep' proves free of
-side effects, extended by `ch-mcp-server-agent-safe-functions'
-(and, for `transform', `ch-mcp-server-agent-safe-editing-functions').
-`unrestricted' disables the gate — the resident user's explicit say-so
-for a stateful co-driving session; gated elisp cannot reach it.")
+  "Where the MCP elisp-taking tools evaluate.
+`agent-safe' (the default): `eval-elisp' and `transform' run in the
+sandboxed child Emacs (see \"The child\"), which holds the
+configuration and copies of the readable buffers and nothing else of
+this session; only text comes back, through the checks of
+`ch-mcp-server--land-text'.  `unrestricted' runs both in this Emacs:
+the resident user's explicit say-so for a stateful co-driving
+session.")
 (put 'ch-mcp-server-elisp-scope 'risky-local-variable t)
-
-(defvar ch-mcp-server-agent-safe-functions '(error ignore)
-  "Functions the elisp gate accepts beyond Emacs's own safety metadata.
-`unsafep' already admits everything marked `pure', `side-effect-free',
-or `safe-function'; list here functions that are innocuous for agents
-to call but carry no such marking.  Seeds: `error' so gated code can
-signal validation failures, `ignore' as the no-op it is.  Extended by
-the resident user (or by modes declaring their own functions); gated
-elisp cannot grow it.")
-(put 'ch-mcp-server-agent-safe-functions 'risky-local-variable t)
-
-(defvar ch-mcp-server-agent-safe-editing-functions
-  '(save-excursion save-restriction widen narrow-to-region
-    goto-char move-to-column
-    forward-char backward-char forward-line forward-word backward-word
-    forward-sexp backward-sexp up-list down-list backward-up-list
-    beginning-of-line end-of-line beginning-of-defun end-of-defun
-    search-forward search-backward re-search-forward re-search-backward
-    looking-at looking-back
-    skip-chars-forward skip-chars-backward
-    skip-syntax-forward skip-syntax-backward
-    insert delete-region delete-char replace-match
-    indent-region indent-according-to-mode
-    upcase-region downcase-region capitalize-region
-    sort-lines sort-fields fill-region fill-paragraph
-    delete-trailing-whitespace delete-blank-lines delete-indentation)
-  "Buffer-editing functions the elisp gate accepts for `transform' only.
-Motion, search, and current-buffer mutation: enough for the transform
-recipes (computed replacements, sexp-aware edits, reindentation)
-without a path out of the buffer.  Deliberately absent: `set-buffer'
-and friends (mutation must stay in the transform's target buffer),
-the kill ring (`kill-region', `kill-sexp' — they overwrite the user's
-clipboard; use `delete-region'), and the `replace-regexp' family
-(their replacement strings evaluate embedded `\\,(...)' elisp,
-bypassing this gate).  Extended by the resident user; gated elisp
-cannot grow it.")
-(put 'ch-mcp-server-agent-safe-editing-functions 'risky-local-variable t)
 
 (defvar ch-mcp-server-hidden-buffer-names '("\\`\\*gptel-log\\*\\'")
   "Regexps for non-file buffer names the MCP read tools must never expose.
@@ -236,33 +210,6 @@ CLI-side workdir sandbox the MCP server would otherwise bypass."
      (format "%s is outside this session's territory %s (the project of the client's launch directory); MCP writes are confined to it (ch-mcp-server-write-scope)"
              file (ch-mcp-server--client-territory)))))
 
-(defun ch-mcp-server--gate-elisp (form what editing)
-  "Throw a tool error unless FORM passes the agent elisp safety gate.
-WHAT names the tool for the error message.  With EDITING, the
-buffer-editing registry is allowed too (the `transform' case).
-The gate (`ch-mcp-server-elisp-scope') accepts only forms
-`unsafep' proves harmless given Emacs's own safety metadata plus the
-agent-safe registries; everything else — mutation, I/O, indirect
-calls — is rejected before evaluation."
-  (when (eq ch-mcp-server-elisp-scope 'agent-safe)
-    (require 'unsafep)
-    (let* ((safe-functions
-            (if (eq safe-functions t)
-                t
-              (append ch-mcp-server-agent-safe-functions
-                      (and editing
-                           ch-mcp-server-agent-safe-editing-functions)
-                      safe-functions)))
-           (reason (unsafep form)))
-      (when reason
-        (mcp-server-lib-tool-throw
-         (format "%s rejected as unsafe: %S. In agent-safe scope only elisp provably free of side effects runs (unsafep over Emacs's safety metadata plus the ch-mcp-server-agent-safe%s registries). %s"
-                 what reason
-                 (if editing "(-editing)" "")
-                 (if editing
-                     "Stick to motion, search, and current-buffer editing functions; anything else is the resident user's to allow."
-                   "Reads are fine; for edits use edit-file, edit-buffer, or transform.")))))))
-
 (defun ch-mcp-server--maybe-revert (buffer)
   "Revert BUFFER when it is unmodified but stale against its file.
 Without this, tools reading buffer state quietly lie after files change
@@ -304,24 +251,186 @@ Unvisited files are opened (booting LSP via the usual mode hooks) when
        (format "%s is not visited and lies outside the client territory and every session project (auto-open scope: %s)"
                file ch-mcp-server-auto-open-scope))))))
 
+;;; Buffer sensitivity: one per-buffer state, with a default by kind
+
+(defvar ch-mcp-server-buffer-sensitivity nil
+  "This buffer's sensitivity to the agent: nil, `sensitive', or `exposed'.
+A sensitive buffer is withheld from the agent: the read predicate
+\(`ch-mcp-server--buffer-sensitive-p') refuses it before any other test,
+so no read tool returns it and it is omitted from listings.
+
+nil means unset, and the default decides
+\(`ch-mcp-server--default-sensitive-p'): sensitive for a terminal
+\(`ch-mcp-server-terminal-modes') or a buffer visiting a file whose name
+matches `ch-mcp-server-sensitive-file-patterns', not for anything else.
+`sensitive' and `exposed' are explicit overrides in either direction,
+so a terminal or `.env' the user trusts can be exposed and an ordinary
+buffer holding a secret can be withheld.  Set by the toggle
+\(`ch-mcp-server-toggle-buffer-sensitive') or by
+`ch-mcp-server-visit-sensitive'; never by a file-local variable, so a
+file being read cannot expose itself.")
+(make-variable-buffer-local 'ch-mcp-server-buffer-sensitivity)
+;; A file may not set this via a file-local: `null' is the only accepted
+;; value, so a file can at most re-assert nil (unset), never set
+;; `exposed' on itself.
+(put 'ch-mcp-server-buffer-sensitivity 'safe-local-variable #'null)
+
+(defvar ch-mcp-server-terminal-modes
+  '(ghostel-mode comint-mode term-mode vterm-mode eshell-mode)
+  "Major modes whose buffers are terminals, sensitive by default.
+A buffer whose major mode derives from any of these is withheld from
+the agent unless its `ch-mcp-server-buffer-sensitivity' is `exposed',
+since a terminal's text is whatever ran in it and may include echoed
+secrets.
+`comint-mode' is the base of `shell-mode' and many REPLs, so matching
+by `derived-mode-p' covers those without listing each.  The user runs
+terminals in ghostel; the rest are here so a stray `shell'/`term'/
+`eshell'/`vterm' is gated the same way rather than left readable.
+Extended by the resident user; gated elisp cannot reach it.")
+(put 'ch-mcp-server-terminal-modes 'risky-local-variable t)
+
+(defun ch-mcp-server--terminal-p (&optional buffer)
+  "Whether BUFFER (default current) is a terminal.
+A terminal is a buffer whose major mode derives from one in
+`ch-mcp-server-terminal-modes'."
+  (with-current-buffer (or buffer (current-buffer))
+    (apply #'derived-mode-p ch-mcp-server-terminal-modes)))
+
+(defvar ch-mcp-server-sensitive-file-patterns
+  '("/\\.authinfo\\(?:\\.gpg\\)?\\'"
+    "\\.gpg\\'"
+    "\\.age\\'"
+    "/\\.env\\(?:\\.[^/]*\\)?\\'")
+  "Regexps for file names whose buffers are sensitive by default.
+A buffer visiting a file whose name matches any entry is withheld from
+the agent unless its `ch-mcp-server-buffer-sensitivity' is `exposed',
+the same way a terminal is; the match is part of the default
+\(`ch-mcp-server--default-sensitive-p'), so it needs no hook and holds
+however the buffer came to visit the file.
+Each regexp is matched against the full file name (so the leading `/'
+anchors on a path segment boundary, `\\'' on the end).  Seeds:
+`.authinfo' and `.authinfo.gpg', any `.gpg' or `.age' file, and `.env'
+and `.env.*'.  Extended by the resident user; gated elisp cannot reach
+it.")
+(put 'ch-mcp-server-sensitive-file-patterns 'risky-local-variable t)
+
+(defun ch-mcp-server--default-sensitive-p ()
+  "Whether the current buffer is sensitive by default.
+Sensitive when it is a terminal (`ch-mcp-server-terminal-modes') or
+visits a file whose name matches `ch-mcp-server-sensitive-file-patterns';
+not otherwise.  This is what an unset
+`ch-mcp-server-buffer-sensitivity' falls back to."
+  (or (ch-mcp-server--terminal-p)
+      (and buffer-file-name
+           (seq-some (lambda (re) (string-match-p re buffer-file-name))
+                     ch-mcp-server-sensitive-file-patterns)
+           t)))
+
+(defun ch-mcp-server--buffer-sensitive-p (buffer)
+  "Whether BUFFER must be withheld from the agent as sensitive.
+The effective state of `ch-mcp-server-buffer-sensitivity': an explicit
+`sensitive' or `exposed' wins; unset falls back to
+`ch-mcp-server--default-sensitive-p'."
+  (with-current-buffer buffer
+    (pcase ch-mcp-server-buffer-sensitivity
+      ('sensitive t)
+      ('exposed nil)
+      (_ (ch-mcp-server--default-sensitive-p)))))
+
+(defun ch-mcp-server-visit-sensitive (filename)
+  "Visit FILENAME with its buffer marked sensitive before its content shows.
+Like `find-file', but sets `ch-mcp-server-buffer-sensitivity' to
+`sensitive' in the resulting buffer, so the buffer is withheld from the
+agent the moment it exists, for a file the user knows is sensitive and
+no pattern in `ch-mcp-server-sensitive-file-patterns' anticipated."
+  (interactive "FVisit sensitive file: ")
+  (let ((buffer (find-file filename)))
+    (with-current-buffer buffer
+      (setq ch-mcp-server-buffer-sensitivity 'sensitive))
+    buffer))
+
+(defun ch-mcp-server-toggle-buffer-sensitive ()
+  "Toggle this buffer's sensitivity to the agent.
+Flips the effective state (`ch-mcp-server--buffer-sensitive-p'): a
+withheld buffer becomes `exposed', a readable one becomes `sensitive'.
+Works in any buffer; in a terminal, which starts sensitive, the first
+press exposes it.  This is the quick per-buffer override of the
+defaults."
+  (interactive)
+  (setq ch-mcp-server-buffer-sensitivity
+        (if (ch-mcp-server--buffer-sensitive-p (current-buffer))
+            'exposed
+          'sensitive))
+  (force-mode-line-update)
+  (message "Buffer %s the agent"
+           (if (eq ch-mcp-server-buffer-sensitivity 'sensitive)
+               "withheld from"
+             "exposed to")))
+
+;;; Mode-line indicator: can the agent see this buffer?
+
+(defvar ch-mcp-server-mode-line-withheld " agent:hidden"
+  "Mode-line text shown in a buffer the agent cannot read.")
+
+(defvar ch-mcp-server-mode-line-visible " agent:visible"
+  "Mode-line text shown in a buffer the agent can read.")
+
+(defconst ch-mcp-server--mode-line-construct
+  '(:eval (ch-mcp-server--mode-line))
+  "Entry added to `global-mode-string' by this init.")
+
+(defun ch-mcp-server--mode-line ()
+  "Mode-line fragment for the current buffer's visibility to the agent.
+Reflects the two buffer-intrinsic gates: the sensitivity state
+\(`ch-mcp-server--buffer-sensitive-p') and the debug-knob latch on the
+log buffers (`ch-mcp-server--log-buffer-blocked-p').  The read scope
+\(client territory) is a fact about the calling client, so a mode line
+cannot show it and it is left out; a buffer marked visible here can
+still be refused to a client whose territory excludes its file."
+  (let ((buffer (current-buffer)))
+    (if (or (ch-mcp-server--buffer-sensitive-p buffer)
+            (ch-mcp-server--log-buffer-blocked-p buffer))
+        (propertize ch-mcp-server-mode-line-withheld 'face 'warning)
+      ch-mcp-server-mode-line-visible)))
+
+(unless global-mode-string
+  (setq global-mode-string '("")))
+(unless (memq ch-mcp-server--mode-line-construct global-mode-string)
+  (setq global-mode-string
+        (append global-mode-string
+                (list ch-mcp-server--mode-line-construct))))
+
+;; The quick key for the toggle, in the shared `<leader> a' ("ai")
+;; prefix that gptel, gptel-agent, and claude-queue each bind their own
+;; keys into.  `a t' is free there.
+(declare-function ch/leader-prefix-title "evil")
+(with-eval-after-load 'evil
+  (ch/leader-prefix-title "a" "ai")
+  (evil-global-set-key 'motion (kbd "<leader> a t")
+                       #'ch-mcp-server-toggle-buffer-sensitive))
+
 ;;; Buffer read scope: readability predicate plus the debug-knob latch
 
 (defun ch-mcp-server--buffer-readable-p (buffer)
   "Whether the agent may read BUFFER's contents or see it in a listing.
-A file-visiting buffer is readable exactly when its file passes the
-auto-open read scope (`ch-mcp-server--file-in-scope-p'), tying read
-scope to open scope through one rule.  A buffer without a file is readable
-unless its name marks it internal (a leading space, Emacs's own
-convention, and where the HTTP response buffers live) or matches
-`ch-mcp-server-hidden-buffer-names'.  Terminals stay visible."
-  (let ((file (buffer-file-name buffer)))
-    (if file
-        (ch-mcp-server--file-in-scope-p file)
-      (let ((name (buffer-name buffer)))
-        (not (or (null name)
-                 (string-prefix-p " " name)
-                 (seq-some (lambda (re) (string-match-p re name))
-                           ch-mcp-server-hidden-buffer-names)))))))
+A sensitive buffer (`ch-mcp-server--buffer-sensitive-p': the
+per-buffer mark, or a terminal not explicitly exposed) is never
+readable, before any other test.  Otherwise a file-visiting buffer is
+readable exactly when its file passes the auto-open read scope
+(`ch-mcp-server--file-in-scope-p'), tying read scope to open scope
+through one rule.  A buffer without a file is readable unless its name
+marks it internal (a leading space, Emacs's own convention, and where
+the HTTP response buffers live) or matches
+`ch-mcp-server-hidden-buffer-names'."
+  (and (not (ch-mcp-server--buffer-sensitive-p buffer))
+       (let ((file (buffer-file-name buffer)))
+         (if file
+             (ch-mcp-server--file-in-scope-p file)
+           (let ((name (buffer-name buffer)))
+             (not (or (null name)
+                      (string-prefix-p " " name)
+                      (seq-some (lambda (re) (string-match-p re name))
+                                ch-mcp-server-hidden-buffer-names))))))))
 
 ;; The debug-knob latch.  Each guarded log buffer carries a taint-start
 ;; marker: the position of the earliest still-present text written while a
@@ -434,6 +543,9 @@ The two gates are independent; a buffer must pass both."
   "Throw a tool error unless the agent may read BUFFER; else return BUFFER.
 For the by-name resolvers: an out-of-scope or hidden buffer and a
 latched log buffer are both refused, each with its own message."
+  (when (ch-mcp-server--buffer-sensitive-p buffer)
+    (mcp-server-lib-tool-throw
+     (format "Buffer %s is withheld as sensitive" (buffer-name buffer))))
   (unless (ch-mcp-server--buffer-readable-p buffer)
     (mcp-server-lib-tool-throw
      (format "Buffer %s is not readable (outside scope)" (buffer-name buffer))))
@@ -491,18 +603,22 @@ latched log buffer are both refused, each with its own message."
 (defun ch-mcp-server--eval-elisp (elisp)
   "Evaluate ELISP and return the value of the last form, printed with %S.
 
-Gated: in the default `agent-safe' scope only elisp provably free of
-side effects is accepted (see `ch-mcp-server--gate-elisp'), so
-this is a read-only escape hatch — inspecting variables, buffer state,
-and session facts the dedicated tools don't cover.  Mutation belongs
-to the edit verbs and `transform'.
+In the default `agent-safe' scope the forms run in the sandboxed child
+Emacs (see `ch-mcp-server--child-eval'): the same configuration as
+this session, plain-text copies of the buffers the agent may read
+(refreshed first, secrets redacted), and none of this session's
+variables, environment, or files, so a stateful form changes only the
+child.  Facts about the live session that are not buffer text come
+from the named read-only tools.  In `unrestricted' scope the forms
+run in this Emacs, ungated.
 
 MCP Parameters:
   elisp - Emacs Lisp source text; multiple forms allowed, evaluated in order"
   (mcp-server-lib-with-error-handling
     (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)")))))
-      (ch-mcp-server--gate-elisp form "eval-elisp" nil)
-      (format "%S" (eval form t)))))
+      (if (eq ch-mcp-server-elisp-scope 'unrestricted)
+          (format "%S" (eval form t))
+        (ch-mcp-server--child-eval form)))))
 
 (defun ch-mcp-server--context ()
   "Summarize the state of the interactive Emacs session.
@@ -907,6 +1023,371 @@ MCP Parameters:
                       diff)))
               (delete-file temp))))))))
 
+;;; Session facts
+
+;; Facts about the live session that are not buffer text (whether a
+;; feature is loaded, what sits on a hook, a buffer's mode and state,
+;; what a key resolves to), each answered by a small named read-only
+;; tool (docs/development/agent-elisp-isolation.md, "What runs where").
+;; The tools return facts, never arbitrary variable values: reading an
+;; arbitrary global is the confidentiality hole an open evaluator opens.
+;; Anything that names a buffer passes the same read scope as the text
+;; tools, so a withheld buffer is refused here as everywhere else.
+
+(defun ch-mcp-server--yes-no (value)
+  "\"yes\" when VALUE is non-nil, else \"no\"."
+  (if value "yes" "no"))
+
+(defun ch-mcp-server--named-buffer (name)
+  "The live buffer called NAME the agent may read, or a tool error.
+The by-name resolver the session-fact tools share: the missing-buffer
+message the text tools use, then `ch-mcp-server--buffer-accessible-or-throw'."
+  (ch-mcp-server--buffer-accessible-or-throw
+   (or (get-buffer name)
+       (mcp-server-lib-tool-throw (format "No buffer named %s" name)))))
+
+(defun ch-mcp-server--function-label (function)
+  "FUNCTION as a printable name: a symbol's name, else <lambda>.
+An anonymous function may close over data, so its body is never
+printed; the special hook value t is rendered as its meaning."
+  (cond ((eq function t) "t (run the global hook too)")
+        ((symbolp function) (symbol-name function))
+        (t "<lambda>")))
+
+(defun ch-mcp-server--hook-functions (value)
+  "The functions in hook VALUE as a list.
+A hook variable may hold a single function instead of a list."
+  (cond ((null value) nil)
+        ((functionp value) (list value))
+        ((listp value) value)
+        (t (list value))))
+
+(defun ch-mcp-server--feature-loaded (feature)
+  "Whether FEATURE is loaded, and whether its symbol is fboundp or boundp.
+
+A session fact the agent cannot get by reading buffer text: `featurep'
+on FEATURE, plus `fboundp' and `boundp' on the same symbol for
+convenience.  Only the three facts are returned, never the value of a
+variable.
+
+MCP Parameters:
+  feature - a feature or library name, e.g. ch-evil-ghostel"
+  (mcp-server-lib-with-error-handling
+    (let ((symbol (intern-soft (string-trim feature))))
+      (format "feature: %s\nloaded: %s\nfboundp: %s\nboundp: %s"
+              (string-trim feature)
+              (ch-mcp-server--yes-no (and symbol (featurep symbol)))
+              (ch-mcp-server--yes-no (and symbol (fboundp symbol)))
+              (ch-mcp-server--yes-no (and symbol (boundp symbol)))))))
+
+(defun ch-mcp-server--hooks (hook &optional buffer)
+  "The functions on HOOK: its global value, and the local value in BUFFER.
+
+Each function is printed by name; an anonymous function prints as
+<lambda> (its body may close over data).  In the local value, t means
+the global hook runs too and is shown as a line saying so.  Refuses a
+symbol that is not a bound variable, and a BUFFER the agent may not
+read.
+
+MCP Parameters:
+  hook - a hook variable name, e.g. find-file-hook
+  buffer - name of a live buffer whose local value to show as well"
+  (mcp-server-lib-with-error-handling
+    (let* ((name (string-trim hook))
+           (symbol (intern-soft name))
+           (buffer-name (ch-mcp-server--opt buffer))
+           (target (and buffer-name
+                        (ch-mcp-server--named-buffer buffer-name))))
+      (unless (and symbol (boundp symbol))
+        (mcp-server-lib-tool-throw
+         (format "%s is not a bound variable" name)))
+      (let ((global (ch-mcp-server--hook-functions (default-value symbol)))
+            (local (and target
+                        (local-variable-p symbol target)
+                        (ch-mcp-server--hook-functions
+                         (buffer-local-value symbol target))))
+            (lines nil))
+        (push (format "hook: %s" name) lines)
+        (if global
+            (dolist (function global)
+              (push (format "global: %s" (ch-mcp-server--function-label function))
+                    lines))
+          (push "global: (none)" lines))
+        (when target
+          (push (format "buffer: %s" (buffer-name target)) lines)
+          (cond
+           ((not (local-variable-p symbol target))
+            (push "local: (no buffer-local value)" lines))
+           ((null local)
+            (push "local: (none)" lines))
+           (t
+            (dolist (function local)
+              (push (format "local: %s" (ch-mcp-server--function-label function))
+                    lines)))))
+        (ch-mcp-server--capped (nreverse lines) nil "lines")))))
+
+(defvar ch-mcp-server-minor-mode-limit 40
+  "How many enabled minor modes `buffer-state' lists before truncating.")
+
+(defun ch-mcp-server--buffer-state (buffer)
+  "Non-text facts about the live buffer named BUFFER, one per line.
+
+File, major mode, enabled minor modes, read-only and modified flags,
+size, point as line:col (1-based, as the position tools report), the
+evil state, a terminal's input mode, the sensitivity mark, and whether
+the agent may see the buffer.  Refuses a buffer the agent may not
+read, so a withheld buffer yields no facts.
+
+MCP Parameters:
+  buffer - name of a live buffer, as listed by the list-buffers tool"
+  (mcp-server-lib-with-error-handling
+    (let ((target (ch-mcp-server--named-buffer buffer)))
+      (with-current-buffer target
+        (let* ((modes (seq-filter (lambda (mode)
+                                    (and (boundp mode) (symbol-value mode)))
+                                  minor-mode-list))
+               (total (length modes))
+               (limit ch-mcp-server-minor-mode-limit)
+               (shown (mapconcat #'symbol-name (seq-take modes limit) " ")))
+          (format (concat "buffer: %s\n"
+                          "file: %s\n"
+                          "major-mode: %s\n"
+                          "minor-modes: %s\n"
+                          "read-only: %s\n"
+                          "modified: %s\n"
+                          "size: %d\n"
+                          "point: %d:%d\n"
+                          "evil-state: %s\n"
+                          "input-mode: %s\n"
+                          "sensitivity: %s\n"
+                          "agent-visible: %s")
+                  (buffer-name)
+                  (or buffer-file-name "none")
+                  major-mode
+                  (if (> total limit)
+                      (format "%s ... %d more (%d total)"
+                              shown (- total limit) total)
+                    shown)
+                  (ch-mcp-server--yes-no buffer-read-only)
+                  (ch-mcp-server--yes-no (buffer-modified-p))
+                  (buffer-size)
+                  (line-number-at-pos (point))
+                  (1+ (current-column))
+                  (or (bound-and-true-p evil-state) "none")
+                  (or (bound-and-true-p ghostel--input-mode) "none")
+                  (or ch-mcp-server-buffer-sensitivity "unset")
+                  (ch-mcp-server--yes-no
+                   (ch-mcp-server--buffer-accessible-p target))))))))
+
+(defun ch-mcp-server--binding-label (binding)
+  "BINDING, the result of `key-binding', as a printable line.
+A command symbol prints by name, a prefix as <keymap (prefix)>, an
+anonymous command as <lambda>, a keyboard macro as <macro>, and
+nothing (or a key sequence longer than any binding) as unbound."
+  (cond ((or (null binding) (numberp binding)) "unbound")
+        ((keymapp binding) "<keymap (prefix)>")
+        ((symbolp binding) (symbol-name binding))
+        ((or (stringp binding) (vectorp binding)) "<macro>")
+        ((functionp binding) "<lambda>")
+        (t (format "<%s>" (type-of binding)))))
+
+(defun ch-mcp-server--key-binding (keys &optional buffer)
+  "What KEYS resolve to in BUFFER (default: the buffer in the selected window).
+
+The live answer, with every active keymap in that buffer's context
+\(major and minor modes, evil's state maps): a command symbol, <keymap
+\(prefix)> for a prefix, <lambda> for an anonymous command, or unbound.
+Under evil the leader is SPC in motion state, so write a leader
+binding as SPC p p, not <leader> p p.  Refuses a named BUFFER the
+agent may not read.
+
+MCP Parameters:
+  keys - a key description as kbd reads it, e.g. SPC p p or C-c C-t
+  buffer - name of a live buffer to resolve in (default: the buffer in
+      the selected window)"
+  (mcp-server-lib-with-error-handling
+    (let* ((buffer-name (ch-mcp-server--opt buffer))
+           (target (if buffer-name
+                       (ch-mcp-server--named-buffer buffer-name)
+                     (window-buffer (selected-window))))
+           (key (condition-case err
+                    (kbd keys)
+                  (error (mcp-server-lib-tool-throw
+                          (format "Cannot read key description %S: %s"
+                                  keys (error-message-string err)))))))
+      (with-current-buffer target
+        ;; Built newest-first and reversed at the end.
+        (let ((lines (list (format "buffer: %s" (buffer-name))
+                           (format "keys: %s" (key-description key)))))
+          (when (featurep 'evil)
+            (push (format "evil-state: %s"
+                          (or (bound-and-true-p evil-state) "none"))
+                  lines))
+          (push (format "binding: %s"
+                        (ch-mcp-server--binding-label (key-binding key)))
+                lines)
+          (mapconcat #'identity (nreverse lines) "\n"))))))
+
+;;; Agent buffer history
+
+;; `present' and `sidebar' write into a buffer named for a slug and
+;; erase whatever was there.  Two things are lost that way: a
+;; presentation superseded under the same name, and every presentation
+;; at all when the Emacs daemon rotates.  Each write is therefore
+;; appended to a store on disk as a timestamped revision, and
+;; `ch-mcp-server-history' reads them back.  The store is the record;
+;; the live buffer is a view of its newest revision.
+
+(defcustom ch-mcp-server-history-file
+  (expand-file-name "Emacs/agent-buffer-history.eld"
+                    (or (getenv "XDG_DATA_HOME")
+                        (expand-file-name "~/.local/share")))
+  "File holding the revision history of agent presentation buffers.
+Data rather than configuration, so it follows the other persisted
+state (savehist, save-place) under XDG_DATA_HOME instead of the user
+Emacs directory."
+  :type 'file
+  :group 'ch-emacs-config)
+
+(defcustom ch-mcp-server-history-limit 200
+  "Number of revisions kept in `ch-mcp-server-history-file'.
+Oldest revisions past this count are dropped on the next write.  The
+cap is global rather than per name: a session that presents one buffer
+fifty times should not push out fifty other buffers' history."
+  :type 'integer
+  :group 'ch-emacs-config)
+
+(defcustom ch-mcp-server-history-max-bytes 1000000
+  "Largest revision body stored, in bytes.
+Bodies over this size are stored truncated, with a marker line, so one
+oversized presentation cannot make the store unreadable.  The limit sits
+above the documents actually presented, a long design document running
+to a few hundred kilobytes, and below a mermaid render gone wrong, which
+is an SVG that can reach megabytes."
+  :type 'integer
+  :group 'ch-emacs-config)
+
+(defvar ch-mcp-server--history nil
+  "Cached revision list, newest first, or nil when not yet loaded.
+Each element is a plist: :name buffer name, :time an Emacs time value,
+:mode the presentation mode string, :content the body.")
+
+(defvar ch-mcp-server--history-loaded nil
+  "Whether `ch-mcp-server--history' reflects the file on disk.")
+
+(defun ch-mcp-server--history-load ()
+  "Return the revision list, reading the store on first use."
+  (unless ch-mcp-server--history-loaded
+    (setq ch-mcp-server--history
+          (when (file-readable-p ch-mcp-server-history-file)
+            ;; A truncated or hand-edited store must not break
+            ;; presenting; an unreadable file starts an empty history.
+            (ignore-errors
+              (with-temp-buffer
+                (insert-file-contents ch-mcp-server-history-file)
+                (goto-char (point-min))
+                (read (current-buffer)))))
+          ch-mcp-server--history-loaded t))
+  ch-mcp-server--history)
+
+(defun ch-mcp-server--history-record (name content mode)
+  "Append a revision of buffer NAME holding CONTENT in MODE to the store.
+Returns nil.  Every failure is swallowed: history is a convenience, and
+a full disk must not turn a presentation into a tool error."
+  (ignore-errors
+    (let* ((body (if (> (string-bytes content) ch-mcp-server-history-max-bytes)
+                     ;; Cut on the byte count the limit is expressed in,
+                     ;; then decode back, discarding a multibyte
+                     ;; character the cut landed inside.
+                     (concat (decode-coding-string
+                              (substring (encode-coding-string content 'utf-8)
+                                         0 ch-mcp-server-history-max-bytes)
+                              'utf-8 t)
+                             "\n\n[truncated by ch-mcp-server-history-max-bytes]")
+                   content))
+           (revision (list :name name
+                           :time (current-time)
+                           :mode mode
+                           :content body))
+           (history (cons revision (ch-mcp-server--history-load))))
+      (setq ch-mcp-server--history
+            (seq-take history ch-mcp-server-history-limit))
+      (make-directory (file-name-directory ch-mcp-server-history-file) t)
+      (with-temp-file ch-mcp-server-history-file
+        (let ((print-length nil)
+              (print-level nil))
+          (prin1 ch-mcp-server--history (current-buffer))))))
+  nil)
+
+(defun ch-mcp-server--history-label (revision)
+  "A completing-read line for REVISION: time, buffer name, first line."
+  (let* ((content (or (plist-get revision :content) ""))
+         (first-line (car (split-string content "\n")))
+         (summary (string-trim (or first-line ""))))
+    (format "%s  %-28s  %s"
+            (format-time-string "%Y-%m-%d %H:%M" (plist-get revision :time))
+            (or (plist-get revision :name) "?")
+            (truncate-string-to-width summary 60))))
+
+(defun ch-mcp-server-history ()
+  "Pick a stored agent presentation revision and show it read-only.
+Candidates are every revision in `ch-mcp-server-history-file', newest
+first, labelled with the time, the buffer name, and the first line of
+the body.  The chosen revision opens in its own buffer rather than the
+live *agent/...* one, so reviewing history never overwrites what an
+agent last presented."
+  (interactive)
+  (setq ch-mcp-server--history-loaded nil)
+  (let ((history (ch-mcp-server--history-load)))
+    (unless history
+      (user-error "No agent presentation history in %s"
+                  ch-mcp-server-history-file))
+    (let* (;; Two revisions of one buffer written in the same minute
+           ;; with the same first line label identically, and `assoc'
+           ;; would then reach only the newer.  The index makes every
+           ;; candidate distinct without being what the eye reads.
+           (index 0)
+           (candidates
+            (mapcar (lambda (revision)
+                      (setq index (1+ index))
+                      (cons (format "%s  #%d"
+                                    (ch-mcp-server--history-label revision)
+                                    index)
+                            revision))
+                    history))
+           ;; The labels lead with a timestamp and the list is already
+           ;; newest first; keep that order rather than letting
+           ;; completion sort it alphabetically.
+           (completion-table
+            (lambda (string predicate action)
+              (if (eq action 'metadata)
+                  '(metadata (display-sort-function . identity)
+                             (cycle-sort-function . identity))
+                (complete-with-action action candidates string predicate))))
+           (choice (completing-read "Agent revision: " completion-table nil t))
+           (revision (cdr (assoc choice candidates)))
+           (buffer (get-buffer-create
+                    (format "*agent-history/%s*"
+                            (plist-get revision :name)))))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (or (plist-get revision :content) "")))
+        (if (equal (plist-get revision :mode) "diff")
+            (ch-mcp-server--set-major-mode #'diff-mode)
+          (ch-mcp-server--set-major-mode #'markdown-ts-mode)
+          (visual-line-mode 1))
+        (setq buffer-read-only t)
+        (set-buffer-modified-p nil)
+        (goto-char (point-min)))
+      (pop-to-buffer buffer))))
+
+;; `<leader> a' is the ai prefix the gptel and claude-queue bundles also
+;; bind under; h for history.  Motion state covers visual state too.
+(declare-function evil-global-set-key "evil-core")
+(with-eval-after-load 'evil
+  (evil-global-set-key 'motion (kbd "<leader> a h") #'ch-mcp-server-history))
+
 ;;; Presenting to the user
 
 (defvar ch-mcp-server-mermaid-timeout 30
@@ -919,6 +1400,14 @@ Input, output, and rendering flags are appended.  The home-manager
 module points this at the nix-installed merman (the same drv the
 language-server table spawns); the bare-name default only works when
 an mmdc is on PATH.")
+
+(defvar ch-mcp-server-gitleaks-command '("gitleaks")
+  "Command list prefix for running gitleaks.
+The copies sent to the child are run through it, with the subcommand
+and flags appended.  The
+home-manager module points this at the nix-installed gitleaks from the
+pinned nixpkgs, so the rule set moves with the pin; the bare-name
+default only works when a gitleaks is on PATH.")
 
 (defun ch-mcp-server--render-mermaid (source)
   "Render mermaid SOURCE to an SVG data string via the mmdc CLI.
@@ -1039,6 +1528,10 @@ MCP Parameters:
              (ch-mcp-server--set-major-mode #'fundamental-mode)))
           (set-buffer-modified-p nil)
           (goto-char (point-min)))
+        ;; Store the mermaid source rather than the rendered SVG: the
+        ;; source is what a later reader can re-render or edit, and an
+        ;; SVG blob would blow past the body size cap for no gain.
+        (ch-mcp-server--history-record (buffer-name buffer) content mode)
         (if (equal display "no")
             (format "Wrote %s (not displayed)" (buffer-name buffer))
           (display-buffer buffer)
@@ -1106,6 +1599,7 @@ MCP Parameters:
         (ch-emacs-config-sidebar-mode 1)
         (set-buffer-modified-p nil)
         (goto-char (point-min)))
+      (ch-mcp-server--history-record (buffer-name buffer) content "markdown")
       (if (equal display "no")
           (format "Wrote %s (not displayed)" (buffer-name buffer))
         (display-buffer buffer
@@ -1118,18 +1612,20 @@ MCP Parameters:
 ;;; The editing engine
 
 (defun ch-mcp-server--transform (file elisp &optional save)
-  "Run ELISP with FILE's buffer current; return a unified diff of the change.
+  "Run ELISP against FILE's text; land the result; return a unified diff.
 
 For bulk/structural edits where one form beats many single edits:
 computed replacements, sexp-aware transforms, mode-canonical
-`indent-region'.  Gated twice: FILE must lie in the calling client's
-territory (`ch-mcp-server--check-file-write'), and ELISP must
-pass the agent-safe gate with the buffer-editing registry allowed
-(motion, search, current-buffer mutation — see
-`ch-mcp-server-agent-safe-editing-functions').  Refuses buffers
-holding unsaved user modifications.  Begin with (goto-char
-\(point-min)) — point is wherever the user left it.  On error the
-buffer is restored untouched.  Saves unless SAVE is no.
+`indent-region'.  FILE must lie in the calling client's territory
+(`ch-mcp-server--check-file-write'), and its buffer must hold no
+unsaved user modifications.  In the default `agent-safe' scope the
+form runs in the sandboxed child against the buffer's copy, with the
+copy current, and any elisp is allowed there; only the copy's text
+comes back, and it lands through `ch-mcp-server--land-text'.  In
+`unrestricted' scope the form runs in this Emacs, in the buffer
+itself.  Begin with (goto-char (point-min)): point is wherever the
+last form left it.  An error in the form changes nothing.  Saves
+unless SAVE is no.
 
 MCP Parameters:
   file - absolute path of the file to transform
@@ -1138,38 +1634,114 @@ MCP Parameters:
   save - no to leave the change unsaved in the buffer (default: save)"
   (mcp-server-lib-with-error-handling
     (ch-mcp-server--check-file-write file)
-    (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)")))))
-      (ch-mcp-server--gate-elisp form "transform" t)
-      (with-current-buffer (ch-mcp-server--file-buffer file)
-        (when (buffer-modified-p)
-          (mcp-server-lib-tool-throw
-           (format "%s has unsaved modifications; refusing to transform (see buffer-diff)"
-                   file)))
-        (save-excursion
-          (save-restriction
-            (widen)
-            (let ((old (buffer-substring-no-properties (point-min) (point-max))))
-              (condition-case err
-                  (eval form t)
-                (error
-                 (delete-region (point-min) (point-max))
-                 (insert old)
-                 (set-buffer-modified-p nil)
-                 (mcp-server-lib-tool-throw
-                  (format "transform failed (buffer restored): %s"
-                          (error-message-string err)))))
-              (widen)
-              (let ((new (buffer-substring-no-properties (point-min) (point-max))))
-                (if (equal old new)
-                    (progn (set-buffer-modified-p nil)
-                           "No changes")
-                  (let ((diff (ch-mcp-server--text-diff
-                               old new
-                               (concat file " (before)")
-                               (concat file " (after)"))))
-                    (unless (equal save "no")
-                      (save-buffer))
-                    diff))))))))))
+    (let ((form (car (read-from-string (concat "(progn\n" elisp "\n)"))))
+          (buffer (ch-mcp-server--file-buffer file)))
+      (when (buffer-modified-p buffer)
+        (mcp-server-lib-tool-throw
+         (format "%s has unsaved modifications; refusing to transform (see buffer-diff)"
+                 file)))
+      (if (eq ch-mcp-server-elisp-scope 'unrestricted)
+          (ch-mcp-server--transform-here buffer file form save)
+        (ch-mcp-server--transform-in-child buffer file form save)))))
+
+(defun ch-mcp-server--transform-here (buffer file form save)
+  "Run FORM in BUFFER, visiting FILE, here; diff, then save unless SAVE is no.
+The `unrestricted' path of `ch-mcp-server--transform'.  On error the
+buffer is restored untouched."
+  (with-current-buffer buffer
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let ((old (buffer-substring-no-properties (point-min) (point-max))))
+          (condition-case err
+              (eval form t)
+            (error
+             (delete-region (point-min) (point-max))
+             (insert old)
+             (set-buffer-modified-p nil)
+             (mcp-server-lib-tool-throw
+              (format "transform failed (buffer restored): %s"
+                      (error-message-string err)))))
+          (widen)
+          (let ((new (buffer-substring-no-properties (point-min) (point-max))))
+            (if (equal old new)
+                (progn (set-buffer-modified-p nil)
+                       "No changes")
+              (let ((diff (ch-mcp-server--text-diff
+                           old new
+                           (concat file " (before)")
+                           (concat file " (after)"))))
+                (unless (equal save "no")
+                  (save-buffer))
+                diff))))))))
+
+;; Defined with the child, further down; the transform reads it here.
+(defvar ch-mcp-server--copies)
+
+(defun ch-mcp-server--transform-in-child (buffer file form save)
+  "Run FORM in the child against BUFFER's copy and land the text here.
+The `agent-safe' path of `ch-mcp-server--transform': the copies are
+refreshed, FORM runs with the copy current, and the copy's text comes
+back to `ch-mcp-server--land-text' with the tick the copy was taken
+at.  A buffer with no copy (withheld from the agent) or with a
+redacted copy is refused.  The copy is re-sent on the next refresh
+whatever happened, since FORM may have changed it."
+  (let* ((name (buffer-name buffer))
+         (conn (ch-mcp-server--child-connection)))
+    (ch-mcp-server--copies-sync conn)
+    (let ((entry (gethash name ch-mcp-server--copies)))
+      (unless entry
+        (mcp-server-lib-tool-throw
+         (format "%s is withheld from the agent, so it cannot be transformed"
+                 file)))
+      (when (plist-get entry :redacted)
+        (mcp-server-lib-tool-throw
+         (format "%s holds a redacted secret; its copy is read-only, so it cannot be transformed"
+                 file)))
+      (let ((tick (plist-get entry :tick))
+            (new (unwind-protect
+                     (ch-mcp-server--in-child
+                      conn
+                      `(with-current-buffer ,name
+                         (save-restriction
+                           (widen)
+                           ,form
+                           (widen)
+                           (buffer-substring-no-properties (point-min)
+                                                           (point-max)))))
+                   (remhash name ch-mcp-server--copies))))
+        (unless (stringp new)
+          (mcp-server-lib-tool-throw "transform: the child returned no text"))
+        (ch-mcp-server--land-text buffer file new tick save)))))
+
+(defun ch-mcp-server--land-text (buffer file new tick save)
+  "Put NEW into BUFFER, visiting FILE, if its text is still the one at TICK.
+The back contract: text from the child lands only in a buffer that is
+not read-only and whose `buffer-chars-modified-tick' still equals
+TICK, the tick its copy was taken at, so a change made meanwhile is
+never overwritten.  Returns a unified diff, or \"No changes\"; saves
+unless SAVE is no.  The replacement keeps point and markers where the
+unchanged text allows."
+  (with-current-buffer buffer
+    (when buffer-read-only
+      (mcp-server-lib-tool-throw (format "%s is read-only" file)))
+    (unless (eql tick (buffer-chars-modified-tick))
+      (mcp-server-lib-tool-throw
+       (format "%s changed while the form ran; nothing landed, run the transform again"
+               file)))
+    (save-restriction
+      (widen)
+      (let ((old (buffer-substring-no-properties (point-min) (point-max))))
+        (if (equal old new)
+            "No changes"
+          (replace-region-contents (point-min) (point-max) (lambda () new))
+          (let ((diff (ch-mcp-server--text-diff
+                       old new
+                       (concat file " (before)")
+                       (concat file " (after)"))))
+            (unless (equal save "no")
+              (save-buffer))
+            diff))))))
 
 (defun ch-mcp-server--replace-literal (label old-string new-string replace-all)
   "Replace OLD-STRING with NEW-STRING in the current buffer; diff back.
@@ -1410,6 +1982,641 @@ MCP Parameters:
           "No comment threads"
         (mapconcat #'collab-comments-render-thread threads "\n\n")))))
 
+;;; The child
+
+;; The parent is this Emacs: it runs the MCP server, owns the live
+;; session, and decides every policy.  The child is a second Emacs
+;; from the same configuration, spawned on first use into a bwrap jail
+;; by `parenting-spawn' (docs/development/agent-elisp-isolation.md,
+;; "Architecture"): a scrubbed environment and a filesystem view of the
+;; Nix store, the configuration, and whatever `ch-mcp-server-child-ro-
+;; binds' adds.  It is keyed to the running configuration's store path
+;; so a switch replaces it, stopped after idle, and dies with the
+;; connection.  `eval-elisp' and `transform' run in it, after the
+;; readable buffers' text is copied in (next section); the CLI
+;; transform is a later piece.
+;;
+;; The child never performs a trusted step.  Every filter, the gitleaks
+;; run and the redaction, the redaction record, and the landing checks
+;; run here, before text goes to the child or after text comes back;
+;; the read-only flag on a redacted copy in the child is a courtesy.
+;; Everything the child returns is data, read but never evaluated, and
+;; type-checked before use.  This holds from the first spawn, not from
+;; the first agent form, so nothing here has to know whether agent code
+;; has run yet.
+
+(defvar ch-mcp-server-child-idle-seconds 600
+  "Seconds of no use before the child is shut down.
+Every `ch-mcp-server--child-ensure' re-arms the timer; when it fires,
+`ch-mcp-server-child-stop' runs and the next use spawns afresh.")
+
+(defvar ch-mcp-server-child-spawn-timeout 60
+  "Seconds to wait for the child to connect and load.
+Passed as the `parenting-spawn' :timeout, which also bounds the
+bootstrap form; longer than parenting's default because the child
+loads the whole configuration before it answers.")
+
+(defvar ch-mcp-server-eval-timeout 30
+  "Seconds an `eval-elisp' form may run in the child.
+A form still running at the deadline is not interrupted: the child is
+stopped instead (`ch-mcp-server-child-stop'), so the next use starts
+a fresh one, and the call returns a tool error naming the timeout.")
+
+(defvar ch-mcp-server-child-ro-binds nil
+  "Extra paths bound read-only into the child's jail.
+Passed as the sandbox :ro-binds: the place for the project directories
+the child may read.  Each entry is a path or a (SRC . DEST) cons.
+Parenting itself binds the Nix store, its socket directory, and its
+sources.  Set by the resident user only; gated elisp cannot reach it.")
+(put 'ch-mcp-server-child-ro-binds 'risky-local-variable t)
+
+(defvar ch-mcp-server-child-network nil
+  "Whether the child's jail shares the host network.
+Passed as the sandbox :network; nil, the default, gives the child no
+network at all.  Set by the resident user only; gated elisp cannot
+reach it.")
+(put 'ch-mcp-server-child-network 'risky-local-variable t)
+
+(defvar ch-mcp-server--child nil
+  "The live `parenting' connection to the child, or nil.")
+
+(defvar ch-mcp-server--child-key nil
+  "The `ch-mcp-server--config-key' the child was spawned from.")
+
+(defvar ch-mcp-server--child-idle-timer nil
+  "Timer that stops the child after `ch-mcp-server-child-idle-seconds'.")
+
+(defun ch-mcp-server--config-key ()
+  "A string identifying the running configuration.
+The directory of the loaded init package, a store path that changes
+on every rebuild, so a child spawned from an older configuration is
+replaced after a switch.  Falls back to `invocation-directory' when
+the library is not found.  The child runs the same Emacs binary as
+the parent (parenting's :emacs default), so the two share one package
+set."
+  (let ((library (locate-library "ch-emacs-config-default")))
+    (if library
+        (file-name-directory library)
+      invocation-directory)))
+
+(defconst ch-mcp-server--child-bootstrap
+  '(progn
+     (package-activate-all)
+     (require 'ch-emacs-config-default)
+     (when (fboundp 'eglot-ensure)
+       (mapatoms (lambda (sym)
+                   (when (and (boundp sym)
+                              (string-suffix-p "-mode-hook" (symbol-name sym))
+                              (listp (symbol-value sym))
+                              (memq 'eglot-ensure (symbol-value sym)))
+                     (remove-hook sym #'eglot-ensure)))))
+     t)
+  "Form evaluated in the child right after it connects.
+The child has none of this file's code, so the form is self-contained:
+it activates the package set and loads the configuration the parent
+runs.  The workbench neutralizes the configuration's spawners from its
+side; the editor is not changed for this.  `after-init-hook' and
+`emacs-startup-hook' have already run in a -Q child that connected
+before this load, so `envrc-global-mode' and `global-jinx-mode' never
+start; no client frame ever exists, so ghostel's
+`initial-buffer-choice' never fires; the one live spawner is
+`eglot-ensure' on the mode hooks, which the form removes from every
+hook that carries it.")
+
+(defun ch-mcp-server--child-touch ()
+  "Re-arm the idle timer: the child was just used."
+  (when ch-mcp-server--child-idle-timer
+    (cancel-timer ch-mcp-server--child-idle-timer))
+  (setq ch-mcp-server--child-idle-timer
+        (run-with-timer ch-mcp-server-child-idle-seconds nil
+                        #'ch-mcp-server-child-stop)))
+
+(defun ch-mcp-server--child-spawn ()
+  "Spawn the child and return its connection.
+A daemon child (the full interactive environment, for major modes and
+indentation) kept at -Q: the configuration comes from the bootstrap
+form, not from init files.  Records the configuration key the child
+was spawned from and arms the idle timer."
+  (require 'parenting-parent)
+  (let ((conn (parenting-spawn
+               :daemon (format "ch-mcp-child-%d" (emacs-pid))
+               :quick t
+               :sandbox (list :ro-binds ch-mcp-server-child-ro-binds
+                              :network ch-mcp-server-child-network)
+               :timeout ch-mcp-server-child-spawn-timeout
+               :init ch-mcp-server--child-bootstrap
+               :name "ch-mcp-server-child")))
+    (setq ch-mcp-server--child conn
+          ch-mcp-server--child-key (ch-mcp-server--config-key))
+    (ch-mcp-server--copies-reset t)
+    (ch-mcp-server--child-touch)
+    conn))
+
+(defun ch-mcp-server--child-ensure ()
+  "Return a live connection to the child, spawning one if needed.
+A live child spawned from the running configuration is reused and its
+idle timer re-armed; a dead one, or one from an older configuration,
+is stopped and replaced."
+  (if (and ch-mcp-server--child
+           (parenting-connection-live-p ch-mcp-server--child)
+           (equal ch-mcp-server--child-key (ch-mcp-server--config-key)))
+      (progn
+        (ch-mcp-server--child-touch)
+        ch-mcp-server--child)
+    (ch-mcp-server-child-stop)
+    (ch-mcp-server--child-spawn)))
+
+(defun ch-mcp-server-child-stop ()
+  "Shut the child down and clear its state.
+A no-op without a child.  Run by the idle timer, before a replacement
+spawn, and by hand when the resident user wants the child gone."
+  (interactive)
+  (ch-mcp-server--copies-reset nil)
+  (when ch-mcp-server--child-idle-timer
+    (cancel-timer ch-mcp-server--child-idle-timer)
+    (setq ch-mcp-server--child-idle-timer nil))
+  (when ch-mcp-server--child
+    (let ((conn ch-mcp-server--child))
+      (setq ch-mcp-server--child nil
+            ch-mcp-server--child-key nil)
+      (parenting-shutdown conn))))
+
+;;; Copies of buffer text in the child
+
+;; Before each evaluation the parent copies the text of every buffer the
+;; agent may read into the child (docs/development/agent-elisp-isolation.md,
+;; "Forward contract"): `buffer-substring-no-properties', the buffer
+;; name, and the file name; nothing else crosses.  The child recreates a
+;; plain buffer under the same name and picks the major mode from the
+;; file name.  The same text is written to a file in the copy directory,
+;; where gitleaks runs; a finding redacts the copy in place and makes
+;; the child's buffer read-only.  Copies are incremental: a buffer is
+;; re-sent only when `buffer-chars-modified-tick' moved, and a buffer
+;; that died or stopped being readable is removed from the child.
+
+(defvar ch-mcp-server--copy-directory nil
+  "Directory holding the file copy of each buffer's text, or nil.
+Created with the child and deleted with it.")
+
+(defvar ch-mcp-server--copies (make-hash-table :test #'equal)
+  "Buffer name to the state of its copy in the child.
+Each value is a plist: :tick, the `buffer-chars-modified-tick' the
+copy was taken at; :file, the copy's path; :redacted, non-nil when
+gitleaks found a secret in the copy, which also makes the child's
+buffer read-only.")
+
+(defun ch-mcp-server--copies-reset (create)
+  "Forget every copy and delete the copy directory; with CREATE, make a new one."
+  (clrhash ch-mcp-server--copies)
+  (when (and ch-mcp-server--copy-directory
+             (file-directory-p ch-mcp-server--copy-directory))
+    (delete-directory ch-mcp-server--copy-directory t))
+  (setq ch-mcp-server--copy-directory
+        (and create (make-temp-file "ch-mcp-copies-" t))))
+
+(defun ch-mcp-server--copy-file-name (name &optional directory)
+  "The path of the copy for the buffer named NAME, in DIRECTORY.
+DIRECTORY defaults to the copy directory.  The buffer name is the file
+name, with every character outside letters, digits, dot, dash, and
+underscore replaced by `%', so `modules/default.nix' and `*Messages*'
+each make one plain file."
+  (expand-file-name (replace-regexp-in-string "[^A-Za-z0-9._-]" "%" name)
+                    (or directory ch-mcp-server--copy-directory)))
+
+(defun ch-mcp-server--redact-text (text findings)
+  "Return TEXT with each of FINDINGS replaced by a placeholder.
+FINDINGS are gitleaks report entries for this one text, alists with
+the symbols RuleID, Secret, StartLine, and EndLine (1-based,
+inclusive).  Each secret is replaced on its reported lines by
+`[REDACTED:<rule>]' by matching the reported text, since the report's
+columns are byte offsets.  A secret not found on those lines (a
+multi-line match) has its whole line range replaced: the placeholder
+on the first line, the rest emptied."
+  (let ((lines (vconcat (split-string text "\n"))))
+    (dolist (finding findings)
+      (let* ((rule (alist-get 'RuleID finding))
+             (secret (alist-get 'Secret finding))
+             (start (alist-get 'StartLine finding))
+             (end (alist-get 'EndLine finding))
+             (placeholder (format "[REDACTED:%s]" rule))
+             (hit nil))
+        (when (and (integerp start) (integerp end)
+                   (stringp secret) (not (string-empty-p secret)))
+          (let ((i (1- start))
+                (limit (min end (length lines))))
+            (while (< i limit)
+              (when (string-search secret (aref lines i))
+                (aset lines i (string-replace secret placeholder (aref lines i)))
+                (setq hit t))
+              (setq i (1+ i)))
+            (unless hit
+              (setq i (1- start))
+              (while (< i limit)
+                (aset lines i (if (= i (1- start)) placeholder ""))
+                (setq i (1+ i))))))))
+    (mapconcat #'identity lines "\n")))
+
+(defun ch-mcp-server--gitleaks-report (subcommand input &rest args)
+  "Run gitleaks SUBCOMMAND with ARGS; return its findings as a list.
+INPUT, when non-nil, is the text fed to standard input (the `stdin'
+subcommand); ARGS follow the fixed flags (the `dir' subcommand takes
+the path).  Each finding is a report entry as
+`ch-mcp-server--redact-text' takes.  A gitleaks that cannot run, or
+fails, is a tool error: no text passes before gitleaks has passed
+over it."
+  (with-temp-buffer
+    (let* ((output (current-buffer))
+           (command (append ch-mcp-server-gitleaks-command
+                            (list subcommand "--no-banner" "--log-level" "error"
+                                  "--report-format" "json"
+                                  "--report-path" "-" "--exit-code" "0")
+                            args))
+           (status (condition-case err
+                       (if input
+                           (with-temp-buffer
+                             (insert input)
+                             (apply #'call-process-region (point-min) (point-max)
+                                    (car command) nil (list output nil) nil
+                                    (cdr command)))
+                         (apply #'call-process (car command) nil
+                                (list output nil) nil (cdr command)))
+                     (error
+                      (mcp-server-lib-tool-throw
+                       (format "gitleaks could not run (%s): %s"
+                               (car command) (error-message-string err)))))))
+      (unless (eq status 0)
+        (mcp-server-lib-tool-throw
+         (format "gitleaks failed (exit %s): %s"
+                 status (string-trim (buffer-string)))))
+      (condition-case nil
+          (json-parse-string (buffer-string)
+                             :object-type 'alist
+                             :array-type 'list
+                             :null-object nil)
+        (error nil)))))
+
+(defun ch-mcp-server--gitleaks-findings ()
+  "Run gitleaks over the copy directory; return findings by copy file name.
+An alist of (BASENAME . FINDINGS)."
+  (let ((by-file nil))
+    (dolist (finding (ch-mcp-server--gitleaks-report
+                      "dir" nil ch-mcp-server--copy-directory))
+      (let ((file (file-name-nondirectory (alist-get 'File finding))))
+        (push finding (alist-get file by-file nil nil #'equal))))
+    by-file))
+
+(defun ch-mcp-server--copy-form (name file text read-only)
+  "The form the child evaluates to hold TEXT as the buffer named NAME.
+FILE, when non-nil, only picks the major mode through `set-auto-mode';
+the child's buffer visits nothing.  READ-ONLY marks a redacted copy."
+  `(let ((buffer (get-buffer-create ,name)))
+     (with-current-buffer buffer
+       (setq buffer-read-only nil)
+       (erase-buffer)
+       (insert ,text)
+       (goto-char (point-min))
+       ,@(and file
+              `((let ((buffer-file-name ,file))
+                  (set-auto-mode))))
+       (set-buffer-modified-p nil)
+       (setq buffer-read-only ,read-only))
+     t))
+
+(defun ch-mcp-server--copies-sync (conn)
+  "Bring the child's copies up to date with the buffers the agent may read.
+Writes each changed buffer's text into the copy directory, runs
+gitleaks over the directory, sends every changed copy (redacted where
+gitleaks found a secret) to the child on CONN, and removes from the
+child each buffer that died or is no longer readable."
+  (let ((changed nil)
+        (live (make-hash-table :test #'equal)))
+    ;; A copy the child no longer holds (a form killed it) counts as
+    ;; changed, so it is sent again.
+    (let ((present (ch-mcp-server--in-child
+                    conn '(mapcar #'buffer-name (buffer-list))))
+          (missing nil))
+      (maphash (lambda (name _entry)
+                 (unless (member name present) (push name missing)))
+               ch-mcp-server--copies)
+      (dolist (name missing)
+        (remhash name ch-mcp-server--copies)))
+    (dolist (buffer (buffer-list))
+      (when (ch-mcp-server--buffer-accessible-p buffer)
+        (let* ((name (buffer-name buffer))
+               (tick (buffer-chars-modified-tick buffer))
+               (entry (gethash name ch-mcp-server--copies)))
+          (puthash name t live)
+          (unless (and entry (eql (plist-get entry :tick) tick))
+            (let ((file (ch-mcp-server--copy-file-name name))
+                  (text (with-current-buffer buffer
+                          (save-restriction
+                            (widen)
+                            (buffer-substring-no-properties (point-min)
+                                                            (point-max))))))
+              (let ((coding-system-for-write 'utf-8-unix))
+                (with-temp-file file (insert text)))
+              (puthash name (list :tick tick :file file :redacted nil)
+                       ch-mcp-server--copies)
+              (push (list name (buffer-file-name buffer) text) changed))))))
+    (let ((gone nil))
+      (maphash (lambda (name _entry)
+                 (unless (gethash name live) (push name gone)))
+               ch-mcp-server--copies)
+      (dolist (name gone)
+        (let ((file (plist-get (gethash name ch-mcp-server--copies) :file)))
+          (when (and file (file-exists-p file))
+            (delete-file file)))
+        (remhash name ch-mcp-server--copies)
+        (ch-mcp-server--in-child
+         conn `(when (get-buffer ,name) (kill-buffer ,name)))))
+    (when changed
+      (let ((findings (ch-mcp-server--gitleaks-findings)))
+        (dolist (item (nreverse changed))
+          (pcase-let* ((`(,name ,file ,text) item)
+                       (entry (gethash name ch-mcp-server--copies))
+                       (copy (plist-get entry :file))
+                       (hits (alist-get (file-name-nondirectory copy) findings
+                                        nil nil #'equal)))
+            (when hits
+              (setq text (ch-mcp-server--redact-text text hits))
+              (let ((coding-system-for-write 'utf-8-unix))
+                (with-temp-file copy (insert text)))
+              (plist-put entry :redacted t))
+            (ch-mcp-server--in-child
+             conn (ch-mcp-server--copy-form
+                   name file text (plist-get entry :redacted)))))))))
+
+(defun ch-mcp-server--child-connection ()
+  "The live connection to the child, spawning one if needed.
+A child that cannot be started is a tool error naming the cause."
+  (condition-case err
+      (ch-mcp-server--child-ensure)
+    (error
+     (mcp-server-lib-tool-throw
+      (format "the child Emacs could not be started: %s"
+              (error-message-string err))))))
+
+(defun ch-mcp-server--in-child (conn form)
+  "Evaluate FORM in the child on CONN and return its value.
+An error in the child becomes a tool error carrying the child's
+message.  A form still running at `ch-mcp-server-eval-timeout' cannot
+be interrupted, so the child is stopped, the next call starts a fresh
+one, and this call is a tool error saying so.  A child that cannot be
+reached is a tool error naming the cause."
+  (condition-case err
+      (parenting-eval conn form ch-mcp-server-eval-timeout)
+    (parenting-timeout
+     (ch-mcp-server-child-stop)
+     (mcp-server-lib-tool-throw
+      (format "the child Emacs timed out after %ss; it was stopped and the next call starts a fresh one"
+              ch-mcp-server-eval-timeout)))
+    (parenting-remote-error
+     (let ((symbol (nth 1 err))
+           (data (nth 2 err)))
+       (mcp-server-lib-tool-throw
+        (format "the child Emacs signalled: %s"
+                (condition-case nil
+                    (error-message-string (cons symbol data))
+                  (error (format "%S %S" symbol data)))))))
+    (parenting-error
+     (mcp-server-lib-tool-throw
+      (format "the child Emacs could not be reached: %s"
+              (error-message-string err))))))
+
+(defun ch-mcp-server--child-eval (form)
+  "Evaluate FORM in the child after refreshing the copies; print with %S.
+The printing happens in the child, so a value with no readable form
+(a buffer, a marker) arrives as its %S text."
+  (let ((conn (ch-mcp-server--child-connection)))
+    (ch-mcp-server--copies-sync conn)
+    (ch-mcp-server--in-child conn (list 'format "%S" form))))
+
+;;; Copies for the CLI
+
+;; The CLI transform (docs/development/agent-elisp-isolation.md, "What
+;; runs where"): the agent asks for a buffer as a file, edits it with
+;; its own command-line tools, and asks for the text to land.  The file
+;; lives in the calling client's territory under
+;; .claude/claude-code-sandbox/, the directory the CLI's sandbox already
+;; uses as per-checkout scratch: sandboxed commands can write the
+;; checkout and nothing else, and that directory is kept out of `git
+;; status' through the clone's exclude file, which this writes too where
+;; the sandbox has not.  The text passes the same filters as every copy
+;; (the buffer predicate, then gitleaks), and the text lands through
+;; `ch-mcp-server--land-text' with the tick recorded when the file was
+;; written; a redacted file lands nothing.  The file is a copy: editing
+;; it changes no buffer until land-buffer-file runs, and a landed or
+;; refused file is removed.
+
+(defvar ch-mcp-server--cli-copies (make-hash-table :test #'equal)
+  "Buffer name to the state of its file for the CLI transform.
+A plist: :file, the path; :tick, the buffer's chars-modified tick when
+the file was written; :redacted, non-nil when gitleaks found a secret
+in it.")
+
+(defconst ch-mcp-server--cli-copy-subdirectory
+  ".claude/claude-code-sandbox/mcp-copies"
+  "Where, under the client's territory, the CLI transform's files live.
+Under the directory the CLI's sandbox uses for per-checkout scratch, so
+the exclude-file line the sandbox writes covers it.")
+
+(defun ch-mcp-server--exclude-scratch (root)
+  "Keep the sandbox scratch directory under ROOT out of `git status'.
+Appends the line the sandbox itself writes to the clone's info/exclude,
+resolved through git so a worktree shares the main clone's file.  ROOT
+without a git directory, or git failing, changes nothing."
+  (let ((exclude (condition-case nil
+                     (with-temp-buffer
+                       (when (eq 0 (call-process "git" nil t nil "-C" root
+                                                 "rev-parse" "--git-path"
+                                                 "info/exclude"))
+                         (expand-file-name (string-trim (buffer-string)) root)))
+                   (error nil)))
+        (line "/.claude/claude-code-sandbox/"))
+    (when exclude
+      (condition-case nil
+          (let ((existing (if (file-exists-p exclude)
+                              (with-temp-buffer
+                                (insert-file-contents exclude)
+                                (buffer-string))
+                            "")))
+            (unless (member line (split-string existing "\n"))
+              (make-directory (file-name-directory exclude) t)
+              (with-temp-buffer
+                (insert existing)
+                (unless (or (string-empty-p existing)
+                            (string-suffix-p "\n" existing))
+                  (insert "\n"))
+                (insert line "\n")
+                (write-region (point-min) (point-max) exclude nil 'quiet))))
+        (error nil)))))
+
+(defun ch-mcp-server--buffer-file (name)
+  "Write the text of the buffer NAME to a file in the territory; return its path.
+
+The file is for reading or editing with your own command-line tools:
+the buffer's text without properties, passed through gitleaks like
+every copy, so a recognized secret arrives as [REDACTED:<rule>] and
+such a file cannot be landed.  Editing the file changes nothing in
+Emacs; call land-buffer-file with the same name to land its text,
+which is refused if the buffer changed meanwhile.  The file lives under
+the client's territory in .claude/claude-code-sandbox/mcp-copies/, which
+the CLI's sandbox can write and git ignores.
+
+MCP Parameters:
+  name - name of a live buffer, as listed by the list-buffers tool"
+  (mcp-server-lib-with-error-handling
+    (let ((buffer (get-buffer name)))
+      (unless buffer
+        (mcp-server-lib-tool-throw (format "No buffer named %s" name)))
+      (ch-mcp-server--buffer-accessible-or-throw buffer)
+      (let* ((root (ch-mcp-server--client-territory))
+             (directory (expand-file-name ch-mcp-server--cli-copy-subdirectory
+                                          root))
+             (file (ch-mcp-server--copy-file-name name directory))
+             (tick (buffer-chars-modified-tick buffer))
+             (text (with-current-buffer buffer
+                     (save-restriction
+                       (widen)
+                       (buffer-substring-no-properties (point-min) (point-max)))))
+             (findings (ch-mcp-server--gitleaks-report "stdin" text)))
+        (when findings
+          (setq text (ch-mcp-server--redact-text text findings)))
+        (make-directory directory t)
+        (set-file-modes directory #o700)
+        (ch-mcp-server--exclude-scratch root)
+        (let ((coding-system-for-write 'utf-8-unix))
+          (with-temp-file file (insert text)))
+        (set-file-modes file #o600)
+        (puthash name (list :file file :tick tick :redacted (and findings t))
+                 ch-mcp-server--cli-copies)
+        (if findings
+            (format "%s\n(gitleaks redacted %d span%s in this copy: %s; a redacted copy is read-only and cannot be landed)"
+                    file (length findings) (if (= 1 (length findings)) "" "s")
+                    (string-join
+                     (seq-uniq (mapcar (lambda (finding)
+                                         (format "%s" (alist-get 'RuleID finding)))
+                                       findings))
+                     ", "))
+          file)))))
+
+(defun ch-mcp-server--land-buffer-file (name &optional save)
+  "Land the text of the file buffer-file wrote for the buffer NAME.
+
+Returns a unified diff, or \"No changes\".  Refused when no file was
+requested for NAME, when the buffer changed since the file was written
+(ask for the file again), when the buffer is read-only or has a
+process, when the file was redacted, and, for a file-visiting buffer,
+when its file lies outside the client's territory.  The file is
+removed afterwards, landed or refused, so a stale copy never lands
+later.  Saves a file-visiting buffer unless SAVE is no.
+
+MCP Parameters:
+  name - the buffer name given to buffer-file
+  save - no to leave the change unsaved in the buffer (default: save)"
+  (mcp-server-lib-with-error-handling
+    (let ((entry (gethash name ch-mcp-server--cli-copies))
+          (buffer (get-buffer name)))
+      (unless entry
+        (mcp-server-lib-tool-throw
+         (format "No file was requested for buffer %s; call buffer-file first"
+                 name)))
+      (remhash name ch-mcp-server--cli-copies)
+      (unwind-protect
+          (let ((path (plist-get entry :file))
+                (file (and buffer (buffer-file-name buffer))))
+            (unless buffer
+              (mcp-server-lib-tool-throw
+               (format "Buffer %s no longer exists" name)))
+            (when (plist-get entry :redacted)
+              (mcp-server-lib-tool-throw
+               (format "The file for %s was redacted by gitleaks, so its text cannot land"
+                       name)))
+            (unless (file-readable-p path)
+              (mcp-server-lib-tool-throw
+               (format "The file for %s is gone (%s); call buffer-file again"
+                       name path)))
+            (when (get-buffer-process buffer)
+              (mcp-server-lib-tool-throw
+               (format "%s has a process attached; text lands only in file-visiting or plain buffers"
+                       name)))
+            (when file
+              (ch-mcp-server--check-file-write file))
+            (let ((text (with-temp-buffer
+                          (let ((coding-system-for-read 'utf-8-unix))
+                            (insert-file-contents path))
+                          (buffer-string))))
+              (ch-mcp-server--land-text buffer (or file name) text
+                                        (plist-get entry :tick)
+                                        (if file save "no"))))
+        (ignore-errors (delete-file (plist-get entry :file)))))))
+
+;;; Redaction of tool results
+
+;; Every tool result passes through gitleaks here, in the parent, on its
+;; way to the agent's context (docs/development/agent-elisp-isolation.md,
+;; "Redaction covers every file view"): the read tools, the diffs the
+;; edit verbs return (their context lines are buffer text), and what the
+;; child returns for `eval-elisp'.  Each finding is replaced by
+;; `[REDACTED:<rule>]' and a note naming the rules is appended, so the
+;; agent knows a redaction occurred.  The filter is :filter-return advice
+;; on every registered tool function, which leaves the tool schemas that
+;; mcp-server-lib derives from the functions' docstrings untouched.
+
+(defun ch-mcp-server--redact-result (result)
+  "Return RESULT with the secrets gitleaks finds replaced, plus a note.
+A string result is run through gitleaks; each finding is replaced on
+its lines by `[REDACTED:<rule>]' (`ch-mcp-server--redact-text') and a
+line \"[gitleaks redacted N spans: RULES]\" is appended.  A non-string
+or empty result passes unchanged.  gitleaks failing to run is a tool
+error, so no text reaches the agent without passing through it."
+  (if (or (not (stringp result)) (string-empty-p result))
+      result
+    (let ((findings (ch-mcp-server--gitleaks-report "stdin" result)))
+      (if (null findings)
+          result
+        (concat (ch-mcp-server--redact-text result findings)
+                (format "\n\n[gitleaks redacted %d span%s: %s]"
+                        (length findings)
+                        (if (= 1 (length findings)) "" "s")
+                        (string-join
+                         (seq-uniq (mapcar (lambda (finding)
+                                             (format "%s" (alist-get 'RuleID finding)))
+                                           findings))
+                         ", ")))))))
+
+(defconst ch-mcp-server--tool-functions
+  '(ch-mcp-server--eval-elisp
+    ch-mcp-server--context
+    ch-mcp-server--list-buffers
+    ch-mcp-server--buffer-text
+    ch-mcp-server--diagnostics
+    ch-mcp-server--find-references
+    ch-mcp-server--find-definition
+    ch-mcp-server--symbol-info
+    ch-mcp-server--document-outline
+    ch-mcp-server--modified-buffers
+    ch-mcp-server--buffer-diff
+    ch-mcp-server--feature-loaded
+    ch-mcp-server--hooks
+    ch-mcp-server--buffer-state
+    ch-mcp-server--key-binding
+    ch-mcp-server--present
+    ch-mcp-server--sidebar
+    ch-mcp-server--edit-buffer
+    ch-mcp-server--edit-file
+    ch-mcp-server--transform
+    ch-mcp-server--buffer-file
+    ch-mcp-server--land-buffer-file
+    ch-mcp-server--add-comment
+    ch-mcp-server--list-comments)
+  "Every registered tool function; each carries the result filter.
+Kept beside the registration below, and a test holds the two lists to
+the same length.")
+
+(dolist (fn ch-mcp-server--tool-functions)
+  (advice-add fn :filter-return #'ch-mcp-server--redact-result))
+
 ;;; Server lifecycle and registration
 
 (defun ch-mcp-server-start ()
@@ -1448,16 +2655,25 @@ the others."
            "live/shared buffer without saving (both carry the native Edit "
            "contract: unique match, fails loudly on drift); leaving or "
            "answering review notes on text under discussion -> add-comment, "
-           "reading the user's notes -> list-comments. eval-elisp is "
-           "the read-only escape hatch for everything else: it accepts "
-           "side-effect-free elisp only, and writes are confined to the "
-           "session's own project.")
+           "reading the user's notes -> list-comments; a session fact that "
+           "is not buffer text (is a feature loaded, what is on a hook, a "
+           "buffer's mode/state/visibility, what a key does) -> "
+           "feature-loaded, hooks, buffer-state, key-binding. eval-elisp "
+           "runs in a sandboxed child Emacs that has this session's "
+           "configuration and plain-text copies of the buffers you may "
+           "read, and none of its other state: it answers questions about "
+           "the configuration and about buffer text, not about the live "
+           "session's variables, and cannot change the session. Writes "
+           "are confined to the session's own project. Every result passes "
+           "through gitleaks first: a recognized secret arrives as "
+           "[REDACTED:<rule>] with a note, and the redaction is a boundary "
+           "like a refusal.")
    :tools
    (list
     (list #'ch-mcp-server--eval-elisp
           :id "eval-elisp"
           :description
-          "Evaluate side-effect-free Emacs Lisp in the running Emacs and return the result (mutation is rejected; use the edit tools)")
+          "Evaluate Emacs Lisp in a sandboxed child Emacs running this session's configuration and holding plain-text copies of the readable buffers (secrets redacted), with none of the live session's variables or files; edits go through the edit tools")
     (list #'ch-mcp-server--context
           :id "context"
           :description
@@ -1506,6 +2722,26 @@ the others."
           :description
           "Unified diff of a file's unsaved buffer state vs the file on disk"
           :read-only t)
+    (list #'ch-mcp-server--feature-loaded
+          :id "feature-loaded"
+          :description
+          "Whether a feature is loaded in the live session (featurep), plus fboundp/boundp on its symbol; a session fact buffer text cannot give"
+          :read-only t)
+    (list #'ch-mcp-server--hooks
+          :id "hooks"
+          :description
+          "Functions on a hook variable in the live session: the global value, and a buffer's local value when a buffer is named (lambdas print as <lambda>)"
+          :read-only t)
+    (list #'ch-mcp-server--buffer-state
+          :id "buffer-state"
+          :description
+          "Non-text facts about a live buffer: file, major/minor modes, read-only, modified, size, point, evil state, terminal input mode, sensitivity, agent visibility"
+          :read-only t)
+    (list #'ch-mcp-server--key-binding
+          :id "key-binding"
+          :description
+          "What a key sequence (kbd syntax, e.g. SPC p p; the evil leader is SPC in motion state) resolves to in a buffer's live context: command, <keymap (prefix)>, <lambda>, or unbound"
+          :read-only t)
     (list #'ch-mcp-server--present
           :id "present"
           :description
@@ -1525,7 +2761,15 @@ the others."
     (list #'ch-mcp-server--transform
           :id "transform"
           :description
-          "Eval buffer-editing elisp (motion/search/current-buffer mutation only) in a file's buffer for bulk/structural edits; returns a unified diff; saves unless save=no")
+          "Run elisp against a file's buffer for bulk/structural edits: the form runs in the sandboxed child on the buffer's copy and only the resulting text lands (refused if the buffer changed meanwhile); returns a unified diff; saves unless save=no")
+    (list #'ch-mcp-server--buffer-file
+          :id "buffer-file"
+          :description
+          "A plain-text copy of a buffer as a file under this session's territory (.claude/claude-code-sandbox/mcp-copies/), for reading or editing with your own tools; secrets redacted; land the edited text with land-buffer-file")
+    (list #'ch-mcp-server--land-buffer-file
+          :id "land-buffer-file"
+          :description
+          "Land the edited text of a buffer-file copy into its buffer (refused if the buffer changed meanwhile or the copy was redacted; the file is removed either way); returns a unified diff; saves unless save=no")
     (list #'ch-mcp-server--add-comment
           :id "add-comment"
           :description
