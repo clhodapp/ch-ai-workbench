@@ -59,9 +59,7 @@ Nix-built configuration as the parent, with the configuration's
 spawners unhooked after it loads (no language servers, no
 process-spawning modes; see the dependencies), under a bwrap sandbox: a scrubbed
 environment, and a filesystem view limited to the Nix store, the
-configuration, the project directories, and the copy directory (the
-directory in the jail holding a file copy of each buffer's text, under
-the forward contract below). An
+configuration, and the project directories. An
 unsandboxed child would be weaker than today's gate, since `getenv`
 would return real keys and `insert-file-contents` would read
 `~/.authinfo`; the sandbox is part of the design, not a hardening step
@@ -75,17 +73,19 @@ check runs in the parent, and what the child returns is data (see
 **The copied text** is the data the child holds. The parent produces it
 per request under the two contracts below.
 
-**The agent's CLI** runs inside the same bwrap filesystem view as the
-child, which makes a second editing mode possible: the CLI transform
-(see "What runs where"). A buffer's inert text is materialized as a
-file in the copy directory, and the agent edits it with its ordinary
-command-line tools (ripgrep, sed, its own ranged reads and writes) with
-no Emacs round-trip; the edited text lands through the same back
-channel as an elisp transform. The child Emacs reads the copied text as
-a buffer; the agent reads and writes the same bytes as a file. Both come
-from the one forward contract and pass the one set of filters, so the
-file the agent sees is exactly the redacted, in-scope, unlatched text
-the child sees, and no unfiltered path reaches the CLI.
+**The agent's CLI** gets a second editing mode, the CLI transform (see
+"What runs where"), without sharing the child's filesystem view: a
+buffer's inert text is written as a file into the calling client's
+territory, under the directory the CLI's own sandbox uses as
+per-checkout scratch (`.claude/claude-code-sandbox/`, which sandboxed
+commands can write and the clone's exclude file keeps out of `git
+status`), and the agent edits it with its ordinary command-line tools
+(ripgrep, sed, its own ranged reads and writes) with no Emacs
+round-trip; the edited text lands through the same back contract as an
+elisp transform. The file passes the same filters as every copy, so
+what the agent sees is exactly the redacted, in-scope, unlatched text
+the child would see, and no unfiltered path reaches the CLI. The child
+never sees these files.
 
 ## Forward contract: parent to child
 
@@ -107,14 +107,17 @@ The copies are refreshed before each evaluation in the child, and a
 buffer that dies or stops passing the filters is removed from the
 child on the next refresh. (Landed.)
 
-The same text is also written to a file in the copy directory, named
-for the buffer with every character outside letters, digits, dot,
-dash, and underscore replaced by `%`. This is the file half of the CLI transform (see
-"What runs where"): a tool asks for it by buffer name, the parent runs
-the buffer through the same three filters, writes the result into the
-copy directory, and returns the in-jail path. A buffer the filters
-refuse yields no file and an error naming the reason, so this surface
-never exposes what the buffer-read tools would refuse.
+The same text is also written to a file in the copy directory, a
+parent-internal temporary directory created and deleted with the
+child, named for the buffer with every character outside letters,
+digits, dot, dash, and underscore replaced by `%`; gitleaks runs over
+that directory (below). The CLI transform's file is a separate write
+of the same filtered text (see "What runs where"): a tool asks for it
+by buffer name, the parent runs the buffer through the same filters,
+writes the result under the client's territory, and returns the path.
+A buffer the filters refuse yields no file and an error naming the
+reason, so this surface never exposes what the buffer-read tools would
+refuse.
 
 Three filters apply, in this order.
 
@@ -267,14 +270,15 @@ variable, so a synced variable is an effect.
   buffer and both land the result through the one back channel. The
   **elisp transform** evaluates a form in the child Emacs (the existing
   `transform`, now ungated because the child is the sandbox; the editing
-  registry retired with the gate; landed). The **CLI transform** materializes
-  the buffer as a file in the copy directory and hands the agent that
-  path; the agent edits the file with its own command-line tools, and
-  the file's text is what returns. A read is the CLI transform with no
-  edit: ask for the file, read it, return nothing. The file is a copy,
-  so leaving it changed lands nothing on its own; only the returned text
-  crosses the back channel, which is the single write path with all its
-  checks.
+  registry retired with the gate; landed). The **CLI transform**
+  (`buffer-file` and `land-buffer-file`; landed) writes the buffer as a
+  file under the client's territory and hands the agent that path; the
+  agent edits the file with its own command-line tools, and the file's
+  text is what lands. A read is the CLI transform with no landing: ask
+  for the file, read it. The file is a copy, so leaving it changed lands
+  nothing on its own; only the landed text crosses the back contract,
+  which is the single write path with all its checks, and the file is
+  removed once landed or refused.
 - Session facts that are not text are answered by four named read-only
   tools in the parent (landed): `feature-loaded` (featurep, fboundp,
   boundp of a name, never a value), `hooks` (the functions on a hook,
@@ -508,10 +512,10 @@ print a secret into a log.
    session facts until the named tools exist. (Landed: the lifecycle
    and `eval-elisp` in the child.)
 3. The copying of buffer text (forward contract, incremental sync,
-   gitleaks redaction; landed, with the copy directory not yet bound
-   into the jail) and the back channel (landed); both transform modes
-   move to the child, the elisp one (landed, and the gated live
-   evaluation is deleted with it) and the CLI one; named tools replace
+   gitleaks redaction; landed) and the back channel (landed); both
+   transform modes, the elisp one in the child (landed, and the gated
+   live evaluation is deleted with it) and the CLI one through the
+   territory's sandbox scratch (landed); named tools replace
    the live evaluation for session facts (landed). Every MCP tool
    result, not only the read tools' text but the diffs the edit verbs
    return and what the child returns, passes through gitleaks in the
