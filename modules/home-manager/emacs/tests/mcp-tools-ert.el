@@ -48,7 +48,7 @@ launched where the temp files live."
      ,@body))
 
 (defun ch-mcp-tests--random-token ()
-  "A GitHub-token-shaped string gitleaks flags.
+  "A GitHub-token-shaped string betterleaks flags.
 Random, because the stock allowlist drops placeholder-looking ones."
   (let ((alphabet "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"))
     (concat "ghp_"
@@ -770,12 +770,12 @@ its copy was taken leaves the child on the next call."
     (kill-buffer "ch-mcp-tests-open-note")))
 
 (ert-deftest ch-mcp-tools-copies-are-redacted ()
-  "A token gitleaks recognizes is replaced in the child's copy, which is
+  "A token betterleaks recognizes is replaced in the child's copy, which is
 read-only; the parent's buffer is untouched."
   (unless (ch-mcp-tests--bwrap-usable-p)
     (ert-skip "bwrap cannot create a user namespace here"))
-  (unless (executable-find (car ch-mcp-server-gitleaks-command))
-    (ert-skip "no gitleaks to run"))
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
   (let* ((token (ch-mcp-tests--random-token))
          (name "ch-mcp-tests-leaky"))
     (unwind-protect
@@ -843,13 +843,13 @@ the form lands nothing."
     (ch-mcp-server-child-stop)))
 
 (ert-deftest ch-mcp-tools-transform-keeps-the-secret ()
-  "A buffer whose copy gitleaks redacted is transformed through the
+  "A buffer whose copy betterleaks redacted is transformed through the
 copy: the form sees a placeholder, the buffer gets the edit with its
 secret intact, and the returned diff carries no secret."
   (unless (ch-mcp-tests--bwrap-usable-p)
     (ert-skip "bwrap cannot create a user namespace here"))
-  (unless (executable-find (car ch-mcp-server-gitleaks-command))
-    (ert-skip "no gitleaks to run"))
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
   (unwind-protect
       (ch-mcp-tests--in-territory
         (let* ((token (ch-mcp-tests--random-token))
@@ -924,11 +924,11 @@ and the file is consumed."
                        "alpha\nuser\n"))))))
 
 (ert-deftest ch-mcp-tools-buffer-file-keeps-the-secret ()
-  "A copy gitleaks redacted says so and holds a numbered placeholder;
+  "A copy betterleaks redacted says so and holds a numbered placeholder;
 an edit around it lands with the secret put back, the returned diff
 carries no secret, and an altered placeholder refuses the landing."
-  (unless (executable-find (car ch-mcp-server-gitleaks-command))
-    (ert-skip "no gitleaks to run"))
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
   (ch-mcp-tests--in-territory
     (let* ((token (ch-mcp-tests--random-token))
            (file (ch-mcp-tests--temp-file (concat "token = " token "\nalpha\n")))
@@ -1059,8 +1059,8 @@ filter's list is as long as the registration."
 (ert-deftest ch-mcp-tools-results-are-redacted ()
   "A token in a tool result is replaced and the note names the rule; a
 clean result is returned as it is."
-  (unless (executable-find (car ch-mcp-server-gitleaks-command))
-    (ert-skip "no gitleaks to run"))
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
   (let ((token (ch-mcp-tests--random-token)))
     (unwind-protect
         (progn
@@ -1070,7 +1070,7 @@ clean result is returned as it is."
           (let ((result (ch-mcp-server--buffer-text "ch-mcp-tests-leaky-result")))
             (should-not (string-search token result))
             (should (string-search "token = [REDACTED:github-pat]\nplain\n" result))
-            (should (string-search "[gitleaks redacted 1 span: github-pat]" result)))
+            (should (string-search "[betterleaks redacted 1 span: github-pat]" result)))
           (with-current-buffer (get-buffer-create "ch-mcp-tests-clean-result")
             (erase-buffer)
             (insert "plain\n"))
@@ -1080,9 +1080,9 @@ clean result is returned as it is."
       (kill-buffer "ch-mcp-tests-clean-result"))))
 
 (ert-deftest ch-mcp-tools-diffs-are-redacted ()
-  "The context lines of an edit's diff pass through gitleaks too."
-  (unless (executable-find (car ch-mcp-server-gitleaks-command))
-    (ert-skip "no gitleaks to run"))
+  "The context lines of an edit's diff pass through betterleaks too."
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
   (ch-mcp-tests--in-territory
     (let* ((token (ch-mcp-tests--random-token))
            (file (ch-mcp-tests--temp-file
@@ -1094,9 +1094,9 @@ clean result is returned as it is."
         (should (string-search "[REDACTED:github-pat]" diff))))))
 
 (ert-deftest ch-mcp-tools-eval-elisp-result-is-redacted ()
-  "What eval-elisp returns passes through gitleaks in the parent."
-  (unless (executable-find (car ch-mcp-server-gitleaks-command))
-    (ert-skip "no gitleaks to run"))
+  "What eval-elisp returns passes through betterleaks in the parent."
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
   (let ((ch-mcp-server-elisp-scope 'unrestricted)
         (token (ch-mcp-tests--random-token)))
     (let ((result (ch-mcp-server--eval-elisp

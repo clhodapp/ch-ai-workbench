@@ -19,7 +19,7 @@ Three server-side rules are structural, not etiquette: writes
 confined to your session's territory, the project you were launched
 in; eval-elisp and transform run in a sandboxed child Emacs, not in
 the live session (below); and every tool result passes through
-gitleaks in the live Emacs before it reaches you, so a recognized
+betterleaks in the live Emacs before it reaches you, so a recognized
 secret arrives as `[REDACTED:<rule>]` with a note appended naming the
 rules. A refusal or a redaction is a boundary, not a bug: don't route
 around it (no reconstructing a value from its context, no editing
@@ -166,7 +166,7 @@ native edit tools stay the default.
   `replace-match`, computed replacements (string ops, `match-string`,
   arithmetic), and `indent-region` are the useful moves; `save-buffer`
   and the kill ring do nothing useful there.
-- **Redacted spans come back.** A copy in which gitleaks found a
+- **Redacted spans come back.** A copy in which betterleaks found a
   secret shows numbered placeholders, `[REDACTED:<rule>:<n>]`. When the
   text lands, the live Emacs puts the original spans back in their
   place, so the buffer never receives a placeholder and you never see
@@ -205,7 +205,7 @@ native file tools than with elisp: `buffer-file (name)` writes the
 buffer's text to a file under your territory at
 `.claude/claude-code-sandbox/mcp-copies/<name>` (writable inside the
 sandbox, ignored by git) and returns the path. The text passes through
-gitleaks like every copy; a redacted copy says so, and its secrets
+betterleaks like every copy; a redacted copy says so, and its secrets
 appear as numbered placeholders that the live Emacs puts back when the
 text lands. Edit the file, then `land-buffer-file (name, save)` puts
 its text into the buffer and returns the unified diff; it is refused
@@ -249,7 +249,7 @@ The copies are refreshed before each call and carry the buffer's name
 and text only: the major mode comes from the file name, there are no
 buffer-local values, no processes, and the copy visits no file. A
 buffer the read scope, the sensitivity mark, or the debug-knob latch
-withholds has no copy. A copy in which gitleaks found a token has it
+withholds has no copy. A copy in which betterleaks found a token has it
 replaced by a numbered placeholder, `[REDACTED:<rule>:<n>]`, which the
 live Emacs turns back into the original when text lands. Use the tool
 for what the configuration and buffer text answer: a default binding,

@@ -46,7 +46,7 @@ rules=$(jq -r '.rules // empty' "$redacted" 2>/dev/null || true)
 result=$(claude-consent ask --payload-stdin \
   --title "Reveal redacted text to the model" \
   --detail "Read: $file
-The model read this before and gitleaks redacted $count span(s)${rules:+ ($rules)}.
+The model read this before and betterleaks redacted $count span(s)${rules:+ ($rules)}.
 It has asked for the same read again. Allow shows it the real text, once." \
   --option 'allow=Reveal the real text once' \
   --option 'deny=Keep it redacted' \

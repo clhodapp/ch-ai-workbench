@@ -429,7 +429,7 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   "block"` only adds its reason beside the original, which the model
   still sees. The claude-code module's `redact` hook
   (`claude-redact-hook`, PostToolUse on every tool) stands on this: the
-  result's string leaves pass through gitleaks and a finding is
+  result's string leaves pass through betterleaks and a finding is
   replaced in place with a note.
 - **A deny is also a checklist gate.** The same module's
   `claude-push-pr-check-hook` (matcher `Bash`) denies a command that
