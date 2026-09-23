@@ -120,36 +120,36 @@
             # whole layer in one Emacs.
             workbenchBundles = lib.foldl' (acc: group: acc // group) { } (
               lib.attrValues (
-                import ../../../modules/home-manager/emacs/bundles-spec.nix {
+                import ../../../modules/homeManager/emacs/bundles-spec.nix {
                   inherit lib;
-                  readInit = name: builtins.readFile ../../../modules/home-manager/emacs/inits/${name};
+                  readInit = name: builtins.readFile ../../../modules/homeManager/emacs/inits/${name};
                   merman = inputs.merman-nix.packages.${system}.merman;
                   betterleaks = pkgs.betterleaks;
                 }
               )
             );
             workbenchLocalPackages = lib.concatLists (
-              lib.attrValues (import ../../../modules/home-manager/emacs/local-packages.nix)
+              lib.attrValues (import ../../../modules/homeManager/emacs/local-packages.nix)
             );
 
-            aiCommitSrc = "${self}/modules/home-manager/emacs/packages/ai-commit";
-            claudeQueueSrc = "${self}/modules/home-manager/emacs/packages/claude-queue";
-            semanticFinderSrc = "${self}/modules/home-manager/emacs/packages/semantic-finder";
-            testsSrc = "${self}/modules/home-manager/emacs/tests";
+            aiCommitSrc = "${self}/modules/homeManager/emacs/packages/ai-commit";
+            claudeQueueSrc = "${self}/modules/homeManager/emacs/packages/claude-queue";
+            semanticFinderSrc = "${self}/modules/homeManager/emacs/packages/semantic-finder";
+            testsSrc = "${self}/modules/homeManager/emacs/tests";
 
             mermanMmdcShim = pkgs.writeShellScriptBin "mmdc" ''exec ${lib.getExe merman} mmdc "$@"'';
 
             # The hook package read from the module's lib, so the check
             # below drives the same script a real configuration installs.
             claudePushPrCheckHook =
-              import ../../../modules/home-manager/claude-code/lib/claude-push-pr-check-hook.nix
+              import ../../../modules/homeManager/claude-code/lib/claude-push-pr-check-hook.nix
                 {
                   inherit pkgs;
                 };
-            claudeRedactHook = import ../../../modules/home-manager/claude-code/lib/claude-redact-hook.nix {
+            claudeRedactHook = import ../../../modules/homeManager/claude-code/lib/claude-redact-hook.nix {
               inherit pkgs;
             };
-            claudeRevealHook = import ../../../modules/home-manager/claude-code/lib/claude-reveal-hook.nix {
+            claudeRevealHook = import ../../../modules/homeManager/claude-code/lib/claude-reveal-hook.nix {
               inherit pkgs;
               claude-consent = claudeConsent;
             };
@@ -159,7 +159,7 @@
             # modules use.
             claudeConsent = pkgs.callPackage ../../../pkgs/claude-consent/claude-consent { };
             emacsClaudeConsentHook =
-              import ../../../modules/home-manager/emacs/lib/emacs-claude-consent-hook.nix
+              import ../../../modules/homeManager/emacs/lib/emacs-claude-consent-hook.nix
                 {
                   inherit pkgs;
                   claude-consent = claudeConsent;

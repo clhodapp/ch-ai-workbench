@@ -13,7 +13,7 @@ Where things live in this repository:
 
 | Piece | Path |
 |---|---|
-| Home Manager module (`ch-ai-workbench.claude-code-sandbox.*`) | `modules/home-manager/claude-code-sandbox/default.nix` |
+| Home Manager module (`ch-ai-workbench.claude-code-sandbox.*`) | `modules/homeManager/claude-code-sandbox/default.nix` |
 | CLI (Python, stdlib only) | `pkgs/ch-ai-workbench/claude-code-sandbox/` |
 | Skills-dir plugin (enrollment skill, session-start hook) | `pkgs/ch-ai-workbench/claude-code-sandbox-plugin/` |
 | Landlock shim (unix-socket narrowing) | `pkgs/ch-ai-workbench/landlock-shim/` |

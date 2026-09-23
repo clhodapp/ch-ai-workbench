@@ -62,36 +62,10 @@
           ch-zsh-config = inputs.ch-zsh-config;
         };
 
-        modules = lib: {
-          homeManager = {
-            # The Emacs half, in three modules that each define their
-            # bundles on the editor's own options.
-            # Vendor-neutral: comment threads, the semantic finder,
-            # parenting, the ACP agent shell, commit messages, the
-            # ghostel environment handoff.
-            emacs = lib.caisson.home-manager.mkModule ./modules/home-manager/emacs;
-            # gptel and gptel-agent, and the backend and model they
-            # start on.
-            gptel = lib.caisson.home-manager.mkModule ./modules/home-manager/gptel;
-            # Claude Code in Emacs: claude-queue, the MCP server, and
-            # its stdio bridge. Needs `emacs`.
-            claude = lib.caisson.home-manager.mkModule ./modules/home-manager/claude;
-            # The agent half: hooks, skills, output styles, permissions,
-            # and the LSP plugin manifest.
-            claude-code = lib.caisson.home-manager.mkModule ./modules/home-manager/claude-code;
-            # Claude Code's native sandbox, declared: named profiles
-            # (closed toolsets compiled from Nix closures into sandbox
-            # rules) that a checkout opts into by enrollment.
-            # Independent of the other modules.
-            claude-code-sandbox = lib.caisson.home-manager.mkModule ./modules/home-manager/claude-code-sandbox;
-            # What joins them: the hooks and skill that let a session
-            # drive the live Emacs.
-            emacs-integration = lib.caisson.home-manager.mkModule ./modules/home-manager/emacs-integration;
-            # The shell half: one function, the other end of an Emacs
-            # eval-cmd this layer registers.
-            zsh = lib.caisson.home-manager.mkModule ./modules/home-manager/zsh;
-          };
-        };
+        # The module tree, read from the layout: each entry under
+        # modules/<class>/ registers under its directory name, and the
+        # default.nix of each module describes what it configures.
+        modules = caisson.lib.caisson-core.mkModules ./modules;
       };
     in
     lib.caisson.flake-parts.mkConfiguration {

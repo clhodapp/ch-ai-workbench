@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: MIT
+#
+# The agent half of the workbench: the hooks, skills, output styles and
+# permissions a Claude Code session runs under, and the LSP plugin
+# manifest it reads.
 { closure-inputs, ... }:
 {
   config,

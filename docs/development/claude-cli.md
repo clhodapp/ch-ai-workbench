@@ -5,7 +5,7 @@ from tooling (primarily Emacs). Everything here was **verified live**
 against CLI 2.1.195 (2026-07-16); none of the on-disk formats are
 documented upstream, so treat record shapes as version-dependent and
 parse defensively. Consumer today: the `claude-queue` Emacs package
-(`modules/home-manager/emacs/packages/claude-queue/`).
+(`modules/homeManager/emacs/packages/claude-queue/`).
 
 ## Background agents (the fire-and-forget backend)
 
