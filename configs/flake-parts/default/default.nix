@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-{ ... }:
+{ closure-lib, ... }:
 {
   inputs,
   lib,
@@ -86,13 +86,11 @@
             # `--batch` against the full init, so the packages must be in
             # the init package's closure rather than merely installed
             # into a profile.
-            scope = import "${inputs.ch-emacs-config}/modules/home-manager/emacs/lib/package-scope.nix" {
+            scope = closure-lib.ch-emacs-config.mkEmacsScope {
               inherit pkgs;
               lib = pkgs.lib;
               emacsPackage = pkgs.ch-emacs-config.emacs-pgtk;
-              bundles =
-                (import "${inputs.ch-emacs-config}/modules/home-manager/emacs/bundles/spec.nix")
-                // workbenchBundles;
+              bundles = closure-lib.ch-emacs-config.bundleSpec // workbenchBundles;
               sources = {
                 # Through the editor rather than a second input, so both
                 # layers build these from one revision. The list mirrors
