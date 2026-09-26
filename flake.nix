@@ -54,6 +54,7 @@
     let
       lib = caisson.lib.caisson-core.mkLib {
         inherit inputs;
+        namespace = "ch-ai-workbench";
         systems = [ "x86_64-linux" ];
 
         projects = {
@@ -69,7 +70,6 @@
       };
     in
     lib.caisson.flake-parts.mkConfiguration {
-      name = "ch-ai-workbench";
       configModule = lib.caisson.flake-parts.mkModule ./configs/flake-parts/default;
     };
 
