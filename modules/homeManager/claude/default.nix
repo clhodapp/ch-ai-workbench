@@ -22,7 +22,7 @@
 let
   cfg = config.ch-ai-workbench.claude;
 
-  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
 
   # The bundle spec and the local packages come from this layer's
   # library, so the modules and the checks read one definition.

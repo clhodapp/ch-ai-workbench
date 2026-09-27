@@ -78,7 +78,7 @@
         perSystem =
           { pkgs, system, ... }:
           let
-            merman = inputs.merman-nix.packages.${system}.merman;
+            merman = inputs.merman-nix.packages.${system}.merman-preview;
 
             # An Emacs carrying both layers' bundles, built the way the
             # editor builds its own check Emacs: the ERT suites below run
@@ -120,7 +120,7 @@
               lib.attrValues (
                 workbench.bundleSpec {
                   inherit lib;
-                  merman = inputs.merman-nix.packages.${system}.merman;
+                  merman = inputs.merman-nix.packages.${system}.merman-preview;
                   betterleaks = pkgs.betterleaks;
                 }
               )
