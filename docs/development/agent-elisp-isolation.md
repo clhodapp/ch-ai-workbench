@@ -2,7 +2,7 @@
 
 Design, 2026-09-07, built in the order the section at the end gives. The subject is the elisp an agent runs against the
 resident Emacs through the MCP server
-(`modules/home-manager/emacs/inits/mcp-server.el`): how it is kept from
+(`modules/homeManager/emacs/inits/mcp-server.el`): how it is kept from
 changing the session, and how it is kept from seeing what it was not
 given.
 

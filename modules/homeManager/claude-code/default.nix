@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: MIT
-{ closure-inputs, ... }:
+#
+# The agent half of the workbench: the hooks, skills, output styles and
+# permissions a Claude Code session runs under, and the LSP plugin
+# manifest it reads.
+{ closure-inputs, closure-lib, ... }:
 {
   config,
   lib,
@@ -13,7 +17,7 @@ let
   # editor this workbench builds on: the manifest below renders it into
   # Claude Code's lspServers shape, and the editor's eglot renders the
   # same table, so the two cannot disagree about how to spawn a server.
-  languageServers = closure-inputs.ch-emacs-config.languageServerTable pkgs {
+  languageServers = closure-lib.ch-emacs-config.languageServers pkgs {
     merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
   };
 
