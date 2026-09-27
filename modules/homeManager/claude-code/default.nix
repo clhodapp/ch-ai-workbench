@@ -112,17 +112,22 @@ let
   # lib/claude-tic-check-display-hook.sh.
   claudeTicCheckDisplayHook = import ./lib/claude-tic-check-display-hook.nix { inherit pkgs; };
 
+  # The three hooks the flake checks also drive come from this layer's
+  # library (lib-overlays/default/hooks), so the checks and this module
+  # install one script each.
+  workbench = closure-lib.ch-ai-workbench;
+
   # PostToolUse on every tool: the string leaves of the result pass
   # through betterleaks and a finding replaces what the model sees, with a
-  # note naming the rules (script: lib/claude-redact-hook.sh; design:
+  # note naming the rules (script: claude-redact-hook.sh; design:
   # docs/development/agent-elisp-isolation.md).
-  claudeRedactHook = import ./lib/claude-redact-hook.nix { inherit pkgs; };
+  claudeRedactHook = workbench.mkClaudeRedactHook { inherit pkgs; };
 
   # PreToolUse on Read, the retry half: an identical Read after a
   # redaction asks the user through the consent spool whether the model
   # may see the real text; allow lets that one result through
-  # (script: lib/claude-reveal-hook.sh).
-  claudeRevealHook = import ./lib/claude-reveal-hook.nix {
+  # (script: claude-reveal-hook.sh).
+  claudeRevealHook = workbench.mkClaudeRevealHook {
     inherit pkgs;
     claude-consent = claudeConsent;
   };
@@ -133,8 +138,8 @@ let
   # if it has one, is not already merged (GitHub keeps accepting
   # pushes to a merged PR's head branch); the identical re-issue
   # passes and consumes the marker, so every push costs one check
-  # (script: lib/claude-push-pr-check-hook.sh).
-  claudePushPrCheckHook = import ./lib/claude-push-pr-check-hook.nix { inherit pkgs; };
+  # (script: claude-push-pr-check-hook.sh).
+  claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
 
   enabledHooks = lib.filterAttrs (_name: hook: hook.enable) cfg.hooks;
 

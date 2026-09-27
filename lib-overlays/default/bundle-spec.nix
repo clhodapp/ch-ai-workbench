@@ -3,16 +3,20 @@
 # This layer's bundles, in the shape the editor's `bundles` option
 # takes, grouped by the module that defines them: `emacs` is the
 # vendor-neutral agent workbench, `gptel` the gptel side, `claude` the
-# Claude Code side. A separate file because two things read it: each
-# module, which defines its own group on that option, and the checks,
-# which build an Emacs carrying every group. A check built from a
-# second copy would pass while the real configuration broke.
+# Claude Code side. Published as `lib.ch-ai-workbench.bundleSpec`
+# because two things read it: each module, which defines its own group
+# on that option, and the checks, which build an Emacs carrying every
+# group. A check built from a second copy would pass while the real
+# configuration broke. The init files live in ./inits beside this
+# file.
 {
   lib,
-  readInit,
   merman,
   betterleaks,
 }:
+let
+  readInit = name: builtins.readFile ./inits/${name};
+in
 {
   emacs = {
     acp = {

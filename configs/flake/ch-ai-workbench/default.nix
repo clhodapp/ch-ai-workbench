@@ -111,56 +111,48 @@
 
             emacs = scope.emacs;
 
-            # This layer's bundle spec and local packages, read from the
-            # modules so the checks and a real configuration cannot
-            # drift. Every group at once: the ERT suites below need the
-            # whole layer in one Emacs.
+            # This layer's bundle spec and local packages, from its
+            # library, so the checks and a real configuration read one
+            # definition. Every group at once: the ERT suites below need
+            # the whole layer in one Emacs.
+            workbench = closure-lib.ch-ai-workbench;
             workbenchBundles = lib.foldl' (acc: group: acc // group) { } (
               lib.attrValues (
-                import ../../../modules/homeManager/emacs/bundles-spec.nix {
+                workbench.bundleSpec {
                   inherit lib;
-                  readInit = name: builtins.readFile ../../../modules/homeManager/emacs/inits/${name};
                   merman = inputs.merman-nix.packages.${system}.merman;
                   betterleaks = pkgs.betterleaks;
                 }
               )
             );
-            workbenchLocalPackages = lib.concatLists (
-              lib.attrValues (import ../../../modules/homeManager/emacs/local-packages.nix)
-            );
+            workbenchLocalPackages = lib.concatLists (lib.attrValues workbench.localPackageOverlays);
 
-            aiCommitSrc = "${self}/modules/homeManager/emacs/packages/ai-commit";
-            claudeQueueSrc = "${self}/modules/homeManager/emacs/packages/claude-queue";
-            semanticFinderSrc = "${self}/modules/homeManager/emacs/packages/semantic-finder";
-            testsSrc = "${self}/modules/homeManager/emacs/tests";
+            aiCommitSrc = workbench.emacsPackageSources.ai-commit;
+            claudeQueueSrc = workbench.emacsPackageSources.claude-queue;
+            semanticFinderSrc = workbench.emacsPackageSources.semantic-finder;
+            # The ERT suites that exercise the full init rather than one
+            # package: the MCP tools and the collab-comments integration.
+            testsSrc = "${self}/tests/emacs";
 
             mermanMmdcShim = pkgs.writeShellScriptBin "mmdc" ''exec ${lib.getExe merman} mmdc "$@"'';
 
-            # The hook package read from the module's lib, so the check
-            # below drives the same script a real configuration installs.
-            claudePushPrCheckHook =
-              import ../../../modules/homeManager/claude-code/lib/claude-push-pr-check-hook.nix
-                {
-                  inherit pkgs;
-                };
-            claudeRedactHook = import ../../../modules/homeManager/claude-code/lib/claude-redact-hook.nix {
-              inherit pkgs;
-            };
-            claudeRevealHook = import ../../../modules/homeManager/claude-code/lib/claude-reveal-hook.nix {
+            # The hook packages from this layer's library, so the checks
+            # below drive the same scripts a real configuration installs.
+            claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
+            claudeRedactHook = workbench.mkClaudeRedactHook { inherit pkgs; };
+            claudeRevealHook = workbench.mkClaudeRevealHook {
               inherit pkgs;
               claude-consent = claudeConsent;
             };
 
             # The prompt API tool (its build runs the unittest suite)
-            # and the consent hook built on it, from the same files the
+            # and the consent hook built on it, from the same library the
             # modules use.
             claudeConsent = pkgs.callPackage ../../../pkgs/claude-consent/claude-consent { };
-            emacsClaudeConsentHook =
-              import ../../../modules/homeManager/emacs/lib/emacs-claude-consent-hook.nix
-                {
-                  inherit pkgs;
-                  claude-consent = claudeConsent;
-                };
+            emacsClaudeConsentHook = workbench.mkEmacsClaudeConsentHook {
+              inherit pkgs;
+              claude-consent = claudeConsent;
+            };
           in
           {
             checks = {

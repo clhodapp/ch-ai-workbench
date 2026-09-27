@@ -24,7 +24,7 @@
 # deliberate (a session must never block on the editor) and it is also
 # why `emacsclientPath` is asserted rather than discovered: without it
 # the integration would install cleanly and quietly do nothing.
-{ closure-inputs, ... }:
+{ closure-inputs, closure-lib, ... }:
 {
   config,
   lib,
@@ -52,11 +52,13 @@ let
     ];
     text = ''
       emacsclient() { ${lib.escapeShellArg emacsclient} "$@"; }
-      ${builtins.readFile ../emacs/lib/emacs-claude-cwd-hook.sh}
+      ${builtins.readFile ./emacs-claude-cwd-hook.sh}
     '';
   };
 
-  consentHook = import ../emacs/lib/emacs-claude-consent-hook.nix {
+  # The consent hook comes from this layer's library, so the checks
+  # drive the same package this module installs.
+  consentHook = closure-lib.ch-ai-workbench.mkEmacsClaudeConsentHook {
     inherit pkgs;
     claude-consent = config.ch-ai-workbench.claude-code.consentPackage;
   };
@@ -144,12 +146,12 @@ in
     ];
 
     ch-ai-workbench.claude-code.skills = lib.mkIf cfg.skill.enable {
-      emacs-tools.source = ../emacs/skills/emacs-tools;
+      emacs-tools.source = ./skills/emacs-tools;
       # Terminals are sensitive by default (the MCP server withholds them
       # until the user exposes one); this skill tells the agent what it
       # can read and how the user grants access, so it is gated with the
       # rest of the MCP-server documentation.
-      ghostel-terminals.source = ../emacs/skills/ghostel-terminals;
+      ghostel-terminals.source = ./skills/ghostel-terminals;
     };
 
     ch-ai-workbench.claude-code.hooks =

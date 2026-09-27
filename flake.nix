@@ -63,14 +63,18 @@
           ch-zsh-config = inputs.ch-zsh-config;
         };
 
-        # The module tree, read from the layout: each entry under
-        # modules/<class>/ registers under its directory name, and the
-        # default.nix of each module describes what it configures.
+        # The three trees, read from the layout: each entry under
+        # modules/<class>/ and configs/<class>/ registers under its
+        # directory name, each lib-overlays/<name>/ registers as a
+        # library overlay, and the default.nix of each describes what it
+        # configures.
         modules = caisson.lib.caisson-core.mkModules ./modules;
+        configs = caisson.lib.caisson-core.mkModules ./configs;
+        libOverlays = caisson.lib.caisson-core.mkLibOverlays ./lib-overlays;
       };
     in
     lib.caisson.flake-parts.mkConfiguration {
-      configModule = lib.caisson.flake-parts.mkModule ./configs/flake-parts/default;
+      configModule = lib.caisson-core.configs.flake.ch-ai-workbench;
     };
 
 }
