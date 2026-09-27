@@ -9,7 +9,7 @@
 # contributed to ch-emacs-config's own options, so a configuration
 # importing both gets one Emacs with both layers' bundles rather than
 # two configurations fighting.
-{ closure-inputs, ... }:
+{ closure-inputs, closure-lib, ... }:
 {
   config,
   lib,
@@ -20,6 +20,10 @@ let
   cfg = config.ch-ai-workbench.emacs;
 
   merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+
+  # The bundle spec and the local packages come from this layer's
+  # library, so the modules and the checks read one definition.
+  workbench = closure-lib.ch-ai-workbench;
 in
 {
   options.ch-ai-workbench.emacs = {
@@ -42,17 +46,16 @@ in
       })
     ];
 
-    ch-emacs-config.emacs.localPackageOverlays = (import ./local-packages.nix).emacs;
+    ch-emacs-config.emacs.localPackageOverlays = workbench.localPackageOverlays.emacs;
 
     # `enable` is wrapped here rather than in the spec: the spec is also
     # read as plain data by the checks, where a priority wrapper is not
     # a boolean. mkDefault so a consumer can switch a bundle off.
     ch-emacs-config.emacs.bundles =
       lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
-        (import ./bundles-spec.nix {
+        (workbench.bundleSpec {
           inherit lib merman;
           betterleaks = pkgs.betterleaks;
-          readInit = name: builtins.readFile ./inits/${name};
         }).emacs;
   };
 }

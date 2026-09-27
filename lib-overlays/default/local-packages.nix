@@ -2,10 +2,11 @@
 #
 # The in-tree Emacs packages this layer adds, as overlays over the
 # editor's package scope, grouped by the module that adds them (the
-# same groups as bundles-spec.nix). Lists rather than attrsets because
-# that is what both consumers take: each module feeds its group to
-# `localPackageOverlays`, and the checks feed every group to the same
-# argument on `package-scope.nix`. Keeping one definition is the point;
+# same groups as bundle-spec.nix), published as
+# `lib.ch-ai-workbench.localPackageOverlays`. Lists rather than attrsets
+# because that is what both consumers take: each module feeds its group
+# to `localPackageOverlays`, and the checks feed every group to the same
+# argument on the package scope. Keeping one definition is the point;
 # a check built against a different package set than the modules
 # produce would pass while the real configuration broke.
 #
@@ -14,11 +15,11 @@
 {
   emacs = [
     (final: _prev: {
-      semantic-finder = final.epkgs.callPackage ./packages/semantic-finder {
+      semantic-finder = final.epkgs.callPackage ./emacs-packages/semantic-finder {
         inherit (final) mkLocalBuild;
         version = final.epkgs.emacs.version or "0";
       };
-      ai-commit = final.epkgs.callPackage ./packages/ai-commit {
+      ai-commit = final.epkgs.callPackage ./emacs-packages/ai-commit {
         inherit (final) mkLocalBuild;
         version = final.epkgs.emacs.version or "0";
       };
@@ -27,7 +28,7 @@
 
   claude = [
     (final: _prev: {
-      claude-queue = final.epkgs.callPackage ./packages/claude-queue {
+      claude-queue = final.epkgs.callPackage ./emacs-packages/claude-queue {
         inherit (final) mkLocalBuild semantic-finder;
         version = final.epkgs.emacs.version or "0";
       };

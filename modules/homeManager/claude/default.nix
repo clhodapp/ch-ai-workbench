@@ -12,7 +12,7 @@
 # The Claude Code CLI itself (hooks, skills, the LSP plugin) is the
 # claude-code module; the hooks and skill that let a session drive this
 # Emacs are emacs-integration.
-{ closure-inputs, ... }:
+{ closure-inputs, closure-lib, ... }:
 {
   config,
   lib,
@@ -23,6 +23,10 @@ let
   cfg = config.ch-ai-workbench.claude;
 
   merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+
+  # The bundle spec and the local packages come from this layer's
+  # library, so the modules and the checks read one definition.
+  workbench = closure-lib.ch-ai-workbench;
 
   # The editor's package scope, read from its module rather than rebuilt:
   # the bridge below is built against the same Emacs the editor
@@ -66,17 +70,16 @@ in
       }
     ];
 
-    ch-emacs-config.emacs.localPackageOverlays = (import ../emacs/local-packages.nix).claude;
+    ch-emacs-config.emacs.localPackageOverlays = workbench.localPackageOverlays.claude;
 
     # `enable` is wrapped here rather than in the spec: the spec is also
     # read as plain data by the checks, where a priority wrapper is not
     # a boolean. mkDefault so a consumer can switch a bundle off.
     ch-emacs-config.emacs.bundles =
       lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
-        (import ../emacs/bundles-spec.nix {
+        (workbench.bundleSpec {
           inherit lib merman;
           betterleaks = pkgs.betterleaks;
-          readInit = name: builtins.readFile ../emacs/inits/${name};
         }).claude;
 
     home.packages = [ mcpStdioBridge ];

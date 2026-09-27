@@ -4,7 +4,7 @@
 # bundles, and the choice of backend and model they start on. Stands on
 # the editor alone; it does not need the vendor-neutral module beside
 # it.
-{ closure-inputs, ... }:
+{ closure-inputs, closure-lib, ... }:
 {
   config,
   lib,
@@ -15,6 +15,10 @@ let
   cfg = config.ch-ai-workbench.gptel;
 
   merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman;
+
+  # The bundle spec comes from this layer's library, so the modules and
+  # the checks read one definition.
+  workbench = closure-lib.ch-ai-workbench;
 in
 {
   options.ch-ai-workbench.gptel = {
@@ -53,10 +57,9 @@ in
       # read as plain data by the checks, where a priority wrapper is not
       # a boolean. mkDefault so a consumer can switch a bundle off.
       (lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
-        (import ../emacs/bundles-spec.nix {
+        (workbench.bundleSpec {
           inherit lib merman;
           betterleaks = pkgs.betterleaks;
-          readInit = name: builtins.readFile ../emacs/inits/${name};
         }).gptel
       )
       # The backend and model choices, set on the variables the gptel
