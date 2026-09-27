@@ -28,6 +28,21 @@
       # feed every group to the package scope.
       localPackageOverlays = import ./local-packages.nix;
 
+      # The two Emacs packages this layer builds from plain source
+      # inputs (collab-comments, parenting), as an override of the
+      # editor's Emacs package set. It takes the two source trees; the
+      # emacs module passes its closure's and the checks their own.
+      mkEmacsPackageOverrides =
+        { collab-comments, parenting }:
+        self: _super: {
+          collab-comments = self.callPackage ./emacs-packages/collab-comments/package.nix {
+            src = collab-comments;
+          };
+          parenting = self.callPackage ./emacs-packages/parenting/package.nix {
+            src = parenting;
+          };
+        };
+
       # The source trees of those packages, for the ERT suites the
       # checks run against them.
       emacsPackageSources = {

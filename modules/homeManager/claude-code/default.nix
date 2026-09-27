@@ -143,13 +143,19 @@ let
 
   enabledHooks = lib.filterAttrs (_name: hook: hook.enable) cfg.hooks;
 
-  # The prompt API behind the consent spool (pkgs/claude-consent):
-  # `claude-consent ask` raises a question from a hook and returns the
-  # answer, `answer`, `watch`, and `list` are the user's terminal side.
-  # Installed here, vendor side, because the spool is Claude Code's
-  # permission surface; the Emacs answerer plugs in from
-  # emacs-integration.
-  claudeConsent = pkgs.callPackage ../../../pkgs/claude-consent/claude-consent { };
+  # The prompt API behind the consent spool (`pkgs.ch-ai-workbench.claude-consent`,
+  # from this flake's package overlay): `claude-consent ask` raises a
+  # question from a hook and returns the answer, `answer`, `watch`, and
+  # `list` are the user's terminal side. Installed here, vendor side,
+  # because the spool is Claude Code's permission surface; the Emacs
+  # answerer plugs in from emacs-integration.
+  claudeConsent =
+    pkgs.ch-ai-workbench.claude-consent or (throw ''
+      ch-ai-workbench.claude-code needs `pkgs.ch-ai-workbench.claude-consent`:
+      apply this flake's package overlay (`overlays.default`; a caisson
+      consumer lists the flake in `projects`) to the nixpkgs instance
+      home-manager uses.
+    '');
 
   # The declaration as a store manifest: enabled hooks and the deny
   # rules, so a switched-off or deleted entry is absent from "new" and
@@ -439,7 +445,7 @@ in
     consentPackage = lib.mkOption {
       type = lib.types.package;
       default = claudeConsent;
-      defaultText = lib.literalExpression "claude-consent, built from this flake's pkgs/";
+      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.claude-consent";
       description = ''
         The claude-consent tool: the prompt API hooks use to ask the
         user a question and get the answer back. A hook runs

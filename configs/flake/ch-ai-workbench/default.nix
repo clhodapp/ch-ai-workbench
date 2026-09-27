@@ -22,33 +22,25 @@
       ;
   };
 
+  # This layer's packages (the sandbox CLI, its plugin, the Landlock
+  # shim and the claude-consent tool) are its `default` package overlay
+  # registry entry (pkg-overlays/, registered on mkLib), under
+  # pkgs.ch-ai-workbench. The package set applies it by default, beside
+  # `ch-emacs-config/default` from the editor project, which brings the
+  # editor's Emacs bases and ELPA pins: the checks build this layer's
+  # Emacs packages against the Emacs the editor configures, since they
+  # load into it. The flake exports its entry as `pkgOverlays` and as
+  # plain `overlays`.
   caisson.nixpkgs.overlays.all = {
-    # This flake's own packages (the sandbox CLI, its plugin, and the
-    # Landlock shim), under pkgs.ch-ai-workbench.
-    packages = lib.caisson.nixpkgs.mkPackagesOverlay (
-      { callPackage, ... }: import ../../../pkgs/ch-ai-workbench { inherit callPackage; }
-    );
     merman-nix = _name: inputs.merman-nix.overlays.packages;
-    # The editor's Emacs bases and ELPA pins: the checks below build
-    # this layer's packages against the same Emacs the editor
-    # configures, since they load into it.
-    emacs = _name: inputs.ch-emacs-config.overlays.emacs;
-    emacs-packages = _name: inputs.ch-emacs-config.overlays.emacs-packages;
   };
 
   caisson.nixpkgs.overlays.export.enabled = true;
-  caisson.nixpkgs.overlays.exported = overlays: {
-    inherit (overlays) packages;
-  };
+  caisson.nixpkgs.overlays.exported = _overlays: { };
 
   caisson.nixpkgs.pkgSets.pkgs = {
     pkgFunction = import inputs.nixpkgs;
-    overlayImports = overlays: [
-      overlays.emacs-packages
-      overlays.emacs
-      overlays.merman-nix
-      overlays.packages
-    ];
+    overlayImports = overlays: [ overlays.merman-nix ];
   };
 
   # packages.* is deliberately not partitioned: consumers take these
@@ -97,14 +89,7 @@
                 inherit (inputs.ch-emacs-config.inputs) pr-review ghostel;
               };
               extraOverrides = [
-                (self: _super: {
-                  collab-comments = self.callPackage ../../../pkgs/emacs/collab-comments/package.nix {
-                    src = inputs.collab-comments;
-                  };
-                  parenting = self.callPackage ../../../pkgs/emacs/parenting/package.nix {
-                    src = inputs.parenting;
-                  };
-                })
+                (workbench.mkEmacsPackageOverrides { inherit (inputs) collab-comments parenting; })
               ];
               localPackageOverlays = workbenchLocalPackages;
             };
@@ -148,7 +133,7 @@
             # The prompt API tool (its build runs the unittest suite)
             # and the consent hook built on it, from the same library the
             # modules use.
-            claudeConsent = pkgs.callPackage ../../../pkgs/claude-consent/claude-consent { };
+            claudeConsent = pkgs.ch-ai-workbench.claude-consent;
             emacsClaudeConsentHook = workbench.mkEmacsClaudeConsentHook {
               inherit pkgs;
               claude-consent = claudeConsent;

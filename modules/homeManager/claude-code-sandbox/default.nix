@@ -45,11 +45,12 @@
 # - env.PATH must carry the bubblewrap and socat directories or the
 #   sandbox runtime cannot construct sandboxes at all.
 #
-# This layer's own packages (the CLI, its plugin, the Landlock shim)
-# reach the module through its package overlay, exported as
-# `overlays.packages`, which puts them under `pkgs.ch-ai-workbench` in
-# the evaluation. A configuration that enables the module applies that
-# overlay to the package set its home evaluates with.
+# This layer's packages (the CLI, its plugin, the Landlock shim) reach
+# the module through its package overlay, which puts them under
+# `pkgs.ch-ai-workbench` in the evaluation: a caisson consumer that
+# lists this flake in `projects` applies it by default
+# (`ch-ai-workbench/default`), and any other applies `overlays.default`
+# to the package set its home evaluates with.
 { ... }:
 {
   config,
@@ -65,8 +66,9 @@ let
     name:
     pkgs.ch-ai-workbench.${name} or (throw ''
       ch-ai-workbench.claude-code-sandbox needs pkgs.ch-ai-workbench.${name}:
-      apply ch-ai-workbench's package overlay (its `overlays.packages`
-      output) to the package set this home evaluates with.
+      apply ch-ai-workbench's package overlay (`overlays.default`; a
+      caisson consumer lists the flake in `projects`) to the package set
+      this home evaluates with.
     '');
 
   # Everything a fragment needs beyond the declared toolset flows from

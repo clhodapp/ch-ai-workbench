@@ -14,9 +14,9 @@ Where things live in this repository:
 | Piece | Path |
 |---|---|
 | Home Manager module (`ch-ai-workbench.claude-code-sandbox.*`) | `modules/homeManager/claude-code-sandbox/default.nix` |
-| CLI (Python, stdlib only) | `pkgs/ch-ai-workbench/claude-code-sandbox/` |
-| Skills-dir plugin (enrollment skill, session-start hook) | `pkgs/ch-ai-workbench/claude-code-sandbox-plugin/` |
-| Landlock shim (unix-socket narrowing) | `pkgs/ch-ai-workbench/landlock-shim/` |
+| CLI (Python, stdlib only) | `pkg-overlays/default/packages/claude-code-sandbox/` |
+| Skills-dir plugin (enrollment skill, session-start hook) | `pkg-overlays/default/packages/claude-code-sandbox-plugin/` |
+| Landlock shim (unix-socket narrowing) | `pkg-overlays/default/packages/landlock-shim/` |
 
 ## Principles
 
@@ -181,7 +181,7 @@ auto-sync); the design is correct without it.
 ## Testing and commands
 
 The CLI's `unittest` suite under
-`pkgs/ch-ai-workbench/claude-code-sandbox/tests/` runs in the package's
+`pkg-overlays/default/packages/claude-code-sandbox/tests/` runs in the package's
 `checkPhase`, so building the package is the test run;
 `checks.<system>.claude-code-sandbox` exposes it to `nix flake check`,
 beside the plugin and shim builds. The merge engine is the correctness
@@ -197,7 +197,7 @@ nix build '.#claude-code-sandbox-plugin'
 nix build '.#landlock-shim'
 ```
 
-Fast Python loop, from `pkgs/ch-ai-workbench/claude-code-sandbox/`:
+Fast Python loop, from `pkg-overlays/default/packages/claude-code-sandbox/`:
 
 ```zsh
 PYTHONPATH=src python3 -m unittest discover -s tests -v
