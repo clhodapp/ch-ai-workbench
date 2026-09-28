@@ -639,6 +639,29 @@ in
         ${hooksManifest} ${lib.escapeShellArg hooksSidecar}
     '';
 
+    # Claude Code writes per-checkout state under .claude/ inside the
+    # checkout (agent worktrees, checkpoints, the per-machine settings
+    # overlay, scheduler state). None of it is repo content, and it
+    # appears in every clone the CLI is run in, so the exclusion is
+    # global rather than one .gitignore per repo. home-manager writes
+    # this list to $XDG_CONFIG_HOME/git/ignore, which git reads as the
+    # default global excludes file. Only takes effect where
+    # programs.git is enabled; this module does not enable it.
+    programs.git.ignores = [
+      "**/.claude/worktrees/"
+      "**/.claude/checkpoints/"
+      "**/.claude/mailbox/"
+      "**/.claude/routines/.state/"
+      "**/.claude/scheduled_tasks.json"
+      "**/.claude/scheduled_tasks.lock"
+      "**/.claude/agent-registry.json"
+      "**/.claude/agent-memory-local"
+      "**/.claude/assistant-daemon-state.json"
+      "**/.claude/first-run"
+      "**/.claude/settings.local.json"
+      "**/.claude/.cc-writes/"
+    ];
+
     home.file =
       lib.mapAttrs' (
         name: entry: lib.nameValuePair ".claude/skills/${name}" { inherit (entry) enable source; }
