@@ -61,6 +61,7 @@
           inherit caisson;
           ch-emacs-config = inputs.ch-emacs-config;
           ch-zsh-config = inputs.ch-zsh-config;
+          merman-nix = inputs.merman-nix;
         };
 
         # The three trees, read from the layout: each entry under

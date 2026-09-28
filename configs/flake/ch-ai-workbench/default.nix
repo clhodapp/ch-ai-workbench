@@ -29,19 +29,12 @@
   # `ch-emacs-config/default` from the editor project, which brings the
   # editor's Emacs bases and ELPA pins: the checks build this layer's
   # Emacs packages against the Emacs the editor configures, since they
-  # load into it. The flake exports its entry as `pkgOverlays` and as
-  # plain `overlays`.
-  caisson.nixpkgs.overlays.all = {
-    merman-nix = _name: inputs.merman-nix.overlays.packages;
-  };
-
-  caisson.nixpkgs.overlays.export.enabled = true;
-  caisson.nixpkgs.overlays.exported = _overlays: { };
-
-  caisson.nixpkgs.pkgSets.pkgs = {
-    pkgFunction = import inputs.nixpkgs;
-    overlayImports = overlays: [ overlays.merman-nix ];
-  };
+  # load into it. `merman-nix/default` brings pkgs.merman-nix, the
+  # headless mermaid renderer the Emacs and Claude integrations spawn.
+  # The flake exports its own entry as `pkgOverlays` and as plain
+  # `overlays`; the entries of consumed projects are applied, not
+  # exported.
+  caisson.nixpkgs.pkgSets.pkgs.pkgFunction = import inputs.nixpkgs;
 
   # packages.* is deliberately not partitioned: consumers take these
   # packages against this flake's main lock, so dev-only inputs must
