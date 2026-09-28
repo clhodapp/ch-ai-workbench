@@ -24,6 +24,10 @@ secret arrives as `[REDACTED:<rule>]` with a note appended naming the
 rules. A refusal or a redaction is a boundary, not a bug: don't route
 around it (no reconstructing a value from its context, no editing
 around a placeholder); ask the user, who owns the widening knobs.
+When `buffer-text` or `buffer-diff` returns a redacted result and the
+real text is needed, re-issue the identical call: the user is asked,
+and on allow that one call comes back unredacted. Leave the `approval`
+argument of those tools empty; only the user's answer fills it.
 
 ## Conventions
 

@@ -431,6 +431,16 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   (`claude-redact-hook`, PostToolUse on every tool) stands on this: the
   result's string leaves pass through betterleaks and a finding is
   replaced in place with a note.
+- **A PreToolUse hook rewrites a call's input without deciding it.**
+  `hookSpecificOutput.updatedInput` with no `permissionDecision`
+  replaces the arguments the tool runs with, and the native permission
+  flow still decides the call. Probe-verified 2.1.259 (2026-09-28): a
+  hook that rewrote a Bash `command` from `echo SENTINEL-ORIGINAL` to
+  `echo SENTINEL-REWRITTEN` produced a tool result and a model reply
+  carrying only the rewritten sentinel, while the model's own
+  `tool_use` record in the transcript kept the original command. The
+  reveal hook stands on both halves: it adds an `approval` token to an
+  approved MCP read, and the model never sees the token.
 - **A deny is also a checklist gate.** The same module's
   `claude-push-pr-check-hook` (matcher `Bash`) denies a command that
   appears to run `git push` (the word `git`, any global options such

@@ -681,21 +681,26 @@ MCP Parameters:"
                            (buffer-list))
                "\n")))
 
-(defun ch-mcp-server--buffer-text (name &optional start-line end-line numbered)
+(defun ch-mcp-server--buffer-text (name &optional start-line end-line numbered
+                                         approval)
   "Return the text of the buffer named NAME, without properties.
 
 Optionally limited to the 1-based inclusive line range
 START-LINE..END-LINE, for paging large buffers.  With NUMBERED, each
 line is prefixed with its absolute line number in the buffer, matching
-the agent's native Read format — use it when the answer will feed
-line-addressed tools or the user needs line references.
+the native Read format of the agent; use it when the answer will feed
+line-addressed tools or the user needs line references.  APPROVAL is
+filled in by the reveal hook when the user allows a redacted read to
+be shown once; see `ch-mcp-server--use-approval'.
 
 MCP Parameters:
   name - name of a live buffer, as listed by the list-buffers tool
   start-line - first line to include (1-based; default 1)
   end-line - last line to include, inclusive (default: end of buffer)
-  numbered - yes to prefix each line with its 1-based buffer line number"
+  numbered - yes to prefix each line with its 1-based buffer line number
+  approval - leave empty; set only by the user's reveal prompt"
   (mcp-server-lib-with-error-handling
+    (ch-mcp-server--use-approval approval)
     (let ((buffer (get-buffer name))
           (start-line (ch-mcp-server--opt start-line))
           (end-line (ch-mcp-server--opt end-line)))
@@ -995,12 +1000,15 @@ MCP Parameters:"
           (mapconcat #'identity (nreverse files) "\n")
         "No file-visiting buffers have unsaved changes"))))
 
-(defun ch-mcp-server--buffer-diff (file)
+(defun ch-mcp-server--buffer-diff (file &optional approval)
   "Unified diff of FILE's unsaved buffer state against the file on disk.
+APPROVAL is as for `ch-mcp-server--buffer-text'.
 
 MCP Parameters:
-  file - absolute path of a file visited by some buffer"
+  file - absolute path of a file visited by some buffer
+  approval - leave empty; set only by the user's reveal prompt"
   (mcp-server-lib-with-error-handling
+    (ch-mcp-server--use-approval approval)
     (let* ((file (expand-file-name file))
            (buffer (find-buffer-visiting file)))
       (unless buffer
@@ -2639,6 +2647,53 @@ MCP Parameters:
 ;; on every registered tool function, which leaves the tool schemas that
 ;; mcp-server-lib derives from the functions' docstrings untouched.
 
+;; A redacted read can be shown once more, unredacted, when the user
+;; allows it.  The CLI's reveal hook asks the user when the identical
+;; call is re-issued; on allow it writes a random token into a file under
+;; $XDG_RUNTIME_DIR/claude-redact/mcp-approved/ and adds the token to the
+;; call as the `approval' argument (a PreToolUse hook may rewrite a
+;; call's input; the model's own record of the call keeps the original).
+;; A tool taking `approval' passes it to `ch-mcp-server--use-approval',
+;; which consumes the file and marks this one call unredacted.  A token
+;; with no file is a tool error, so a model cannot approve its own read.
+
+(defvar ch-mcp-server--skip-redaction nil
+  "Non-nil while a tool call runs under a consumed approval.
+Bound to nil around every tool call by `ch-mcp-server--filter-result',
+so an approval covers exactly the call that presented it, even when
+that call signals.")
+
+(defun ch-mcp-server--approval-directory ()
+  "Where the reveal hook writes approval tokens, or nil without a runtime dir."
+  (let ((runtime (getenv "XDG_RUNTIME_DIR")))
+    (and runtime (not (string-empty-p runtime))
+         (expand-file-name "claude-redact/mcp-approved" runtime))))
+
+(defun ch-mcp-server--use-approval (approval)
+  "Consume APPROVAL, a token from the reveal hook, for the current call.
+Nil or empty APPROVAL does nothing.  A token whose file exists is
+deleted and the current call is left unredacted; anything else is a
+tool error."
+  (when (and approval (not (string-empty-p approval)))
+    (let ((directory (ch-mcp-server--approval-directory)))
+      (unless (and directory
+                   (string-match-p "\\`[A-Za-z0-9]\\{32,128\\}\\'" approval)
+                   (file-exists-p (expand-file-name approval directory)))
+        (mcp-server-lib-tool-throw
+         "approval is not a valid token; only the user's answer to a redaction prompt produces one, so leave it empty"))
+      (delete-file (expand-file-name approval directory))
+      (setq ch-mcp-server--skip-redaction t))))
+
+(defun ch-mcp-server--filter-result (tool &rest args)
+  "Run TOOL on ARGS and pass its result through the redaction filter.
+The :around advice on every tool function; skipped for the one call
+that consumed an approval."
+  (let ((ch-mcp-server--skip-redaction nil))
+    (let ((result (apply tool args)))
+      (if ch-mcp-server--skip-redaction
+          result
+        (ch-mcp-server--redact-result result)))))
+
 (defun ch-mcp-server--redact-result (result)
   "Return RESULT with the secrets betterleaks finds replaced, plus a note.
 A string result is run through betterleaks; each finding is replaced on
@@ -2691,7 +2746,8 @@ Kept beside the registration below, and a test holds the two lists to
 the same length.")
 
 (dolist (fn ch-mcp-server--tool-functions)
-  (advice-add fn :filter-return #'ch-mcp-server--redact-result))
+  (advice-remove fn #'ch-mcp-server--redact-result)
+  (advice-add fn :around #'ch-mcp-server--filter-result))
 
 ;;; Server lifecycle and registration
 

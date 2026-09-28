@@ -123,9 +123,11 @@ let
   # docs/development/agent-elisp-isolation.md).
   claudeRedactHook = workbench.mkClaudeRedactHook { inherit pkgs; };
 
-  # PreToolUse on Read, the retry half: an identical Read after a
-  # redaction asks the user through the consent spool whether the model
-  # may see the real text; allow lets that one result through
+  # PreToolUse on Read and the emacs server's buffer-text and
+  # buffer-diff, the retry half: an identical call after a redaction
+  # asks the user through the consent spool whether the model may see
+  # the real text; allow lets that one result through, for an MCP read
+  # by adding an approval token the server checks
   # (script: claude-reveal-hook.sh).
   claudeRevealHook = workbench.mkClaudeRevealHook {
     inherit pkgs;
@@ -614,7 +616,7 @@ in
       # declared timeout is only the liveness backstop above it.
       reveal = {
         event = "PreToolUse";
-        matcher = "Read";
+        matcher = "Read|mcp__emacs__buffer-text|mcp__emacs__buffer-diff";
         command = "claude-reveal-hook";
         package = claudeRevealHook;
         timeout = 3600;

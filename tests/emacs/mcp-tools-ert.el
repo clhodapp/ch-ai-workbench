@@ -1054,7 +1054,87 @@ filter's list is as long as the registration."
   (should (= (length ch-mcp-server--tool-functions)
              (hash-table-count (gethash "emacs" mcp-server-lib--tools))))
   (dolist (fn ch-mcp-server--tool-functions)
-    (should (advice-member-p #'ch-mcp-server--redact-result fn))))
+    (should (advice-member-p #'ch-mcp-server--filter-result fn))
+    (should-not (advice-member-p #'ch-mcp-server--redact-result fn))))
+
+(defmacro ch-mcp-tests--with-approval-dir (&rest body)
+  "Run BODY with a private XDG_RUNTIME_DIR holding the approval directory."
+  (declare (indent 0))
+  `(let* ((runtime (make-temp-file "mcp-runtime" t))
+          (process-environment (cons (concat "XDG_RUNTIME_DIR=" runtime)
+                                     process-environment)))
+     (make-directory (ch-mcp-server--approval-directory) t)
+     (unwind-protect (progn ,@body)
+       (delete-directory runtime t))))
+
+(defun ch-mcp-tests--approval-token ()
+  "Write a fresh approval token file and return the token."
+  (let ((token (apply #'string
+                      (mapcar (lambda (_)
+                                (aref "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+                                      (random 62)))
+                              (number-sequence 1 40)))))
+    (with-temp-file (expand-file-name token (ch-mcp-server--approval-directory)))
+    token))
+
+(ert-deftest ch-mcp-tools-approval-reveals-once ()
+  "A token file from the reveal hook lets exactly one read through
+unredacted and is consumed; the next identical read is redacted."
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
+  (ch-mcp-tests--with-approval-dir
+    (let ((token (ch-mcp-tests--random-token))
+          (approval (ch-mcp-tests--approval-token)))
+      (unwind-protect
+          (progn
+            (with-current-buffer (get-buffer-create "ch-mcp-tests-approved")
+              (erase-buffer)
+              (insert "token = " token "\n"))
+            (should (equal (concat "token = " token "\n")
+                           (ch-mcp-server--buffer-text
+                            "ch-mcp-tests-approved" nil nil nil approval)))
+            (should-not (file-exists-p
+                         (expand-file-name approval
+                                           (ch-mcp-server--approval-directory))))
+            (should-not (string-search
+                         token (ch-mcp-server--buffer-text
+                                "ch-mcp-tests-approved"))))
+        (kill-buffer "ch-mcp-tests-approved")))))
+
+(ert-deftest ch-mcp-tools-approval-cannot-be-forged ()
+  "A token with no file, or malformed, is a tool error and reveals
+nothing."
+  (ch-mcp-tests--with-approval-dir
+    (with-current-buffer (get-buffer-create "ch-mcp-tests-forged")
+      (erase-buffer)
+      (insert "plain\n"))
+    (unwind-protect
+        (dolist (bad '("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" "../../etc/passwd" "short"))
+          (should-error (ch-mcp-server--buffer-text
+                         "ch-mcp-tests-forged" nil nil nil bad)
+                        :type 'mcp-server-lib-tool-error))
+      (kill-buffer "ch-mcp-tests-forged"))))
+
+(ert-deftest ch-mcp-tools-approval-dies-with-its-call ()
+  "An approval consumed by a call that then signals leaves no skip
+behind for the next call."
+  (unless (executable-find (car ch-mcp-server-betterleaks-command))
+    (ert-skip "no betterleaks to run"))
+  (ch-mcp-tests--with-approval-dir
+    (let ((token (ch-mcp-tests--random-token))
+          (approval (ch-mcp-tests--approval-token)))
+      (unwind-protect
+          (progn
+            ;; A diff of a file no buffer visits: consumes, then fails.
+            (should-error (ch-mcp-server--buffer-diff "/nonexistent/file" approval)
+                          :type 'mcp-server-lib-tool-error)
+            (should-not ch-mcp-server--skip-redaction)
+            (with-current-buffer (get-buffer-create "ch-mcp-tests-after")
+              (erase-buffer)
+              (insert "token = " token "\n"))
+            (should-not (string-search
+                         token (ch-mcp-server--buffer-text "ch-mcp-tests-after"))))
+        (kill-buffer "ch-mcp-tests-after")))))
 
 (ert-deftest ch-mcp-tools-results-are-redacted ()
   "A token in a tool result is replaced and the note names the rule; a

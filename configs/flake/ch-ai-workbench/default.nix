@@ -343,10 +343,10 @@
                     jq -e '.hookSpecificOutput.updatedToolOutput.file.content == "token = [REDACTED:github-pat]\nplain\n"' <<<"$res"
                     jq -e '.hookSpecificOutput.updatedToolOutput.file.numLines == 2' <<<"$res"
                     jq -e '.hookSpecificOutput.additionalContext | test("redacted 1 span in this Read result: github-pat")' <<<"$res"
-                    jq -e '.hookSpecificOutput.additionalContext | test("re-issue this identical Read")' <<<"$res"
+                    jq -e '.hookSpecificOutput.additionalContext | test("re-issue this identical call")' <<<"$res"
                     key=$(jq -c '{tool_name, tool_input}' <<<"$read_payload" | sha256sum | cut -c1-64)
                     marker="$XDG_RUNTIME_DIR/claude-redact/redacted/01234567-$key"
-                    jq -e '.count == 1 and .rules == "github-pat"' "$marker"
+                    jq -e '.count == "1" and .rules == "github-pat"' "$marker"
                     # The user allowed: the approved marker lets the identical Read through once.
                     approved="$XDG_RUNTIME_DIR/claude-redact/approved/01234567-$key"
                     mkdir -p "$(dirname "$approved")"
@@ -357,6 +357,25 @@
                     # No session: redacted, but no retry path is offered.
                     res=$("$hook" <<<"$(jq -c 'del(.session_id)' <<<"$read_payload")")
                     jq -e '.hookSpecificOutput.additionalContext | test("re-issue") | not' <<<"$res"
+                    # An MCP read the server already redacted: nothing to
+                    # replace here, but the call is marked and the model is
+                    # told how to ask; the key leaves out `approval`.
+                    mcp_payload=$(jq -cn --arg s "$session" '{hook_event_name: "PostToolUse", tool_name: "mcp__emacs__buffer-text", session_id: $s,
+                      tool_input: {name: "notes"},
+                      tool_response: [{type: "text", text: "token = [REDACTED:github-pat]\n\n[betterleaks redacted 1 span: github-pat]"}]}')
+                    res=$("$hook" <<<"$mcp_payload")
+                    jq -e '.hookSpecificOutput.updatedToolOutput == null' <<<"$res"
+                    jq -e '.hookSpecificOutput.additionalContext | test("re-issue this identical call")' <<<"$res"
+                    mkey=$(jq -c '{tool_name, tool_input}' <<<"$mcp_payload" | sha256sum | cut -c1-64)
+                    jq -e '.rules == "github-pat"' "$XDG_RUNTIME_DIR/claude-redact/redacted/01234567-$mkey"
+                    # The approved call carries `approval`; it shares the key,
+                    # passes through once, and consumes the marker.
+                    : > "$XDG_RUNTIME_DIR/claude-redact/approved/01234567-$mkey"
+                    approved_payload=$(jq -c --arg t "$tok" '.tool_input.approval = "x" | .tool_response = [{type: "text", text: ("token = " + $t)}]' <<<"$mcp_payload")
+                    [ -z "$("$hook" <<<"$approved_payload")" ]
+                    [ ! -e "$XDG_RUNTIME_DIR/claude-redact/approved/01234567-$mkey" ]
+                    # A clean MCP result stays silent.
+                    [ -z "$("$hook" <<<"$(jq -c '.tool_response = [{type: "text", text: "plain"}]' <<<"$mcp_payload")")" ]
                     bash_payload=$(jq -cn --arg t "$tok" '{hook_event_name: "PostToolUse", tool_name: "Bash",
                       tool_response: {stdout: "ok\n", stderr: ("leak " + $t + " here\n"), interrupted: false}}')
                     res=$("$hook" <<<"$bash_payload")
@@ -409,7 +428,7 @@
                         f=$(find "$spool/pending" -name '*.json' | head -1)
                         if [ -n "$f" ]; then
                           [ "$(jq -r .prompt.title "$f")" = "Reveal redacted text to the model" ]
-                          [ "$(jq -r .hook.tool_input.file_path "$f")" = /x ]
+                          [ "$(jq -r '.hook.tool_input.file_path // .hook.tool_input.name' "$f")" = "$target" ]
                           id=$(jq -r .id "$f")
                           jq -cn --arg id "$id" --arg v "$1" --arg t "$2" '{id: $id, value: $v} + (if $t == "" then {} else {text: $t} end)' > "$spool/answers/$id.json.tmp"
                           mv "$spool/answers/$id.json.tmp" "$spool/answers/$id.json"
@@ -419,6 +438,7 @@
                       done
                       exit 1
                     }
+                    target=/x
                     # Allow: the approval is recorded and the hook abstains.
                     (answer allow "") & answerer=$!
                     [ -z "$("$hook" <<<"$payload")" ]
@@ -434,6 +454,23 @@
                     [ "$(decision "$res")" = deny ]
                     reason "$res" | grep -q 'kept the text redacted: not now'
                     [ ! -e "$approved" ]
+                    # An MCP read: allow also writes a token file and adds the
+                    # token to the call as `approval`, with no decision.
+                    target=notes
+                    mcp=$(jq -cn --arg s "$session" '{session_id: $s, hook_event_name: "PreToolUse", tool_name: "mcp__emacs__buffer-text", tool_input: {name: "notes"}, cwd: "/proj"}')
+                    mkey=$(jq -c '{tool_name, tool_input}' <<<"$mcp" | sha256sum | cut -c1-64)
+                    jq -cn '{count: "some", rules: "github-pat"}' > "$XDG_RUNTIME_DIR/claude-redact/redacted/01234567-$mkey"
+                    (answer allow "") & answerer=$!
+                    res=$("$hook" <<<"$mcp")
+                    wait $answerer
+                    jq -e '.hookSpecificOutput.permissionDecision == null' <<<"$res"
+                    jq -e '.hookSpecificOutput.updatedInput.name == "notes"' <<<"$res"
+                    token=$(jq -r .hookSpecificOutput.updatedInput.approval <<<"$res")
+                    [ "''${#token}" -ge 32 ]
+                    [ -e "$XDG_RUNTIME_DIR/claude-redact/mcp-approved/$token" ]
+                    [ -e "$XDG_RUNTIME_DIR/claude-redact/approved/01234567-$mkey" ]
+                    # A tool outside the three is none of its business.
+                    [ -z "$("$hook" <<<"$(jq -c '.tool_name = "mcp__emacs__context"' <<<"$mcp")")" ]
                     kill $sleeper
                     # Garbage in: nothing out.
                     [ -z "$(echo 'not json' | "$hook")" ]
