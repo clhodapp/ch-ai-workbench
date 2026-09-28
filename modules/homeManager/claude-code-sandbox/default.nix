@@ -44,7 +44,14 @@
 #   readable (`claudePackage`).
 # - env.PATH must carry the bubblewrap and socat directories or the
 #   sandbox runtime cannot construct sandboxes at all.
-{ closure-inputs, ... }:
+#
+# This layer's packages (the CLI, its plugin, the Landlock shim) reach
+# the module through its package overlay, which puts them under
+# `pkgs.ch-ai-workbench` in the evaluation: a caisson consumer that
+# lists this flake in `projects` applies it by default
+# (`ch-ai-workbench/default`), and any other applies `overlays.default`
+# to the package set its home evaluates with.
+{ ... }:
 {
   config,
   lib,
@@ -53,7 +60,16 @@
 }:
 let
   cfg = config.ch-ai-workbench.claude-code-sandbox;
-  system = pkgs.stdenv.hostPlatform.system;
+
+  # One of this layer's packages, from the evaluation's package set.
+  workbenchPackage =
+    name:
+    pkgs.ch-ai-workbench.${name} or (throw ''
+      ch-ai-workbench.claude-code-sandbox needs pkgs.ch-ai-workbench.${name}:
+      apply ch-ai-workbench's package overlay (`overlays.default`; a
+      caisson consumer lists the flake in `projects`) to the package set
+      this home evaluates with.
+    '');
 
   # Everything a fragment needs beyond the declared toolset flows from
   # cfg.runtime.
@@ -121,7 +137,7 @@ let
 
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
 
-  landlockShim = closure-inputs.self.packages.${system}.landlock-shim;
+  landlockShim = workbenchPackage "landlock-shim";
 
   # A profile with a socket allowlist gets its SHELL pinned to this
   # wrapper, which narrows connect() back to the declared sockets with
@@ -492,15 +508,15 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = closure-inputs.self.packages.${system}.claude-code-sandbox;
-      defaultText = lib.literalExpression "ch-ai-workbench.packages.<system>.claude-code-sandbox";
+      default = workbenchPackage "claude-code-sandbox";
+      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.claude-code-sandbox";
       description = "The claude-code-sandbox CLI.";
     };
 
     pluginPackage = lib.mkOption {
       type = lib.types.package;
-      default = closure-inputs.self.packages.${system}.claude-code-sandbox-plugin;
-      defaultText = lib.literalExpression "ch-ai-workbench.packages.<system>.claude-code-sandbox-plugin";
+      default = workbenchPackage "claude-code-sandbox-plugin";
+      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.claude-code-sandbox-plugin";
       description = "The skills-dir plugin (ceremony skill + advisory hooks).";
     };
 

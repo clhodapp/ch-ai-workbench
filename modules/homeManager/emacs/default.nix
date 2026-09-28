@@ -36,14 +36,7 @@ in
     # composes this after its own overrides, so they build against the
     # same Emacs as everything else here.
     ch-emacs-config.emacs.extraOverrides = [
-      (self: _super: {
-        collab-comments = self.callPackage ../../../pkgs/emacs/collab-comments/package.nix {
-          src = closure-inputs.collab-comments;
-        };
-        parenting = self.callPackage ../../../pkgs/emacs/parenting/package.nix {
-          src = closure-inputs.parenting;
-        };
-      })
+      (workbench.mkEmacsPackageOverrides { inherit (closure-inputs) collab-comments parenting; })
     ];
 
     ch-emacs-config.emacs.localPackageOverlays = workbench.localPackageOverlays.emacs;

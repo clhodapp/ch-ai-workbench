@@ -336,7 +336,7 @@ out-of-territory Edit/Write through the
 (claude-queue's package directory) is the filenotify-driven
 viewer/answerer over it. Since 2026-09-09 the hook asks through
 `claude-consent ask` (the prompt API over the spool,
-`pkgs/claude-consent`): Emacs answers while `claude-consent-mode` is
+`pkg-overlays/default/packages/claude-consent`): Emacs answers while `claude-consent-mode` is
 on, a terminal running `claude-consent watch` answers the same way,
 and with no answerer attached the hook emits `permissionDecision:
 ask` (design: workspace `consent-gate.md` § Prompt API).
