@@ -350,6 +350,18 @@ by a stale key. This is the design's consent posture: routine reads are
 automatic, the one that crosses a sensitive boundary is the user's to
 allow.
 
+For the MCP reads (`buffer-text`, `buffer-diff`) the server redacts
+before the CLI sees the result, so the server itself has to learn of
+the approval, and the model must not be able to claim one. On allow,
+the CLI's reveal hook writes a random token into a file under
+`$XDG_RUNTIME_DIR/claude-redact/mcp-approved/` and adds it to the call
+as the `approval` argument, through PreToolUse `updatedInput`; the
+model's own record of the call keeps the original input, so it never
+sees the token. The server consumes the token file and skips its
+redaction for that one call; a token with no file is a tool error. The
+skip is bound around the single call, so it cannot outlive a call that
+consumed a token and then failed.
+
 `Bash` output is the exception, in two ways. First, a shell stream has
 no file the agent holds to see marked, so its stdout and stderr are
 redacted in the result itself, and the note beside the result is what
@@ -397,10 +409,10 @@ edit is editable through its redacted copy, since the parent puts the
 original spans back when text lands; the agent can still delete or
 duplicate a placeholder, and with it the secret, which the returned
 diff shows (redacted) and the user sees in the buffer. The edit-oracle
-extraction above is accepted, not closed. The MCP tools have no
-resubmit-to-approve of their own: a redacted MCP read stays redacted,
-since the prompt would have to come from inside a tool handler in the
-live Emacs, and the CLI's `Read` with its prompt covers the file case.
+extraction above is accepted, not closed. Only `buffer-text` and
+`buffer-diff` take an approval; a redaction in any other MCP tool
+result (an `eval-elisp` value, a reference listing) stays, since those
+tools read copies or excerpts and the two readers cover the text.
 Same-user boundaries stay soft. This is accident-surface hardening for
 an agent expected to help debug, not an adversarial sandbox, and any
 program can print a secret into a log.
