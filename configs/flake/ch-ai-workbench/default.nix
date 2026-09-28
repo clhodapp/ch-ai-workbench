@@ -163,6 +163,10 @@
                       home.homeDirectory = "/home/tester";
                       home.stateVersion = "25.05";
                       programs.emacs.enable = true;
+                      # The claude-code module contributes global git
+                      # excludes; with git enabled the check evaluates
+                      # that file too.
+                      programs.git.enable = true;
                       ch-emacs-config.emacs.enable = true;
                       ch-ai-workbench.emacs.enable = true;
                       # Forces the gptel option types and the init append
