@@ -34,7 +34,6 @@
   # The flake exports its own entry as `pkgOverlays` and as plain
   # `overlays`; the entries of consumed projects are applied, not
   # exported.
-  caisson.nixpkgs.pkgSets.pkgs.pkgFunction = import inputs.nixpkgs;
 
   # packages.* is deliberately not partitioned: consumers take these
   # packages against this flake's main lock, so dev-only inputs must
