@@ -52,8 +52,8 @@
   outputs =
     inputs@{ caisson, ... }:
     let
-      lib = caisson.lib.caisson-core.mkLib {
-        inherit (caisson.lib.caisson-core.pins.flake inputs) sources root;
+      lib = caisson.lib.caisson.mkLib {
+        inherit (caisson.lib.caisson.pins.flake inputs) sources root;
         name = "ch-ai-workbench";
         systems = [ "x86_64-linux" ];
 
@@ -69,11 +69,11 @@
         # directory name, each lib-overlays/<name>/ registers as a
         # library overlay, and the default.nix of each describes what it
         # configures.
-        modules = lib: lib.caisson-core.mkModules ./modules;
-        configs = lib: lib.caisson-core.mkModules ./configs;
+        modules = lib: lib.caisson.mkModules ./modules;
+        configs = lib: lib.caisson.mkModules ./configs;
         pkgSets = lib: lib.caisson.nixpkgs.mkConfigurations { };
-        libOverlays = lib: lib.caisson-core.mkLibOverlays ./lib-overlays;
-        pkgOverlays = lib: lib.caisson-core.mkPkgOverlays ./pkg-overlays;
+        libOverlays = lib: lib.caisson.mkLibOverlays ./lib-overlays;
+        pkgOverlays = lib: lib.caisson.mkPkgOverlays ./pkg-overlays;
       };
     in
     lib.caisson.flake-parts.mkTopConfiguration { };
