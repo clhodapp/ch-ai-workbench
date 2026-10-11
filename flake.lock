@@ -186,11 +186,11 @@
         "pr-review": "pr-review"
       },
       "locked": {
-        "lastModified": 1791678162,
-        "narHash": "sha256-5eGRNlP3+Xg+lLjtdITjphx2TUHnLC3CqDkCLfqTSf4=",
+        "lastModified": 1791734019,
+        "narHash": "sha256-xBEdZxKnhM09CGDe3j4J33Z3d/3EqFc/B5P8yJ970lI=",
         "owner": "clhodapp",
         "repo": "ch-emacs-config",
-        "rev": "22fc8faee230e97cc9f60cdf9d877ffb9655fe29",
+        "rev": "2ff5a2fad64ca57a61bc6f952b2182e2f1943065",
         "type": "github"
       },
       "original": {
@@ -496,11 +496,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1791677630,
-        "narHash": "sha256-ZSJpj0tuKu3zwyfrhZuOGyAt45VJPiwsvjOU2hBW9No=",
+        "lastModified": 1791726189,
+        "narHash": "sha256-dVbcA5qZN2BQUqaqZ/rhZc7wDSDVq14xitvd58Wkoqw=",
         "owner": "clhodapp",
         "repo": "merman-nix",
-        "rev": "83bb84e2552734d27b54e9bba4fc068f57478f04",
+        "rev": "4008580a0d42476efebef6e4e026a93f23cada03",
         "type": "github"
       },
       "original": {
@@ -516,11 +516,11 @@
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
-        "lastModified": 1791677630,
-        "narHash": "sha256-ZSJpj0tuKu3zwyfrhZuOGyAt45VJPiwsvjOU2hBW9No=",
+        "lastModified": 1791726189,
+        "narHash": "sha256-dVbcA5qZN2BQUqaqZ/rhZc7wDSDVq14xitvd58Wkoqw=",
         "owner": "clhodapp",
         "repo": "merman-nix",
-        "rev": "83bb84e2552734d27b54e9bba4fc068f57478f04",
+        "rev": "4008580a0d42476efebef6e4e026a93f23cada03",
         "type": "github"
       },
       "original": {
