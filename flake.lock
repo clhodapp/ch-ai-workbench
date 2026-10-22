@@ -7,11 +7,11 @@
         "nixpkgs-lib": "nixpkgs-lib"
       },
       "locked": {
-        "lastModified": 1792567629,
-        "narHash": "sha256-Z8hZ6OVbuuCmej6DyKUCwG57vy+rW71cf50KXDTDHD4=",
+        "lastModified": 1792646534,
+        "narHash": "sha256-oqLnQiwb8Acg9ryHnSHcB6/IBbqo0rLMKe/DZj/QARs=",
         "owner": "nix-caisson",
         "repo": "caisson",
-        "rev": "0fa8d7e84ba4dab31f5798562d3cf726989176da",
+        "rev": "671a09b47b905edd0ae8f3f802ef2e1322a0cf6b",
         "type": "github"
       },
       "original": {
@@ -433,7 +433,7 @@
     "flake-parts_8": {
       "inputs": {
         "nixpkgs-lib": [
-          "nixpkgs"
+          "nixpkgs-lib"
         ]
       },
       "locked": {
@@ -620,6 +620,21 @@
         "type": "github"
       }
     },
+    "nixpkgs-lib_6": {
+      "locked": {
+        "lastModified": 1792290253,
+        "narHash": "sha256-Kgup1sH+/4qilwusTsSZ4PVjvVABEu5mrgWcZqZ7ePw=",
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "rev": "d0f596215fbb1603854039023c281b7c2ed1fd33",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "type": "github"
+      }
+    },
     "nixpkgs-stable": {
       "locked": {
         "lastModified": 1792422028,
@@ -728,6 +743,7 @@
           "ch-emacs-config",
           "nixpkgs"
         ],
+        "nixpkgs-lib": "nixpkgs-lib_6",
         "parenting": "parenting"
       }
     }

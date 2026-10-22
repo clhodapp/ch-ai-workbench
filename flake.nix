@@ -45,8 +45,12 @@
 
     nixpkgs.follows = "ch-emacs-config/nixpkgs";
 
+    # The library comes from the nixpkgs.lib mirror. The package sets
+    # take nixpkgs.
+    nixpkgs-lib.url = "github:nix-community/nixpkgs.lib";
+
     flake-parts.url = "github:hercules-ci/flake-parts";
-    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
+    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs-lib";
   };
 
   outputs =
@@ -54,7 +58,6 @@
     let
       lib = caisson.lib.caisson.mkLib {
         inherit (caisson.lib.caisson.pins.flake inputs) sources root;
-        defaultEcosystemSrc = sources: { nixpkgs-lib = sources.nixpkgs; };
         name = "ch-ai-workbench";
         systems = [ "x86_64-linux" ];
 
