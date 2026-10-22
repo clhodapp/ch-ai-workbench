@@ -35,6 +35,19 @@ the current directory, or the checkout containing DIR with `-C DIR`.
   module edit.
 - `claude-code-sandbox scan DIR`: report every checkout under the given
   directory (the invoker supplies the scope; nothing is assumed).
+- `claude-code-sandbox show MODULE...`: what each module allows and its
+  status in this checkout.
+- `claude-code-sandbox decline MODULE... [--reason TEXT]` and
+  `undecline MODULE...`: record or withdraw the user's refusal of a
+  module for this checkout. Agents asking for a declined module are told
+  of the refusal instead of prompting.
+
+An agent working inside the sandbox uses the plugin's MCP tools instead
+of these verbs (`list-modules`, `enabled-modules`, `describe-module`,
+`declined-modules`, `request-module`): from inside the sandbox the
+verbs cannot read the module parts or change the checkout's settings.
+`request-module` prompts the user and enables the module only on the
+user's answer.
 
 Facts that prevent wrong conclusions:
 

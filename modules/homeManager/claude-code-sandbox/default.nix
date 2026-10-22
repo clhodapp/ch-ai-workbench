@@ -254,6 +254,10 @@ let
           allowAllUnixSockets
           ;
         masked = !module.allowNix;
+        # What the module puts on PATH, for the people and agents that
+        # read a module before enabling it (`claude-code-sandbox show`,
+        # the agent tools); the builder adds the farm's command names.
+        packages = map (p: p.name) module.toolset;
         path = lib.optional hasFarm "${farm}/bin";
         allowWrite = withAuto module.allowWrite (
           lib.optional module.allowNix "${config.xdg.cacheHome}/nix"
@@ -269,16 +273,24 @@ let
       {
         nativeBuildInputs = [ pkgs.python3 ];
         closureFile = if hasFarm then pkgs.writeClosure [ farm ] else pkgs.writeText "empty" "";
+        farmBin = if hasFarm then "${farm}/bin" else "";
         passAsFile = [ "spec" ];
         inherit spec;
       }
       ''
-        python3 - "$specPath" "$closureFile" > "$out" <<'EOF'
-        import json, sys
+        python3 - "$specPath" "$closureFile" "$farmBin" > "$out" <<'EOF'
+        import json, os, sys
 
         part = json.load(open(sys.argv[1]))
         part["closure"] = sorted(
             line for line in open(sys.argv[2]).read().splitlines() if line
+        )
+        # Dot entries are wrapper internals (.gh-wrapped), not commands
+        # anyone types.
+        farm_bin = sys.argv[3]
+        part["commands"] = sorted(
+            entry for entry in (os.listdir(farm_bin) if os.path.isdir(farm_bin) else [])
+            if not entry.startswith(".")
         )
 
         # extraSettings and extraEnv transport keys the composer does NOT

@@ -146,7 +146,12 @@ def update_json(
 def read_sidecar(root: Path) -> dict[str, Any] | None:
     """The checkout's binding, normalized to ``modules`` (the sorted
     chosen names, or None when abandoned), ``applied`` (the fragment this
-    tool last wrote), and ``legacy_profile``.
+    tool last wrote), ``declined`` and ``legacy_profile``.
+
+    ``declined`` maps each module the user refused for this checkout to
+    the refusal: ``at`` (an ISO 8601 time) and an optional ``reason``.
+    The sidecar is write-guarded from sandboxed commands and file tools,
+    so an agent cannot erase a refusal.
 
     A sidecar written before sandbox modules existed names a ``profile``
     instead. The reserved empty profile ``none`` is the abandoned state,
@@ -161,20 +166,30 @@ def read_sidecar(root: Path) -> dict[str, Any] | None:
     applied = value.get("applied")
     if not isinstance(applied, dict):
         raise ToolError(f"{sidecar} is malformed (expected an applied object)")
+    declined = value.get("declined", {})
+    if not (isinstance(declined, dict) and all(isinstance(v, dict) for v in declined.values())):
+        raise ToolError(f"{sidecar} is malformed (declined must map module names to objects)")
     if "modules" in value:
         modules = value["modules"]
         if modules is not None and not (
             isinstance(modules, list) and all(isinstance(m, str) for m in modules)
         ):
             raise ToolError(f"{sidecar} is malformed (modules must be a list of names or null)")
-        return {"modules": modules, "applied": applied, "legacy_profile": None}
+        return {"modules": modules, "applied": applied, "declined": declined, "legacy_profile": None}
     profile = value.get("profile")
     if not isinstance(profile, str):
         raise ToolError(f"{sidecar} is malformed (expected modules + applied)")
-    if profile == "none":
-        return {"modules": None, "applied": applied, "legacy_profile": None}
-    return {"modules": None, "applied": applied, "legacy_profile": profile}
+    legacy = None if profile == "none" else profile
+    return {"modules": None, "applied": applied, "declined": declined, "legacy_profile": legacy}
 
 
-def write_sidecar(root: Path, modules: list[str] | None, applied: dict[str, Any]) -> None:
-    write_json_atomic(sidecar_path(root), {"modules": modules, "applied": applied})
+def write_sidecar(
+    root: Path,
+    modules: list[str] | None,
+    applied: dict[str, Any],
+    declined: dict[str, Any] | None = None,
+) -> None:
+    value: dict[str, Any] = {"modules": modules, "applied": applied}
+    if declined:
+        value["declined"] = dict(sorted(declined.items()))
+    write_json_atomic(sidecar_path(root), value)

@@ -17,7 +17,7 @@ Where things live in this repository:
 |---|---|
 | Home Manager module (`ch-ai-workbench.claude-code-sandbox.*`) | `modules/homeManager/claude-code-sandbox/default.nix` |
 | CLI (Python, stdlib only) | `pkg-overlays/default/packages/claude-code-sandbox/` |
-| Skills-dir plugin (enrollment skill, session-start hook) | `pkg-overlays/default/packages/claude-code-sandbox-plugin/` |
+| Skills-dir plugin (enrollment skill, session-start hook, agent tools MCP server) | `pkg-overlays/default/packages/claude-code-sandbox-plugin/` |
 | Landlock shim (unix-socket narrowing) | `pkg-overlays/default/packages/landlock-shim/` |
 
 ## Principles
@@ -103,6 +103,10 @@ directory, or the one containing `DIR` with `-C DIR`.
 | `scan DIR` | Same, for every checkout under the given directory |
 | `sync` | Re-apply this checkout's modules after a module change |
 | `list` | The declared modules, with descriptions and requirements |
+| `show MODULE...` | What each module allows, and its status in this checkout |
+| `decline MODULE... [--reason TEXT]` | Record that this checkout should not get these modules |
+| `undecline MODULE...` | Withdraw a recorded refusal |
+| `mcp` | Serve the agent tools over MCP on stdio (the plugin starts it) |
 
 The CLI is on every enrollment's PATH, so a sandboxed agent can run
 `claude-code-sandbox status` to verify its own enrollment. Inside a
@@ -130,6 +134,54 @@ has no module equivalent, so `status` and the session-start hook report
 it and `sync` refuses; the checkout keeps the fragment it last applied
 until someone runs `enroll` with modules, which replaces that fragment
 cleanly because the old applied blob is the merge base.
+
+## Agent tools
+
+An agent inside the sandbox cannot inspect or change its own sandbox
+from Bash: in a masked enrollment the registry and parts are
+unreadable, the settings and sidecar files are write-guarded, and the
+consent spool (`$XDG_RUNTIME_DIR/claude-consent`) is outside the write
+scope. The plugin therefore declares an MCP server, `claude-code-sandbox
+mcp`, which Claude Code starts outside the Bash sandbox. Its tools act on
+the checkout the session was launched in (`CLAUDE_PROJECT_DIR`), because
+that checkout's `settings.local.json` governs the session's sandbox.
+
+| Tool | Effect |
+|---|---|
+| `list-modules` | Every declared module, with its status here: enabled (chosen, base, or required by another), declined, or available |
+| `enabled-modules` | The checkout's enrollment, chosen modules, every enabled module with the reason, and freshness |
+| `describe-module` | What a module allows: commands and packages, domains, sockets, paths, excluded commands, env, store unmasking, and the modules its `requires` would also enable |
+| `declined-modules` | The user's recorded refusals for this checkout, or whether one module is declined |
+| `request-module` | Prompt the user to enable a module, with the agent's reason and the module's grants |
+
+`request-module` changes nothing on its own. It reports an enabled
+module as enabled and a declined module as declined without prompting,
+and refuses in a checkout that is not enrolled with modules, because
+enrolling is the user's act. Otherwise it prompts the user and waits:
+
+1. Through `claude-consent ask`, the workbench's prompt API. An
+   answerer attached to the spool (Emacs, `claude-consent watch`) shows
+   the prompt with three options: enable, decline with an optional
+   reason, and not now.
+2. With no answerer attached, through an MCP elicitation: a dialog in
+   the Claude Code terminal UI.
+3. When the client cannot show a dialog, or the dialog is cancelled
+   (a headless `claude -p` session cancels at once), the question is
+   stored in the spool. The agent is told to relay `claude-consent
+   answer ID`; the next `request-module` call for that module in the
+   same session applies the answer.
+
+On "enable" the server runs the equivalent of `add`, and the running
+session picks up the rules when Claude Code reloads the settings file.
+On "decline" the refusal goes into the sidecar under `declined`, with
+the time and the reason; the sidecar is write-guarded, so an agent
+cannot erase it. "Not now", a dismissed dialog, and a prompt left
+unanswered for fifteen minutes record nothing. Choosing the module with
+`enroll` or `add`, or running `undecline`, withdraws a refusal.
+
+The tools go through Claude Code's usual permission check for MCP
+tools, so the first call of each may itself ask for permission, unless
+a permission rule allows `mcp__plugin_claude-code-sandbox_sandbox`.
 
 ## Module sketch
 
@@ -241,8 +293,19 @@ auto-sync); the design is correct without it.
 - **Composition** lives in the CLI (`compose.py`), because the set of
   modules is chosen per checkout after the parts are built. The
   composer is the only place the fail-closed keys are written.
-- **Plugin**: a Claude Code skills-dir plugin (skill + hooks.json) as a
-  `runCommand` derivation with the CLI store path substituted in.
+- **Plugin**: a Claude Code skills-dir plugin (skill, hooks.json, and
+  an `mcpServers` entry in `plugin.json`) as a `runCommand` derivation
+  with the CLI and `claude-consent` store paths substituted in. Claude
+  Code 2.1.283 registers a skills-dir plugin's MCP server as
+  `plugin:claude-code-sandbox:sandbox`, and starts it with
+  `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PROJECT_DIR` set and form
+  elicitation advertised (verified 2026-10-22).
+- **MCP server** (`mcp.py`): JSON-RPC over stdio, stdlib only. A reader
+  thread queues incoming messages, so a call waiting on a prompt still
+  sees its own cancellation and the client's elicitation response;
+  other requests that arrive meanwhile are served after it. Parts carry
+  `packages` and `commands` (the farm's `bin` entries, wrapper
+  internals excluded) for `describe-module` and the prompt.
 - Behavior against the real Claude Code sandbox (mask semantics, size
   ceiling, env delivery, permission-save co-ownership) was established
   empirically on 2026-08-22 and is documented in the module's header
