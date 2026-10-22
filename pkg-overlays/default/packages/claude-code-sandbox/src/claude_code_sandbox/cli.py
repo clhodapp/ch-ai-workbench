@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from .files import (
 )
 from .merge import adhoc_additions, merge
 from .registry import MaskedStore, load_part, load_registry
+from .report import checkout_state, describe, describe_text, require_enrolled
 
 _SKIP_DIRS = {".git", "node_modules", ".direnv", ".cache", "result"}
 
@@ -74,6 +76,15 @@ def _describe(modules: list[str] | None) -> str:
 
 
 def _apply(root: Path, modules: list[str] | None, base: dict[str, Any], quiet: bool) -> None:
+    """Write the fragment for ``modules`` into the checkout's settings and
+    record the binding. A module the checkout now chooses loses any
+    recorded refusal, because choosing it is the user's newer answer."""
+    sidecar = read_sidecar(root)
+    declined = {
+        name: refusal
+        for name, refusal in (sidecar["declined"] if sidecar else {}).items()
+        if name not in (modules or [])
+    }
     fragment = _fragment_for(root, modules)
     reports = []
 
@@ -83,7 +94,7 @@ def _apply(root: Path, modules: list[str] | None, base: dict[str, Any], quiet: b
         return merged
 
     changed = update_json(settings_path(root), transform)
-    write_sidecar(root, modules, fragment)
+    write_sidecar(root, modules, fragment, declined)
     if quiet:
         return
     state = "updated" if changed else "already current"
@@ -149,6 +160,8 @@ def _status_line(root: Path) -> tuple[str, bool]:
         entries = sum(len(x) for _, x in adhoc)
         paths = ", ".join(p for p, _ in adhoc)
         bits.append(f"{entries} local addition(s) in {paths}")
+    if sidecar["declined"]:
+        bits.append(f"declined [{', '.join(sorted(sidecar['declined']))}]")
     return (f"{root}: " + ", ".join(bits), bool(stale) or clobbered)
 
 
@@ -254,6 +267,85 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if not found:
         print(f"{top}: no checkouts with .claude state found")
     return 2 if attention else 0
+
+
+def refusal_text(name: str, refusal: dict[str, Any]) -> str:
+    text = f"Declined for this checkout at {refusal.get('at', 'an unknown time')}"
+    if refusal.get("reason"):
+        text += f": {refusal['reason']}"
+    return text + f". `claude-code-sandbox undecline {name}` withdraws the refusal."
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    root = find_repo_root(Path(args.directory))
+    state = checkout_state(root, registry) if root is not None else None
+    for i, name in enumerate(args.modules):
+        if i:
+            print()
+        print(describe_text(describe(registry, name, state)))
+        refusal = (state or {}).get("declined", {}).get(name)
+        if refusal:
+            print(refusal_text(name, refusal))
+    return 0
+
+
+def enable_modules(root: Path, names: list[str]) -> list[str]:
+    """Add ``names`` to the checkout's chosen set and apply it; returns
+    the new chosen set."""
+    sidecar, current = _chosen_modules(root)
+    check_known(load_registry(), names)
+    chosen = sorted(set(current) | set(names))
+    _apply(root, chosen, sidecar["applied"], quiet=True)
+    return chosen
+
+
+def decline_modules(root: Path, names: list[str], reason: str | None) -> None:
+    """Record the user's refusal of ``names`` for this checkout. An
+    enabled module cannot be declined; the user drops it first."""
+    registry = load_registry()
+    check_known(registry, names)
+    state = checkout_state(root, registry)
+    require_enrolled(state)
+    on = sorted(name for name in names if name in state["enabled"])
+    if on:
+        raise ToolError(f"{', '.join(on)} enabled in {root}; drop before declining")
+    sidecar = read_sidecar(root)
+    assert sidecar is not None
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    declined = dict(sidecar["declined"])
+    for name in names:
+        declined[name] = {"at": at, **({"reason": reason} if reason else {})}
+    write_sidecar(root, sidecar["modules"], sidecar["applied"], declined)
+
+
+def cmd_decline(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    decline_modules(root, args.modules, args.reason)
+    if not args.quiet:
+        print(f"{root}: declined [{', '.join(sorted(set(args.modules)))}]")
+    return 0
+
+
+def cmd_undecline(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    sidecar = read_sidecar(root)
+    if sidecar is None:
+        raise ToolError(f"{root} is not enrolled (use enroll)")
+    absent = sorted(set(args.modules) - set(sidecar["declined"]))
+    if absent:
+        raise ToolError(f"{root} has not declined {', '.join(absent)}")
+    declined = {k: v for k, v in sidecar["declined"].items() if k not in args.modules}
+    write_sidecar(root, sidecar["modules"], sidecar["applied"], declined)
+    if not args.quiet:
+        print(f"{root}: withdrew the refusal of [{', '.join(sorted(set(args.modules)))}]")
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    from .mcp import serve
+
+    return serve()
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -489,6 +581,20 @@ def build_parser() -> argparse.ArgumentParser:
     add("status", cmd_status, help="report this checkout's binding")
 
     add("list", cmd_list, checkout=False, help="list the declared sandbox modules")
+
+    p = add("show", cmd_show, help="show what modules allow and their status in this checkout")
+    p.add_argument("modules", nargs="+", metavar="MODULE")
+
+    p = add("decline", cmd_decline, help="record that this checkout should not get these modules")
+    p.add_argument("modules", nargs="+", metavar="MODULE")
+    p.add_argument("--reason", help="shown to agents that ask for the module")
+    p.add_argument("--quiet", action="store_true")
+
+    p = add("undecline", cmd_undecline, help="withdraw a recorded refusal")
+    p.add_argument("modules", nargs="+", metavar="MODULE")
+    p.add_argument("--quiet", action="store_true")
+
+    add("mcp", cmd_mcp, checkout=False, help="serve the agent tools over MCP on stdio")
 
     p = add(
         "scan",

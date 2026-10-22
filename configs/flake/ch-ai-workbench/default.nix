@@ -250,6 +250,34 @@
                     claude-code-sandbox drop nix github -C repo
                     jq -e '.sandbox.network.allowedDomains == ["*.anthropic.com"]' "$settings"
                     claude-code-sandbox status -C repo
+
+                    # What a module allows, read from the parts the
+                    # module builds, and a recorded refusal.
+                    claude-code-sandbox show github -C repo | tee show.txt
+                    grep -qx 'Commands put on PATH: gh' show.txt
+                    grep -qx 'From packages: ${pkgs.gh.name}' show.txt
+                    grep -qx 'Enabling it also enables: git' show.txt
+                    claude-code-sandbox decline nix --reason 'no store here' -C repo
+                    claude-code-sandbox status -C repo | grep -q 'declined \[nix\]'
+
+                    # The agent tools over stdio against the same registry.
+                    # The declined module is reported without a prompt.
+                    {
+                      echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+                      echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list-modules","arguments":{}}}'
+                      echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request-module","arguments":{"module":"nix","reason":"build"}}}'
+                      echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"describe-module","arguments":{"module":"search"}}}'
+                    } | CLAUDE_PROJECT_DIR="$PWD/repo" claude-code-sandbox mcp > mcp.jsonl
+                    jq -s -e 'map(.id) == [1, 2, 3, 4]' mcp.jsonl
+                    jq -s -e '.[1].result.content[0].text | fromjson | .modules | map({(.name): .status}) | add
+                      == {agent: "enabled (base)", git: "available", github: "available", nix: "declined", search: "enabled"}' mcp.jsonl
+                    jq -s -e '.[2].result.content[0].text | test("declined nix .*no store here")' mcp.jsonl
+                    jq -s -e '.[3].result.content[0].text | fromjson | .commands == ["fd"]' mcp.jsonl
+
+                    # The plugin starts that server with both tools pinned.
+                    manifest=${self.packages.${system}.claude-code-sandbox-plugin}/.claude-plugin/plugin.json
+                    test -x "$(jq -r .mcpServers.sandbox.command "$manifest")"
+                    test -x "$(jq -r .mcpServers.sandbox.env.CLAUDE_CODE_SANDBOX_CONSENT "$manifest")"
                     touch $out
                   '';
 

@@ -1,5 +1,14 @@
 {
   "name": "claude-code-sandbox",
-  "description": "Nix-declared sandbox modules for Claude Code: enrollment ceremony and staleness tripwire",
-  "version": "0.1.0"
+  "description": "Nix-declared sandbox modules for Claude Code: enrollment ceremony, staleness tripwire, and agent tools for inspecting and requesting modules",
+  "version": "0.2.0",
+  "mcpServers": {
+    "sandbox": {
+      "command": "@ccsTool@/bin/claude-code-sandbox",
+      "args": ["mcp"],
+      "env": {
+        "CLAUDE_CODE_SANDBOX_CONSENT": "@consentTool@/bin/claude-consent"
+      }
+    }
+  }
 }
