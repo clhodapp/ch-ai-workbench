@@ -113,6 +113,54 @@
 
             mermanMmdcShim = pkgs.writeShellScriptBin "mmdc" ''exec ${lib.getExe merman} mmdc "$@"'';
 
+            # Sandbox modules covering each composition rule the CLI
+            # applies to real parts: a closure-masked module, one that
+            # requires another, a base module, a unix socket, and one
+            # that unmasks the store. Any package stands in for the CLI
+            # a host runs: the check composes parts, not a live sandbox.
+            sandboxModules = {
+              enable = true;
+              runtime.claudePackage = pkgs.hello;
+              modules = {
+                search = {
+                  description = "a searcher";
+                  toolset = [ pkgs.fd ];
+                };
+                git = {
+                  toolset = [ pkgs.git ];
+                  allowedDomains = [ "github.com" ];
+                };
+                github = {
+                  requires = [ "git" ];
+                  toolset = [ pkgs.gh ];
+                  allowedDomains = [ "*.githubusercontent.com" ];
+                };
+                agent = {
+                  allowedDomains = [ "*.anthropic.com" ];
+                  allowUnixSockets = [ "/run/agent.sock" ];
+                };
+                nix = {
+                  allowNix = true;
+                  toolset = [ pkgs.hello ];
+                };
+              };
+              baseModules = [ "agent" ];
+            };
+
+            sandboxHomeFiles =
+              (inputs.home-manager.lib.homeManagerConfiguration {
+                inherit pkgs;
+                modules = [
+                  self.modules.homeManager.claude-code-sandbox
+                  {
+                    home.username = "tester";
+                    home.homeDirectory = "/home/tester";
+                    home.stateVersion = "25.05";
+                    ch-ai-workbench.claude-code-sandbox = sandboxModules;
+                  }
+                ];
+              }).config.home-files;
+
             # The hook packages from this layer's library, so the checks
             # below drive the same scripts a real configuration installs.
             claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
@@ -141,6 +189,69 @@
               claude-code-sandbox = self.packages.${system}.claude-code-sandbox;
               claude-code-sandbox-plugin = self.packages.${system}.claude-code-sandbox-plugin;
               landlock-shim = self.packages.${system}.landlock-shim;
+
+              # The CLI composing the parts the home-manager module
+              # builds, end to end: the registry and parts come from a
+              # real home's files, with the registry's home paths pointed
+              # at that tree.
+              claude-code-sandbox-compose =
+                pkgs.runCommand "claude-code-sandbox-compose"
+                  {
+                    nativeBuildInputs = [
+                      self.packages.${system}.claude-code-sandbox
+                      pkgs.git
+                      pkgs.jq
+                    ];
+                  }
+                  ''
+                    export HOME="$TMPDIR"
+                    export CLAUDE_CODE_SANDBOX_CONFIG="$TMPDIR/config"
+                    mkdir "$CLAUDE_CODE_SANDBOX_CONFIG"
+                    sed 's|/home/tester/.config|${sandboxHomeFiles}/.config|g' \
+                      ${sandboxHomeFiles}/.config/claude-code-sandbox/registry.json \
+                      > "$CLAUDE_CODE_SANDBOX_CONFIG/registry.json"
+
+                    claude-code-sandbox list | tee list.txt
+                    grep -qx 'agent (in every enrollment)' list.txt
+                    grep -qx 'github (requires git)' list.txt
+                    grep -qx 'nix (unmasks the store)' list.txt
+                    grep -qx 'search: a searcher' list.txt
+
+                    git init -q repo
+                    claude-code-sandbox enroll search github -C repo
+                    settings=repo/.claude/settings.local.json
+                    jq -e '.sandbox.failIfUnavailable and (.sandbox.allowUnsandboxedCommands | not)' "$settings"
+                    jq -e '.sandbox.filesystem.denyRead == ["/nix/store"]' "$settings"
+                    for pkg in ${pkgs.fd} ${pkgs.gh} ${pkgs.git} ${pkgs.hello}; do
+                      jq -e --arg p "$pkg" '.sandbox.filesystem.allowRead | index($p)' "$settings"
+                    done
+                    jq -e '.sandbox.network.allowedDomains | sort == ["*.anthropic.com", "*.githubusercontent.com", "github.com"]' "$settings"
+                    jq -e '.sandbox.network.allowUnixSockets == ["/run/agent.sock"] and .sandbox.network.allowAllUnixSockets' "$settings"
+                    jq -e '.env.CLAUDE_CODE_SANDBOX_UNIX_SOCKETS == "/run/agent.sock"' "$settings"
+                    shell=$(jq -r .env.SHELL "$settings")
+                    case "$shell" in *ccs-socket-shell) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
+                    for cmd in fd gh git ssh claude-code-sandbox bwrap; do
+                      PATH=$(jq -r .env.PATH "$settings") command -v "$cmd"
+                    done
+                    claude-code-sandbox status -C repo
+
+                    # The socket shell refuses an empty allowlist inside a
+                    # sandbox and runs commands plainly outside one.
+                    if SANDBOX_RUNTIME=1 ${pkgs.coreutils}/bin/env -u CLAUDE_CODE_SANDBOX_UNIX_SOCKETS "$shell" -c true; then
+                      echo "the socket shell ran without an allowlist"; exit 1
+                    fi
+                    test "$("$shell" -c 'echo outside')" = outside
+
+                    claude-code-sandbox add nix -C repo
+                    jq -e '.sandbox.filesystem | has("denyRead") | not' "$settings"
+                    jq -e '.sandbox.filesystem.allowWrite == ["/home/tester/.cache/nix"]' "$settings"
+                    jq -e '.sandbox.network.allowUnixSockets | sort == ["/nix/var/nix/daemon-socket/socket", "/run/agent.sock"]' "$settings"
+
+                    claude-code-sandbox drop nix github -C repo
+                    jq -e '.sandbox.network.allowedDomains == ["*.anthropic.com"]' "$settings"
+                    claude-code-sandbox status -C repo
+                    touch $out
+                  '';
 
               # Evaluating the two modules together is itself the check
               # that this layer composes with the editor: the bundles
@@ -177,14 +288,7 @@
                       };
                       ch-ai-workbench.claude.enable = true;
                       ch-ai-workbench.claude-code.enable = true;
-                      # Any package stands in for the CLI a host runs:
-                      # the check evaluates the profile fragments and
-                      # their closures, not a live sandbox.
-                      ch-ai-workbench.claude-code-sandbox = {
-                        enable = true;
-                        runtime.claudePackage = pkgs.hello;
-                        profiles.default.toolset = [ pkgs.ripgrep ];
-                      };
+                      ch-ai-workbench.claude-code-sandbox = sandboxModules;
                       ch-ai-workbench.emacs-integration.enable = true;
                     }
                   ];

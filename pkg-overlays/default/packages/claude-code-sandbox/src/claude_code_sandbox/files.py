@@ -144,14 +144,37 @@ def update_json(
 
 
 def read_sidecar(root: Path) -> dict[str, Any] | None:
+    """The checkout's binding, normalized to ``modules`` (the sorted
+    chosen names, or None when abandoned), ``applied`` (the fragment this
+    tool last wrote), and ``legacy_profile``.
+
+    A sidecar written before sandbox modules existed names a ``profile``
+    instead. The reserved empty profile ``none`` is the abandoned state,
+    so it reads as such. Any other profile has no module equivalent: it
+    reads with ``legacy_profile`` set, and the checkout keeps its applied
+    fragment (the merge base for re-enrollment) until someone enrolls it
+    with modules."""
     sidecar = sidecar_path(root)
     if not sidecar.exists():
         return None
     value = read_json(sidecar)
-    if "profile" not in value or not isinstance(value.get("applied"), dict):
-        raise ToolError(f"{sidecar} is malformed (expected profile + applied)")
-    return value
+    applied = value.get("applied")
+    if not isinstance(applied, dict):
+        raise ToolError(f"{sidecar} is malformed (expected an applied object)")
+    if "modules" in value:
+        modules = value["modules"]
+        if modules is not None and not (
+            isinstance(modules, list) and all(isinstance(m, str) for m in modules)
+        ):
+            raise ToolError(f"{sidecar} is malformed (modules must be a list of names or null)")
+        return {"modules": modules, "applied": applied, "legacy_profile": None}
+    profile = value.get("profile")
+    if not isinstance(profile, str):
+        raise ToolError(f"{sidecar} is malformed (expected modules + applied)")
+    if profile == "none":
+        return {"modules": None, "applied": applied, "legacy_profile": None}
+    return {"modules": None, "applied": applied, "legacy_profile": profile}
 
 
-def write_sidecar(root: Path, profile: str, applied: dict[str, Any]) -> None:
-    write_json_atomic(sidecar_path(root), {"profile": profile, "applied": applied})
+def write_sidecar(root: Path, modules: list[str] | None, applied: dict[str, Any]) -> None:
+    write_json_atomic(sidecar_path(root), {"modules": modules, "applied": applied})

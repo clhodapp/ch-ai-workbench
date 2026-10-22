@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: MIT
-"""claude-code-sandbox: enroll checkouts into nix-declared Claude Code
-sandbox profiles.
+"""claude-code-sandbox: enroll checkouts into compositions of nix-declared
+Claude Code sandbox modules.
 
-Enrollment writes the profile's settings fragment into the checkout's
-co-owned ``.claude/settings.local.json`` (three-way merge; Claude Code's
-own keys are never touched) and records what was applied in the sidecar
-``.claude/claude-code-sandbox.json``. Claude Code live-reloads settings
-files, so changes generally apply to running sessions; removing an ``env``
-variable is the documented exception (next launch).
+A sandbox module says what one kind of tooling needs inside the sandbox:
+its executables, domains, sockets and writable paths. A checkout chooses
+the set of modules its work needs. Enrollment composes them into one
+fragment, writes it into the checkout's co-owned
+``.claude/settings.local.json`` (three-way merge; Claude Code's own keys
+are never touched), and records the chosen set and what was applied in
+the sidecar ``.claude/claude-code-sandbox.json``. Claude Code live-reloads
+settings files, so changes generally apply to running sessions; removing
+an ``env`` variable is the documented exception (next launch).
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .compose import check_known, compose, module_names
 from .files import (
     ToolError,
     find_repo_root,
@@ -31,9 +35,8 @@ from .files import (
     write_text_atomic,
 )
 from .merge import adhoc_additions, merge
-from .registry import MaskedStore, load_fragment, load_registry
+from .registry import MaskedStore, load_part, load_registry
 
-NONE_PROFILE = "none"
 _SKIP_DIRS = {".git", "node_modules", ".direnv", ".cache", "result"}
 
 
@@ -47,26 +50,31 @@ def _root_or_die(directory: Path) -> Path:
 ROOT_ENV_VAR = "CLAUDE_CODE_SANDBOX_ROOT"
 
 
-def _with_root_env(fragment: dict[str, Any], root: Path) -> dict[str, Any]:
-    """Add this checkout's enrolled root to the fragment's env, so it
+def _fragment_for(root: Path, modules: list[str] | None) -> dict[str, Any]:
+    """The fragment a checkout bound to ``modules`` should carry. An
+    abandoned checkout (``modules`` is None) carries nothing.
+
+    The fragment's env names this checkout's enrolled root, so it
     reaches sandboxed commands (settings env is the only channel that
-    does — hooks can't inject env, CLAUDE_PROJECT_DIR is hook-only, and
-    the fragment is generated per-profile without knowing the checkout).
-    The farm's ssh wrapper reads it to locate the credentials dir
-    independent of cwd. Skips the empty/`none` fragment so it stays
-    deliberately nothing. Making it part of the applied fragment keeps
-    the merge authoritative for the key (it lives in base∪new), so no
+    does: hooks can't inject env, CLAUDE_PROJECT_DIR is hook-only, and
+    the module parts are generated without knowing the checkout). The
+    ssh wrapper reads it to locate the credentials dir independent of
+    cwd. Making it part of the applied fragment keeps the merge
+    authoritative for the key (it lives in base and new), so no
     ad-hoc-addition noise."""
-    if not fragment:
-        return fragment
-    out = dict(fragment)
-    out["env"] = {**out.get("env", {}), ROOT_ENV_VAR: str(root)}
-    return out
+    if modules is None:
+        return {}
+    return compose(load_registry(), modules, {ROOT_ENV_VAR: str(root)})
 
 
-def _apply(root: Path, profile: str, base: dict[str, Any], quiet: bool) -> None:
-    registry = load_registry()
-    fragment = _with_root_env(load_fragment(registry, profile), root)
+def _describe(modules: list[str] | None) -> str:
+    if modules is None:
+        return "abandoned"
+    return f"modules [{', '.join(modules)}]" if modules else "modules [] (base only)"
+
+
+def _apply(root: Path, modules: list[str] | None, base: dict[str, Any], quiet: bool) -> None:
+    fragment = _fragment_for(root, modules)
     reports = []
 
     def transform(current: dict[str, Any]) -> dict[str, Any] | None:
@@ -75,11 +83,11 @@ def _apply(root: Path, profile: str, base: dict[str, Any], quiet: bool) -> None:
         return merged
 
     changed = update_json(settings_path(root), transform)
-    write_sidecar(root, profile, fragment)
+    write_sidecar(root, modules, fragment)
     if quiet:
         return
     state = "updated" if changed else "already current"
-    print(f"{root}: profile '{profile}' {state}")
+    print(f"{root}: {_describe(modules)} {state}")
     if reports and reports[-1].has_findings():
         r = reports[-1]
         for path, value, new in r.overridden_scalars:
@@ -90,6 +98,13 @@ def _apply(root: Path, profile: str, base: dict[str, Any], quiet: bool) -> None:
             print(f"  kept {len(extras)} ad-hoc entr{'y' if len(extras) == 1 else 'ies'} in {path}")
 
 
+def _legacy_message(root: Path, profile: str) -> str:
+    return (
+        f"{root}: bound to profile '{profile}', which no longer exists; "
+        "enroll it with sandbox modules (claude-code-sandbox list shows them)"
+    )
+
+
 def _status_line(root: Path) -> tuple[str, bool]:
     """One status line for a checkout; second element = needs attention."""
     sidecar = read_sidecar(root)
@@ -98,24 +113,24 @@ def _status_line(root: Path) -> tuple[str, bool]:
         if "sandbox" in settings or "env" in settings:
             return (f"{root}: unmanaged (sandbox/env keys present, no sidecar)", True)
         return (f"{root}: not enrolled", False)
-    profile = sidecar["profile"]
+    if sidecar["legacy_profile"] is not None:
+        return (_legacy_message(root, sidecar["legacy_profile"]), True)
+    modules = sidecar["modules"]
     applied = sidecar["applied"]
-    # From inside a masked-store sandbox the registry and fragments (HM
+    # From inside a masked-store sandbox the registry and parts (HM
     # symlinks into /nix/store) are unreadable; the sidecar and settings
-    # still are, so enrollment and integrity remain reportable — only
-    # freshness needs the fragment.
+    # still are, so enrollment and integrity remain reportable. Only
+    # freshness needs the parts.
     stale: bool | None
     try:
-        registry = load_registry()
-        fragment = _with_root_env(load_fragment(registry, profile), root)
+        fragment = _fragment_for(root, modules)
     except MaskedStore:
         stale = None
     except ToolError as e:
-        return (f"{root}: profile '{profile}' DANGLING ({e})", True)
+        return (f"{root}: {_describe(modules)} DANGLING ({e})", True)
     else:
-        # Compare against the augmented fragment: the sidecar stores what
-        # _apply wrote (root env included), so the fresh fragment must be
-        # augmented the same way or staleness would fire on every check.
+        # The sidecar stores what _apply wrote (root env included), and
+        # _fragment_for adds the same root env, so equal means current.
         stale = fragment != applied
     # Replay the applied blob: if re-merging it changes anything, a
     # foreign writer dropped tool-owned keys (clobbering is removals, so
@@ -123,18 +138,18 @@ def _status_line(root: Path) -> tuple[str, bool]:
     replayed, _ = merge(settings, applied, applied)
     clobbered = replayed != settings
     adhoc = adhoc_additions(settings, applied)
-    bits = [f"profile '{profile}'"]
+    bits = [_describe(modules)]
     if clobbered:
         bits.append("CLOBBERED: applied keys missing from settings (sync restores)")
     elif stale is None:
-        bits.append("applied (freshness unknown here: store masked, fragment unreadable)")
+        bits.append("applied (freshness unknown here: store masked, parts unreadable)")
     else:
         bits.append("STALE (sync to update)" if stale else "current")
     if adhoc:
         entries = sum(len(x) for _, x in adhoc)
         paths = ", ".join(p for p, _ in adhoc)
         bits.append(f"{entries} local addition(s) in {paths}")
-    return (f"{root}: " + ", ".join(bits), stale or clobbered)
+    return (f"{root}: " + ", ".join(bits), bool(stale) or clobbered)
 
 
 def _iter_enrolled(roots: list[Path]) -> list[Path]:
@@ -153,23 +168,55 @@ def _iter_enrolled(roots: list[Path]) -> list[Path]:
     return found
 
 
-def cmd_enroll(args: argparse.Namespace) -> int:
-    root = _root_or_die(Path(args.directory))
-    sidecar = read_sidecar(root)
-    base = sidecar["applied"] if sidecar else {}
-    _apply(root, args.profile, base, args.quiet)
-    return 0
-
-
-def cmd_retarget(args: argparse.Namespace) -> int:
-    root = _root_or_die(Path(args.directory))
+def _chosen_modules(root: Path) -> tuple[dict[str, Any], list[str]]:
+    """The sidecar and chosen modules of a checkout enrolled with
+    modules, the binding that add and drop edit."""
     sidecar = read_sidecar(root)
     if sidecar is None:
         raise ToolError(f"{root} is not enrolled (use enroll)")
-    _apply(root, args.profile, sidecar["applied"], args.quiet)
-    if args.profile == NONE_PROFILE and not args.quiet:
+    if sidecar["legacy_profile"] is not None:
+        raise ToolError(_legacy_message(root, sidecar["legacy_profile"]))
+    if sidecar["modules"] is None:
+        raise ToolError(f"{root} is abandoned (use enroll to choose modules again)")
+    return sidecar, sidecar["modules"]
+
+
+def cmd_enroll(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    modules = sorted(set(args.modules))
+    check_known(load_registry(), modules)
+    sidecar = read_sidecar(root)
+    base = sidecar["applied"] if sidecar else {}
+    _apply(root, modules, base, args.quiet)
+    return 0
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    sidecar, current = _chosen_modules(root)
+    check_known(load_registry(), args.modules)
+    _apply(root, sorted(set(current) | set(args.modules)), sidecar["applied"], args.quiet)
+    return 0
+
+
+def cmd_drop(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    sidecar, current = _chosen_modules(root)
+    absent = sorted(set(args.modules) - set(current))
+    if absent:
+        raise ToolError(f"{root} has not chosen {', '.join(absent)} ({_describe(current)})")
+    _apply(root, sorted(set(current) - set(args.modules)), sidecar["applied"], args.quiet)
+    return 0
+
+
+def cmd_abandon(args: argparse.Namespace) -> int:
+    root = _root_or_die(Path(args.directory))
+    sidecar = read_sidecar(root)
+    base = sidecar["applied"] if sidecar else {}
+    _apply(root, None, base, args.quiet)
+    if not args.quiet:
         print(
-            "note: a live session keeps env vars from the old profile until "
+            "note: a live session keeps env vars from the old modules until "
             "its next launch (documented removal behavior)"
         )
     return 0
@@ -180,7 +227,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
     sidecar = read_sidecar(root)
     if sidecar is None:
         raise ToolError(f"{root} is not enrolled (use enroll)")
-    _apply(root, sidecar["profile"], sidecar["applied"], args.quiet)
+    if sidecar["legacy_profile"] is not None:
+        raise ToolError(_legacy_message(root, sidecar["legacy_profile"]))
+    _apply(root, sidecar["modules"], sidecar["applied"], args.quiet)
     return 0
 
 
@@ -205,6 +254,25 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if not found:
         print(f"{top}: no checkouts with .claude state found")
     return 2 if attention else 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    registry = load_registry()
+    always = set(registry.get("baseModules") or [])
+    for name in module_names(registry):
+        part = load_part(registry["modules"][name], f"module '{name}'")
+        notes = []
+        if name in always:
+            notes.append("in every enrollment")
+        if part.get("requires"):
+            notes.append(f"requires {', '.join(part['requires'])}")
+        if not part.get("masked", True):
+            notes.append("unmasks the store")
+        line = name + (f" ({'; '.join(notes)})" if notes else "")
+        if part.get("description"):
+            line += f": {part['description']}"
+        print(line)
+    return 0
 
 
 def _git_dir(root: Path) -> Path | None:
@@ -239,11 +307,12 @@ def provision_creds(root: Path) -> list[str]:
     under the checkout's creds dir, so sandboxed tools whose config
     ownership checks reject the store-symlinked originals can read them.
 
-    Runs from the unsandboxed session-start hook, so copies are owned by
-    the invoking user (not store root → nobody). A registry entry with a
-    null source is created as an empty 0600 file — a drop point for a
-    runtime provisioner to fill with a delegated credential. Returns the
-    target filenames written. Best-effort per entry; a missing source is
+    Runs from the unsandboxed session-start hook, so the invoking user
+    owns the copies (inside the sandbox's user namespace, the store's
+    root owner maps to nobody). A registry entry with a null source is
+    created as an empty 0600 file, a drop point for a runtime
+    provisioner to fill with a delegated credential. Returns the target
+    filenames written. Best-effort per entry; a missing source is
     skipped (nothing to copy)."""
     try:
         registry = load_registry()
@@ -270,7 +339,7 @@ def provision_creds(root: Path) -> list[str]:
         try:
             content = Path(source).expanduser().read_text(encoding="utf-8")
         except (FileNotFoundError, IsADirectoryError, PermissionError, OSError):
-            continue  # source absent/unreadable — nothing to materialize
+            continue  # an absent or unreadable source has nothing to materialize
         write_text_atomic(dest, content)
         written.append(target)
     return written
@@ -307,13 +376,13 @@ def redirect_job_tmp(root: Path) -> str | None:
     tree, under .claude/claude-code-sandbox/jobs/<id>/tmp: a plain
     directory entry the sandbox resolves into space the checkout
     already owns, so nothing is granted and the isolation unit stays
-    the checkout — the sandbox's own (every session in a checkout can
-    already write its working tree). Per worktree by construction,
-    alive as long as the checkout, excluded from git status via the
-    per-clone exclude file. Sandboxed commands cannot remove the link
-    (the job dir is read-only to them); job cleanup removes the link,
-    not the target, so targets whose job is gone are pruned here.
-    Returns the target when a redirect was made, else None.
+    the checkout, which is the sandbox's own unit (every session in a
+    checkout can already write its working tree). Per worktree by
+    construction, alive as long as the checkout, excluded from git
+    status via the per-clone exclude file. Sandboxed commands cannot
+    remove the link (the job dir is read-only to them); job cleanup
+    removes the link, not the target, so targets whose job is gone are
+    pruned here. Returns the target when a redirect was made, else None.
     """
     job_dir = os.environ.get("CLAUDE_JOB_DIR")
     if not job_dir:
@@ -339,8 +408,8 @@ def redirect_job_tmp(root: Path) -> str | None:
 
 def cmd_hook_session_start(args: argparse.Namespace) -> int:
     """Advisory SessionStart hook: report and self-heal staleness, and
-    redirect the job scratch dir. Always exits 0 — the sandbox design
-    must stay correct without hooks."""
+    redirect the job scratch dir. Always exits 0, because the sandbox
+    design must stay correct without hooks."""
     try:
         root = find_repo_root(Path.cwd())
         if root is None:
@@ -361,16 +430,20 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
                 f"({', '.join(sorted(creds))}) so sandboxed tools can read them"
             )
         line, attention = _status_line(root)
-        if attention:
+        if attention and sidecar["legacy_profile"] is not None:
+            # The checkout keeps the fragment it last applied; choosing
+            # its modules is the user's act, so the hook only reports.
+            print(f"claude-code-sandbox: {line}")
+        elif attention:
             try:
-                _apply(root, sidecar["profile"], sidecar["applied"], quiet=True)
+                _apply(root, sidecar["modules"], sidecar["applied"], quiet=True)
                 print(
-                    f"claude-code-sandbox: {line} — synced now; settings "
-                    "live-reload, so current session should pick this up"
+                    f"claude-code-sandbox: {line}; synced now, and settings "
+                    "live-reload, so the current session should pick this up"
                 )
             except ToolError as e:
-                print(f"claude-code-sandbox: {line} — sync failed: {e}")
-    except Exception as e:  # noqa: BLE001 — advisory surface, never block a session
+                print(f"claude-code-sandbox: {line}; sync failed: {e}")
+    except Exception as e:  # noqa: BLE001 (advisory surface: never block a session)
         print(f"claude-code-sandbox: hook error (advisory): {e}")
     return 0
 
@@ -378,41 +451,54 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="claude-code-sandbox",
-        description="Enroll checkouts into nix-declared Claude Code sandbox profiles",
+        description="Enroll checkouts into compositions of nix-declared Claude Code sandbox modules",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def add(name: str, fn: Any, **kwargs: Any) -> argparse.ArgumentParser:
+    def add(name: str, fn: Any, checkout: bool = True, **kwargs: Any) -> argparse.ArgumentParser:
         p = sub.add_parser(name, **kwargs)
         p.set_defaults(fn=fn)
+        if checkout:
+            p.add_argument(
+                "-C",
+                dest="directory",
+                default=".",
+                metavar="DIR",
+                help="act on the checkout containing DIR (default: the current directory)",
+            )
         return p
 
-    p = add("enroll", cmd_enroll, help="bind this checkout to a profile")
-    p.add_argument("--profile", default="default")
-    p.add_argument("directory", nargs="?", default=".")
+    p = add("enroll", cmd_enroll, help="bind this checkout to exactly the given modules")
+    p.add_argument("modules", nargs="*", metavar="MODULE")
     p.add_argument("--quiet", action="store_true")
 
-    p = add("retarget", cmd_retarget, help="rebind this checkout to a different profile")
-    p.add_argument("profile")
-    p.add_argument("directory", nargs="?", default=".")
+    p = add("add", cmd_add, help="add modules to this checkout's set")
+    p.add_argument("modules", nargs="+", metavar="MODULE")
     p.add_argument("--quiet", action="store_true")
 
-    p = add("abandon", cmd_retarget, help="bind to the reserved empty profile 'none'")
-    p.set_defaults(profile=NONE_PROFILE)
-    p.add_argument("directory", nargs="?", default=".")
+    p = add("drop", cmd_drop, help="remove modules from this checkout's set")
+    p.add_argument("modules", nargs="+", metavar="MODULE")
     p.add_argument("--quiet", action="store_true")
 
-    p = add("sync", cmd_sync, help="re-apply the bound profile to this checkout")
-    p.add_argument("directory", nargs="?", default=".")
+    p = add("abandon", cmd_abandon, help="remove the sandbox fragment and keep the checkout managed")
     p.add_argument("--quiet", action="store_true")
 
-    p = add("status", cmd_status, help="report this checkout's binding")
-    p.add_argument("directory", nargs="?", default=".")
+    p = add("sync", cmd_sync, help="re-apply this checkout's modules")
+    p.add_argument("--quiet", action="store_true")
 
-    p = add("scan", cmd_scan, help="walk the given directory and report every checkout under it")
+    add("status", cmd_status, help="report this checkout's binding")
+
+    add("list", cmd_list, checkout=False, help="list the declared sandbox modules")
+
+    p = add(
+        "scan",
+        cmd_scan,
+        checkout=False,
+        help="walk the given directory and report every checkout under it",
+    )
     p.add_argument("directory")
 
-    add("hook-session-start", cmd_hook_session_start, help=argparse.SUPPRESS)
+    add("hook-session-start", cmd_hook_session_start, checkout=False, help=argparse.SUPPRESS)
 
     return parser
 
