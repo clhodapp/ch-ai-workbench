@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: MIT
 #
 # Home-manager half of claude-code-sandbox: declares named sandbox
-# *profiles* (toolsets compiled to Claude Code native-sandbox rules),
-# emits them as fragments plus a registry under
-# $XDG_CONFIG_HOME/claude-code-sandbox/, and deploys the CLI and the
-# skills-dir plugin. HM never touches checkouts: freshness converges at
-# point of use (the SessionStart hook heals staleness in the session it
-# fires in; an unhealed checkout runs its consistent old closure) — no
+# *modules* (what one kind of tooling needs inside Claude Code's native
+# sandbox), compiles each into a part, emits the parts plus a registry
+# under $XDG_CONFIG_HOME/claude-code-sandbox/, and deploys the CLI and
+# the skills-dir plugin. A checkout chooses the set of modules its work
+# needs; the CLI composes the chosen parts into one settings fragment at
+# enroll time, because no evaluation here knows which combinations
+# checkouts will choose. HM never touches checkouts: freshness converges
+# at point of use (the SessionStart hook heals staleness in the session
+# it fires in; an unhealed checkout runs its consistent old closure). No
 # enumeration of enrollments exists anywhere, so nothing breaks when
 # folders move.
 #
-# Upstream references — check these when a Claude Code update changes
+# Upstream references; check these when a Claude Code update changes
 # sandbox behavior or before emitting new keys:
 #
 #   https://code.claude.com/docs/en/settings-reference   (canonical key
@@ -25,23 +28,24 @@
 # Design facts this module encodes (spike-verified 2026-08-22):
 #
 # - The store mask is mount-level: `denyRead ["/nix/store"]` plus exact
-#   per-path `allowRead` from the profile closure makes everything else
+#   per-path `allowRead` from the composed closure makes everything else
 #   in the store nonexistent inside sandboxed Bash.
 # - `failIfUnavailable = true` is mandatory: without it, sandbox *init*
 #   failure silently disables sandboxing for the whole session
 #   (fail-open); `allowUnsandboxedCommands = false` does not cover init
-#   failure.
-# - Rules ride the exec environment: fragments have a hard size ceiling
-#   (~128KB single-string). The fragment builder fails the build past a
-#   conservative 100KB.
+#   failure. The CLI's composer emits both for every enrollment.
+# - Rules are passed through the exec environment: fragments have a hard
+#   size ceiling (~128KB single-string). The composer refuses a
+#   composition past a conservative 100KB, and each part's build fails
+#   if the part alone is past it.
 # - The Bash tool follows $SHELL (documented: tools-reference sources
 #   rc files "depending on your shell", snapshot at session start), and
 #   a login shell resolves through profile-farm store paths whose
-#   closure is everything installed — so every masked profile pins
-#   env.SHELL to its own bash via the documented env mechanism.
+#   closure is everything installed, so every enrollment pins env.SHELL
+#   to the base part's bash via the documented env mechanism.
 # - The sandbox helper re-enters the claude-code package inside the
-#   sandbox; masked profiles therefore need that package's closure
-#   readable (`claudePackage`).
+#   sandbox; masked enrollments therefore need that package's closure
+#   readable (`claudePackage`, in the base part).
 # - env.PATH must carry the bubblewrap and socat directories or the
 #   sandbox runtime cannot construct sandboxes at all.
 #
@@ -71,18 +75,6 @@ let
       this home evaluates with.
     '');
 
-  # Everything a fragment needs beyond the declared toolset flows from
-  # cfg.runtime.
-  #
-  # Fragments reference the farm by exact store path: every enrolled
-  # checkout runs one consistent closure-generation — the new one after
-  # a sync, the previous one until then (kept alive by the prior HM
-  # generation). Guard: stable-path indirection here desynchronizes
-  # rules and farm in live sessions at switch.
-  # The module's own CLI rides every farm: a sandboxed agent can then
-  # run `claude-code-sandbox status` to verify its own enrollment (in
-  # masked profiles the registry/fragments are unreadable, so status
-  # reports freshness as unknown there and stays truthful).
   # An `ssh` that redirects config to the checkout's owned creds copy.
   # Inside the sandbox, ssh rejects the store-symlinked ~/.ssh/config
   # ("Bad owner or permissions": the userns maps its root owner to
@@ -91,21 +83,21 @@ let
   # ssh_config, beside the sidecar (.claude/claude-code-sandbox.json).
   # This wrapper points ssh at it with -F, then passes through every
   # argument the sandbox's injected GIT_SSH_COMMAND supplies (the CONNECT
-  # ProxyCommand included) — git invokes `ssh` by bare name and PATH
+  # ProxyCommand included): git invokes `ssh` by bare name and PATH
   # resolves it here.
   #
   # Finding the enrolled root: prefer CLAUDE_CODE_SANDBOX_ROOT, which the
-  # session-start apply writes into the checkout's settings env — the
-  # only channel that reaches a Bash command cwd-independently (hooks
-  # can't inject env; CLAUDE_PROJECT_DIR is hook-only). This is
-  # authoritative: it names the checkout the session is enrolled in,
-  # regardless of where the command's cwd has wandered. Fallback (an
-  # un-applied checkout, or a stale session predating this key): walk up
-  # from $PWD to the sidecar — correct whenever cwd is inside the
-  # checkout, which is NOT `git rev-parse --show-toplevel` (that gives
-  # the SUBMODULE root in the multi-repo case, but the creds live at the
-  # OUTER enrolled root beside the sidecar). Outside the sandbox, or with
-  # no root/copy, it falls through to real ssh unchanged — inert there.
+  # CLI writes into the checkout's settings env, the only channel that
+  # reaches a Bash command cwd-independently (hooks can't inject env;
+  # CLAUDE_PROJECT_DIR is hook-only). This is authoritative: it names the
+  # checkout the session is enrolled in, regardless of where the
+  # command's cwd has wandered. Fallback (an un-applied checkout, or a
+  # stale session predating this key): walk up from $PWD to the sidecar.
+  # That is correct whenever cwd is inside the checkout, and it is NOT
+  # `git rev-parse --show-toplevel`, which gives the SUBMODULE root in the
+  # multi-repo case, while the creds live at the OUTER enrolled root
+  # beside the sidecar. Outside the sandbox, or with no root or copy, it
+  # falls through to real ssh unchanged, so it is inert there.
   sshWrapper = pkgs.writeShellScriptBin "ssh" ''
     real=${cfg.runtime.opensshPackage}/bin/ssh
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
@@ -128,128 +120,155 @@ let
     exec "$real" "$@"
   '';
 
-  profileFarm =
-    name: profile:
-    pkgs.buildEnv {
-      name = "ccs-profile-${name}";
-      paths = profile.toolset ++ cfg.runtime.basePackages ++ [ cfg.package ];
-    };
-
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
 
   landlockShim = workbenchPackage "landlock-shim";
 
-  # A profile with a socket allowlist gets its SHELL pinned to this
-  # wrapper, which narrows connect() back to the declared sockets with
-  # Landlock before exec'ing the profile bash: upstream's Linux seccomp
+  # The env variable that carries a composed unix-socket allowlist to the
+  # socket shell; the CLI's composer writes it (SOCKETS_ENV_VAR there).
+  socketsEnvVar = "CLAUDE_CODE_SANDBOX_UNIX_SOCKETS";
+
+  # The SHELL of every enrollment whose chosen modules declare unix
+  # sockets. It narrows connect() back to the composed allowlist with
+  # Landlock before exec'ing the base bash: upstream's Linux seccomp
   # filter is all-or-nothing, so the fragment opens it
-  # (allowAllUnixSockets) and this layer re-narrows. That is a real
-  # reach barrier (it bounds which host services sandboxed code can
-  # talk to). Strictly narrowing, upstream enforcement untouched, ABI-
-  # gated so older kernels degrade to upstream's enforcement instead of
-  # breaking. Retirable if upstream grows path-scoped Linux support
+  # (allowAllUnixSockets) and this layer re-narrows. That is a real reach
+  # barrier (it bounds which host services sandboxed code can talk to).
+  # Strictly narrowing, upstream enforcement untouched, ABI-gated so
+  # older kernels degrade to upstream's enforcement instead of breaking.
+  # Retirable if upstream adds path-scoped Linux support
   # (anthropics/claude-code#44180).
+  #
+  # The allowlist arrives one path per line in the settings env, because
+  # the set of modules (and so the list) is chosen per checkout after
+  # this script is built. The settings files are write-guarded at the
+  # sandbox and permission layers, and a Landlock domain only narrows
+  # once applied, so a command cannot widen the list for itself or its
+  # children. The shim treats an empty list as "no socket narrowing", so
+  # an empty variable here refuses to run rather than opening every
+  # socket.
   #
   # The narrowing applies only in sandbox context, detected by the
   # SANDBOX_RUNTIME marker the sandbox sets for every sandboxed command:
   # the same SHELL also reaches unsandboxed and excludedCommands runs,
   # which must keep escaping. Misdetection therefore fails open into
-  # exactly the state the fragment already declares upstream — never
+  # exactly the state the fragment already declares upstream, and never
   # into breaking an escape hatch.
-  #
-  # Execve confinement was tried and removed: it could not be a real
-  # boundary while the checkout and scratch dirs are both writable and
-  # executable (an agent copies a readable file in and runs it), and
-  # no_new_privs already neutralizes setuid. The barriers that hold are
-  # network isolation, read-confinement, and write-confinement.
-  shimShell =
-    name: sockets:
-    pkgs.writeShellScript "ccs-shell-${name}" ''
-      if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
-        exec ${landlockShim}/bin/landlock-shim ${
-          lib.concatMapStringsSep " " (s: "--allow ${lib.escapeShellArg s}") sockets
-        } \
-          --socket-fallback ${cfg.runtime.landlock.socketFallback} \
-          -- ${runtimeShell} "$@"
+  socketShell = pkgs.writeShellScript "ccs-socket-shell" ''
+    if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
+      if [ -z "''${${socketsEnvVar}:-}" ]; then
+        echo "claude-code-sandbox: ${socketsEnvVar} is empty, so the unix-socket allowlist cannot be enforced; refusing to run" >&2
+        exit 2
       fi
-      exec ${runtimeShell} "$@"
-    '';
+      allow=()
+      while IFS= read -r socket; do
+        if [ -n "$socket" ]; then
+          allow+=(--allow "$socket")
+        fi
+      done <<<"''$${socketsEnvVar}"
+      exec ${landlockShim}/bin/landlock-shim "''${allow[@]}" \
+        --socket-fallback ${cfg.runtime.landlock.socketFallback} \
+        -- ${runtimeShell} "$@"
+    fi
+    exec ${runtimeShell} "$@"
+  '';
 
-  fragmentDrv =
-    name: profile:
-    let
-      farm = profileFarm name profile;
-      # allowNix auto-grants the daemon socket; that promotion is the
-      # one place a null option can become non-null in the fragment.
-      effectiveUnixSockets =
-        let
-          auto = lib.optional profile.allowNix "/nix/var/nix/daemon-socket/socket";
-        in
-        if profile.allowUnixSockets == null && auto == [ ] then
-          null
-        else
-          (if profile.allowUnixSockets == null then [ ] else profile.allowUnixSockets) ++ auto;
-      # allowNix also needs the client-side fetcher cache writable: nix
-      # (the client, inside the sandbox) writes $XDG_CACHE_HOME/nix even
-      # though the daemon builds outside it. Without this a sandboxed
-      # `nix build`/flake fetch fails opening fetcher-cache-v*.sqlite.
-      effectiveAllowWrite =
-        let
-          auto = lib.optional profile.allowNix "${config.xdg.cacheHome}/nix";
-        in
-        if profile.allowWrite == null && auto == [ ] then
-          null
-        else
-          (if profile.allowWrite == null then [ ] else profile.allowWrite) ++ auto;
-      # A non-empty allowlist (without an explicit allow-all) is what
-      # the shim narrows sockets to, and what makes the fragment open
-      # upstream's filter; an explicit allowAllUnixSockets is carried
-      # verbatim, wins, and gets no socket narrowing.
-      narrowsSockets =
-        profile.allowAllUnixSockets != true && effectiveUnixSockets != null && effectiveUnixSockets != [ ];
-      effectiveAllowAll = if narrowsSockets then true else profile.allowAllUnixSockets;
-      # Only a socket-narrowing profile needs the shim wrapper; others
-      # run the profile bash directly.
-      profileShell = if narrowsSockets then "${shimShell name effectiveUnixSockets}" else runtimeShell;
-      closureFile = pkgs.writeClosure (
-        [
-          farm
-          sshWrapper
-          cfg.runtime.claudePackage
-          cfg.runtime.shellPackage
-        ]
-        ++ lib.optional narrowsSockets (shimShell name effectiveUnixSockets)
-        ++ cfg.runtime.sandboxTools
-      );
-      spec = builtins.toJSON {
-        masked = !profile.allowNix;
-        extraAllowRead = profile.extraAllowRead;
-        allowWrite = effectiveAllowWrite;
-        allowedDomains = profile.allowedDomains;
-        deniedDomains = profile.deniedDomains;
-        excludedCommands = profile.excludedCommands;
-        allowUnixSockets = effectiveUnixSockets;
-        allowAllUnixSockets = effectiveAllowAll;
-        # The ssh wrapper's bin goes first so its `ssh` is found ahead of
-        # the farm's openssh — an ordinary PATH precedence, not a
-        # buildEnv override; a user who fronts their own ssh knows what
-        # they are doing.
-        path = lib.concatStringsSep ":" (
-          [
-            "${sshWrapper}/bin"
-            "${farm}/bin"
-          ]
-          ++ map (p: "${p}/bin") cfg.runtime.sandboxTools
-        );
-        shell = "${profileShell}";
-        extraEnv = profile.extraEnv;
-        extraSettings = profile.extraSettings;
-      };
-    in
-    pkgs.runCommand "ccs-fragment-${name}.json"
+  # The floor of every enrollment: the base farm (basic tools and the CLI
+  # itself, so a sandboxed agent can run `claude-code-sandbox status`),
+  # the ssh wrapper, the shells, and what the sandbox runtime needs.
+  #
+  # Parts reference farms by exact store path: every enrolled checkout
+  # runs one consistent closure generation (the new one after a sync,
+  # the previous one until then, kept alive by the prior HM generation).
+  # Stable-path indirection here would desynchronize rules and farms in
+  # live sessions at switch.
+  baseFarm = pkgs.buildEnv {
+    name = "ccs-base";
+    paths = cfg.runtime.basePackages ++ [ cfg.package ];
+  };
+
+  basePart =
+    pkgs.runCommand "ccs-part-base.json"
       {
         nativeBuildInputs = [ pkgs.python3 ];
-        inherit closureFile;
+        closureFile = pkgs.writeClosure (
+          [
+            baseFarm
+            sshWrapper
+            socketShell
+            cfg.runtime.claudePackage
+            cfg.runtime.shellPackage
+          ]
+          ++ cfg.runtime.sandboxTools
+        );
+        passAsFile = [ "spec" ];
+        spec = builtins.toJSON {
+          # The ssh wrapper's bin goes first so its `ssh` is found ahead of
+          # any farm's openssh: an ordinary PATH precedence, not a buildEnv
+          # override; a user who fronts their own ssh knows what they are
+          # doing.
+          pathFirst = [ "${sshWrapper}/bin" ];
+          pathLast = [ "${baseFarm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools;
+          shell = runtimeShell;
+          socketShell = "${socketShell}";
+        };
+      }
+      ''
+        python3 - "$specPath" "$closureFile" > "$out" <<'EOF'
+        import json, sys
+
+        part = json.load(open(sys.argv[1]))
+        part["closure"] = sorted(
+            line for line in open(sys.argv[2]).read().splitlines() if line
+        )
+        print(json.dumps(part, indent=2))
+        EOF
+      '';
+
+  modulePart =
+    name: module:
+    let
+      farm = pkgs.buildEnv {
+        name = "ccs-module-${name}";
+        paths = module.toolset;
+      };
+      hasFarm = module.toolset != [ ];
+      # allowNix grants the daemon socket and the client-side fetcher
+      # cache: nix (the client, inside the sandbox) writes
+      # $XDG_CACHE_HOME/nix even though the daemon builds outside it, and
+      # without the cache a sandboxed `nix build` or flake fetch fails
+      # opening fetcher-cache-v*.sqlite. These promotions are the one
+      # place a null option can become non-null in the part.
+      withAuto =
+        value: auto:
+        if value == null && auto == [ ] then null else (if value == null then [ ] else value) ++ auto;
+      spec = builtins.toJSON {
+        inherit name;
+        inherit (module)
+          description
+          requires
+          extraAllowRead
+          allowedDomains
+          deniedDomains
+          excludedCommands
+          allowAllUnixSockets
+          ;
+        masked = !module.allowNix;
+        path = lib.optional hasFarm "${farm}/bin";
+        allowWrite = withAuto module.allowWrite (
+          lib.optional module.allowNix "${config.xdg.cacheHome}/nix"
+        );
+        allowUnixSockets = withAuto module.allowUnixSockets (
+          lib.optional module.allowNix "/nix/var/nix/daemon-socket/socket"
+        );
+        env = module.extraEnv;
+        settings = module.extraSettings;
+      };
+    in
+    pkgs.runCommand "ccs-part-${name}.json"
+      {
+        nativeBuildInputs = [ pkgs.python3 ];
+        closureFile = if hasFarm then pkgs.writeClosure [ farm ] else pkgs.writeText "empty" "";
         passAsFile = [ "spec" ];
         inherit spec;
       }
@@ -257,120 +276,71 @@ let
         python3 - "$specPath" "$closureFile" > "$out" <<'EOF'
         import json, sys
 
-        spec = json.load(open(sys.argv[1]))
-        closure = sorted(
+        part = json.load(open(sys.argv[1]))
+        part["closure"] = sorted(
             line for line in open(sys.argv[2]).read().splitlines() if line
         )
 
-        # extraSettings/extraEnv transport keys this module does NOT
-        # generate; the generated keys carry the module's guarantees
-        # (fail-closed posture, the mask, the farm PATH/SHELL) and may
-        # not be silently overridden through the escape hatch. Wanting a
-        # different value for one of these is a profile-option request,
-        # not a passthrough.
+        # extraSettings and extraEnv transport keys the composer does NOT
+        # generate. The generated keys carry the module's guarantees (the
+        # fail-closed posture, the mask, the farm PATH and SHELL, the
+        # checkout root, the socket allowlist) and may not be overridden
+        # through the escape hatch. Wanting a different value for one of
+        # these is a module-option request, not a passthrough.
         OWNED = [
-            ("extraSettings", ["sandbox", "enabled"]),
-            ("extraSettings", ["sandbox", "failIfUnavailable"]),
-            ("extraSettings", ["sandbox", "allowUnsandboxedCommands"]),
-            ("extraSettings", ["sandbox", "excludedCommands"]),
-            ("extraSettings", ["sandbox", "filesystem"]),
-            ("extraSettings", ["sandbox", "network"]),
-            ("extraSettings", ["env"]),
-            ("extraEnv", ["PATH"]),
-            ("extraEnv", ["SHELL"]),
+            ("settings", ["sandbox", "enabled"]),
+            ("settings", ["sandbox", "failIfUnavailable"]),
+            ("settings", ["sandbox", "allowUnsandboxedCommands"]),
+            ("settings", ["sandbox", "excludedCommands"]),
+            ("settings", ["sandbox", "filesystem"]),
+            ("settings", ["sandbox", "network"]),
+            ("settings", ["env"]),
+            ("env", ["PATH"]),
+            ("env", ["SHELL"]),
+            ("env", ["CLAUDE_CODE_SANDBOX_ROOT"]),
+            ("env", ["${socketsEnvVar}"]),
         ]
         def present(tree, path):
-            for part in path:
-                if not isinstance(tree, dict) or part not in tree:
+            for key in path:
+                if not isinstance(tree, dict) or key not in tree:
                     return False
-                tree = tree[part]
+                tree = tree[key]
             return True
         collisions = [
             f"{src}.{'.'.join(path)}"
             for src, path in OWNED
-            if present(spec[src], path)
+            if present(part[src], path)
         ]
         if collisions:
             sys.exit(
-                "claude-code-sandbox: profile escape hatches may not override "
-                "generator-owned keys: " + ", ".join(collisions)
+                f"claude-code-sandbox: module {part['name']} may not override "
+                "generated keys through its escape hatches: " + ", ".join(collisions)
             )
 
-        def deep_update(dst, src):
-            for k, v in src.items():
-                if isinstance(v, dict) and isinstance(dst.get(k), dict):
-                    deep_update(dst[k], v)
-                else:
-                    dst[k] = v
-
-        # Uniform decode: spec fields are null when the option was not
-        # set; null = omit from the fragment, anything else (including
-        # empty) is carried verbatim.
-        fragment = {
-            "sandbox": {
-                "enabled": True,
-                "failIfUnavailable": True,
-                "allowUnsandboxedCommands": False,
-            },
-            "env": {
-                "PATH": spec["path"],
-                "SHELL": spec["shell"],
-                **(spec["extraEnv"] or {}),
-            },
-        }
-        fs = {}
-        if spec["masked"]:
-            fs["denyRead"] = ["/nix/store"]
-            fs["allowRead"] = closure + (spec["extraAllowRead"] or [])
-        elif spec["extraAllowRead"] is not None:
-            fs["allowRead"] = spec["extraAllowRead"]
-        if spec["allowWrite"] is not None:
-            fs["allowWrite"] = spec["allowWrite"]
-        if fs:
-            fragment["sandbox"]["filesystem"] = fs
-
-        net = {}
-        for key in ("allowedDomains", "deniedDomains", "allowUnixSockets",
-                    "allowAllUnixSockets"):
-            if spec[key] is not None:
-                net[key] = spec[key]
-        if net:
-            fragment["sandbox"]["network"] = net
-
-        if spec["excludedCommands"] is not None:
-            fragment["sandbox"]["excludedCommands"] = spec["excludedCommands"]
-
-        deep_update(fragment, spec["extraSettings"] or {})
-
-        out = json.dumps(fragment, indent=2)
+        out = json.dumps(part, indent=2)
         limit = 100_000
         if len(out) > limit:
             sys.exit(
-                f"fragment is {len(out)} bytes (> {limit}): the sandbox rules "
-                "ride the exec environment and hit E2BIG around 128KB — trim "
-                "the profile toolset"
+                f"module {part['name']} is {len(out)} bytes (> {limit}) on its "
+                "own: the sandbox rules are passed through the exec environment "
+                "and hit E2BIG around 128KB; trim its toolset"
             )
         print(out)
         EOF
       '';
 
-  noneFragment = pkgs.writeText "ccs-fragment-none.json" ''
-    {}
-  '';
-
-  fragmentXdgPath = name: "claude-code-sandbox/profiles/${name}.json";
-  fragmentAbsPath = name: "${config.xdg.configHome}/${fragmentXdgPath name}";
-
-  allFragments = lib.mapAttrs fragmentDrv cfg.profiles // {
-    none = noneFragment;
-  };
+  partXdgPath = name: "claude-code-sandbox/parts/${name}.json";
+  partAbsPath = name: "${config.xdg.configHome}/${partXdgPath name}";
+  moduleXdgName = name: "module-${name}";
 
   registry = pkgs.writeText "ccs-registry.json" (
     builtins.toJSON {
-      profiles = lib.mapAttrs (name: _: fragmentAbsPath name) allFragments;
-      # source→target for the session-start hook to materialize as owned
-      # copies under the checkout's creds dir. source null = create an
-      # empty 0600 drop point for a runtime provisioner.
+      base = partAbsPath "base";
+      modules = lib.mapAttrs (name: _: partAbsPath (moduleXdgName name)) cfg.modules;
+      inherit (cfg) baseModules;
+      # source and target for the session-start hook to materialize as
+      # owned copies under the checkout's creds dir. A null source makes
+      # an empty 0600 drop point for a runtime provisioner.
       credentials = lib.mapAttrs (_: c: {
         inherit (c) source target;
       }) cfg.credentials;
@@ -393,34 +363,51 @@ let
     ];
   };
 
-  profileModule = lib.types.submodule {
+  # Every list grant below is unioned across the modules a checkout
+  # chooses, so a module states only what its own tooling needs. The
+  # uniform missing-ness convention: null (the default) contributes
+  # nothing; any non-null value, including [] or {}, puts the key in the
+  # composed fragment and in the tool-managed merge domain.
+  sandboxModule = lib.types.submodule {
     options = {
+      description = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "What using this kind of tooling means; `claude-code-sandbox list` shows it.";
+      };
+      requires = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Other sandbox modules a checkout gets whenever it chooses this
+          one. For example, a `github` module can require `git`.
+        '';
+      };
       toolset = lib.mkOption {
         type = lib.types.listOf lib.types.package;
         default = [ ];
         description = ''
-          Packages whose closure is the profile's executable world. The
-          implicit basics (bash, coreutils, cacert) are always included.
+          Packages this module puts on PATH. Their closure joins the
+          composed executable world. The runtime's base packages (bash,
+          coreutils, cacert and the rest of runtime.basePackages) are in
+          every enrollment and need no module.
         '';
       };
       allowNix = lib.mkOption {
         type = lib.types.bool;
         default = false;
         description = ''
-          Full-nix posture: leave the store unmasked so `nix` works.
-          Mutually exclusive with the closure restriction by nature —
-          an unmasked store makes every installed tool reachable.
+          Full-nix posture: leave the store unmasked so `nix` works. A
+          checkout that chooses this module loses the closure
+          restriction for all its modules, because an unmasked store
+          makes every installed tool reachable. PATH still comes from
+          the farms, so the module must list `nix` in its toolset.
         '';
       };
-      # Uniform missing-ness convention for every optional field below:
-      # null (the default) = absent from the fragment entirely; any
-      # non-null value, including [] or {}, = the fragment carries
-      # exactly what you set, and the key joins the tool-managed merge
-      # domain.
       extraAllowRead = lib.mkOption {
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
-        description = "Additional allowRead paths merged into the fragment.";
+        description = "Additional allowRead paths.";
       };
       allowWrite = lib.mkOption {
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
@@ -428,16 +415,17 @@ let
         description = ''
           Paths writable beyond the sandbox default (cwd + session tmp).
           Writes into PATH-bearing or shell-config directories are code
-          execution in other contexts — scope narrowly.
+          execution in other contexts, so scope narrowly.
         '';
       };
       allowedDomains = lib.mkOption {
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
         description = ''
-          Network domain allowlist for sandboxed commands. [] is a real
-          policy (deny all domains); null leaves network rules to lower
-          settings scopes.
+          Network domains sandboxed commands may reach. Domains union
+          across the chosen modules, so an empty list does not deny the
+          domains another module allows; it only puts an (empty)
+          allowlist in the fragment when no chosen module lists any.
         '';
       };
       deniedDomains = lib.mkOption {
@@ -450,7 +438,8 @@ let
         default = null;
         description = ''
           Commands that run OUTSIDE the sandbox entirely. Each entry is
-          a hole in the profile; prefer widening the profile instead.
+          a hole in every enrollment that chooses this module; prefer
+          widening the toolset instead.
         '';
       };
       allowUnixSockets = lib.mkOption {
@@ -458,18 +447,18 @@ let
         default = null;
         description = ''
           Unix socket paths reachable from sandboxed commands. A socket
-          is often a capability grant (docker.sock is host access) —
+          is often a capability grant (docker.sock is host access), so
           scope carefully. allowNix adds the nix daemon socket
           automatically.
 
           Upstream enforces this list on macOS only; on Linux its
-          seccomp filter is all-or-nothing. A non-empty list therefore
-          makes the generator open the upstream filter
-          (allowAllUnixSockets) and pin the profile's SHELL to a
-          Landlock wrapper that narrows connect() back to exactly these
-          paths (kernel Landlock ABI 9+, i.e. 7.1+; older kernels fail
-          closed). Sockets a sandboxed command creates itself are
-          always reachable.
+          seccomp filter is all-or-nothing. A non-empty composed list
+          therefore makes the composer open the upstream filter
+          (allowAllUnixSockets) and pin SHELL to a Landlock wrapper that
+          narrows connect() back to exactly the composed paths (kernel
+          Landlock ABI 9+, i.e. 7.1+; runtime.landlock.socketFallback
+          decides what older kernels do). Sockets a sandboxed command
+          creates itself are always reachable.
         '';
       };
       allowAllUnixSockets = lib.mkOption {
@@ -478,25 +467,33 @@ let
         description = ''
           Plainly allow every unix socket on the host (upstream's
           boolean; no Landlock narrowing). This is a large capability
-          grant — prefer allowUnixSockets. Takes precedence over the
-          list when both are set.
+          grant; prefer allowUnixSockets. `true` in any chosen module
+          wins over every module's list. `false` holds only while no
+          chosen module lists sockets: a non-empty composed list opens
+          the upstream filter and narrows it back with Landlock.
         '';
       };
       extraEnv = lib.mkOption {
         type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
         default = null;
-        description = "Extra env vars carried by the fragment.";
+        description = ''
+          Extra env vars carried by the fragment. Two chosen modules
+          that set one variable to different values make enrollment
+          fail.
+        '';
       };
       extraSettings = lib.mkOption {
         type = lib.types.nullOr lib.types.attrs;
         default = null;
         description = ''
-          Deep-merged into the generated fragment: freeform passthrough
+          Deep-merged into the composed fragment: freeform passthrough
           (RFC-42 style) for settings keys this module does not
           generate, e.g. autoAllowBashIfSandboxed. Claude Code's own
-          loader validates the keys. Generator-owned keys (the
-          fail-closed posture, the mask, env.PATH/SHELL) may not be
-          overridden here — the fragment build fails on collision.
+          loader validates the keys. Lists union across modules; two
+          chosen modules that set one scalar to different values make
+          enrollment fail. Generated keys (the fail-closed posture, the
+          mask, env) may not be overridden here: the part's build fails
+          on collision.
         '';
       };
     };
@@ -504,7 +501,7 @@ let
 in
 {
   options.ch-ai-workbench.claude-code-sandbox = {
-    enable = lib.mkEnableOption "nix-declared Claude Code sandbox profiles";
+    enable = lib.mkEnableOption "nix-declared Claude Code sandbox modules";
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -520,18 +517,19 @@ in
       description = "The skills-dir plugin (ceremony skill + advisory hooks).";
     };
 
-    # Everything a profile needs beyond its declared toolset lives here,
-    # in one visible surface. These are not optional conveniences: the
-    # spike showed each one's absence breaks sandboxed sessions outright.
+    # Everything an enrollment needs beyond its chosen modules lives
+    # here, in one visible surface. These are not optional conveniences:
+    # the spike showed each one's absence breaks sandboxed sessions
+    # outright.
     runtime = {
       claudePackage = lib.mkOption {
         type = lib.types.package;
         description = ''
           The claude-code package this machine actually runs (no
           default: only the config wiring claude into the profile knows
-          it). Its closure is in every masked profile's allowRead — the
-          sandbox helper re-enters it inside the sandbox, and without it
-          every sandboxed command fails closed.
+          it). Its closure is in every masked enrollment's allowRead:
+          the sandbox helper re-enters it inside the sandbox, and
+          without it every sandboxed command fails closed.
         '';
       };
       sandboxTools = lib.mkOption {
@@ -542,7 +540,7 @@ in
         ];
         defaultText = lib.literalExpression "[ pkgs.bubblewrap pkgs.socat ]";
         description = ''
-          On every profile's PATH (and in its closure): the sandbox
+          On every enrollment's PATH (and in its closure): the sandbox
           runtime needs these to construct sandboxes at all.
         '';
       };
@@ -561,13 +559,13 @@ in
         ];
         defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert pkgs.diffutils pkgs.findutils pkgs.gnugrep pkgs.gnused pkgs.jq pkgs.ripgrep ]";
         description = ''
-          The floor added to every profile farm: shell, the GNU basics
+          The floor of every enrollment: shell, the GNU basics
           (coreutils, diff/cmp, find/xargs, grep, sed), TLS
-          certificates, and the JSON/search tools agent sessions reach
-          for regardless of profile. On NixOS even /bin/sh and /etc/ssl
-          resolve into the store, so a farm without shell, coreutils
-          and cacert is not a Unix. The module's own CLI also rides
-          every farm, so sandboxed agents can run
+          certificates, and the JSON and search tools agent sessions
+          reach for whatever modules a checkout chooses. On NixOS even
+          /bin/sh and /etc/ssl resolve into the store, so a farm without
+          shell, coreutils and cacert is not a Unix. The module's own
+          CLI is also in the base farm, so sandboxed agents can run
           `claude-code-sandbox status`.
         '';
       };
@@ -576,9 +574,9 @@ in
         default = pkgs.bashNonInteractive;
         defaultText = lib.literalExpression "pkgs.bashNonInteractive";
         description = ''
-          Pinned as env.SHELL in every fragment: the Bash tool follows
-          $SHELL, and the sandbox shell must come from the profile's
-          own closure. Non-interactive bash keeps the session-start rc
+          Pinned as env.SHELL in every enrollment: the Bash tool follows
+          $SHELL, and the sandbox shell must come from the composed
+          closure. Non-interactive bash keeps the session-start rc
           snapshot free of login-shell config.
         '';
       };
@@ -587,8 +585,8 @@ in
         default = pkgs.openssh;
         defaultText = lib.literalExpression "pkgs.openssh";
         description = ''
-          The real ssh the farm's ssh wrapper execs (with -F pointing at
-          the checkout's owned config copy inside the sandbox). Pinned so
+          The real ssh the ssh wrapper execs (with -F pointing at the
+          checkout's owned config copy inside the sandbox). Pinned so
           the wrapper never resolves itself.
         '';
       };
@@ -600,9 +598,9 @@ in
           ];
           default = "open";
           description = ''
-            What a profile with a unix-socket allowlist does on a kernel
-            whose Landlock cannot enforce it (ABI < 9, i.e. before
-            7.1 — Ubuntu 24.04 HWE kernels, for instance). "open" warns
+            What an enrollment with a unix-socket allowlist does on a
+            kernel whose Landlock cannot enforce it (ABI < 9, i.e. before
+            7.1; Ubuntu 24.04 HWE kernels, for instance). "open" warns
             once per command and leaves sockets as the upstream sandbox
             left them (allow-all, which the fragment already declares);
             "closed" refuses to run sandboxed commands there.
@@ -611,14 +609,44 @@ in
       };
     };
 
-    profiles = lib.mkOption {
-      type = lib.types.attrsOf profileModule;
+    modules = lib.mkOption {
+      type = lib.types.attrsOf sandboxModule;
       default = { };
+      example = lib.literalExpression ''
+        {
+          git = {
+            description = "git over https and ssh to GitHub";
+            toolset = [ pkgs.git pkgs.openssh ];
+            allowedDomains = [ "github.com" "*.github.com" ];
+          };
+          github = {
+            requires = [ "git" ];
+            toolset = [ pkgs.gh ];
+            allowedDomains = [ "*.githubusercontent.com" ];
+          };
+          nix = {
+            allowNix = true;
+            toolset = [ pkgs.nix ];
+            allowedDomains = [ "*.nixos.org" ];
+          };
+        }
+      '';
       description = ''
-        Named sandbox profiles. `default` always exists (empty until
-        augmented — enrolled checkouts bound to it track whatever it
-        becomes). `none` is reserved: deliberately empty forever, the
-        target of `abandon`.
+        Named sandbox modules, each saying what one kind of tooling needs
+        inside the sandbox. A checkout opts into a set of them with
+        `claude-code-sandbox enroll MODULE...`; the CLI composes the set
+        (plus baseModules and everything they require) into the
+        checkout's sandbox settings.
+      '';
+    };
+
+    baseModules = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = ''
+        Modules every enrollment gets in addition to the modules the
+        checkout chooses, for grants no checkout should go without.
+        An abandoned checkout gets none.
       '';
     };
 
@@ -635,11 +663,12 @@ in
                   Absolute path whose *content* the session-start hook
                   copies into the checkout's credentials dir, owned by
                   the invoking user (so it survives the sandbox userns
-                  root→nobody mapping that makes store-symlinked dotfiles
-                  unreadable to tools that strict-check config ownership,
-                  e.g. ssh on ~/.ssh/config). null = the hook creates an
-                  empty 0600 target instead, a drop point for a runtime
-                  provisioner to fill with a delegated credential.
+                  mapping of root to nobody that makes store-symlinked
+                  dotfiles unreadable to tools that strict-check config
+                  ownership, e.g. ssh on ~/.ssh/config). null = the hook
+                  creates an empty 0600 target instead, a drop point for
+                  a runtime provisioner to fill with a delegated
+                  credential.
                 '';
               };
               target = lib.mkOption {
@@ -656,7 +685,7 @@ in
         Config/credential files the session-start hook materializes as
         user-owned copies under
         <checkout>/.claude/claude-code-sandbox/creds/, so sandboxed tools
-        can read them. Point tools at a copy with a profile `extraEnv`
+        can read them. Point tools at a copy with a module `extraEnv`
         entry or a farm wrapper; the credentials dir path is knowable at
         enroll time. Built-ins wire ssh and git below.
       '';
@@ -695,22 +724,32 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = !(cfg.profiles ? none);
+    assertions =
+      let
+        known = lib.attrNames cfg.modules;
+        unknownIn = names: lib.filter (n: !(lib.elem n known)) names;
+      in
+      [
+        {
+          assertion = unknownIn cfg.baseModules == [ ];
+          message = ''
+            claude-code-sandbox: baseModules names undeclared modules:
+            ${lib.concatStringsSep ", " (unknownIn cfg.baseModules)}
+          '';
+        }
+      ]
+      ++ lib.mapAttrsToList (name: module: {
+        assertion = unknownIn module.requires == [ ];
         message = ''
-          claude-code-sandbox: the profile name `none` is reserved (the
-          deliberately-empty target of `abandon`); it cannot be defined.
+          claude-code-sandbox: module ${name} requires undeclared modules:
+          ${lib.concatStringsSep ", " (unknownIn module.requires)}
         '';
-      }
-    ];
-
-    ch-ai-workbench.claude-code-sandbox.profiles.default = { };
+      }) cfg.modules;
 
     # Built-in: an owned copy of ~/.ssh/config, so sandboxed git-over-ssh
     # works (the store-symlinked original is rejected by ssh's config
-    # ownership check under the sandbox userns). The farm's ssh wrapper
-    # points -F at the copy. git config is not wired: this fleet has no
+    # ownership check under the sandbox userns). The ssh wrapper points
+    # -F at the copy. git config is not wired: these machines have no
     # ~/.gitconfig, and the mechanism is here to extend when one appears.
     ch-ai-workbench.claude-code-sandbox.credentials.ssh-config = {
       source = lib.mkDefault "${config.home.homeDirectory}/.ssh/config";
@@ -721,10 +760,12 @@ in
 
     xdg.configFile = {
       "claude-code-sandbox/registry.json".source = registry;
+      ${partXdgPath "base"}.source = basePart;
     }
     // lib.mapAttrs' (
-      name: drv: lib.nameValuePair (fragmentXdgPath name) { source = drv; }
-    ) allFragments;
+      name: module:
+      lib.nameValuePair (partXdgPath (moduleXdgName name)) { source = modulePart name module; }
+    ) cfg.modules;
 
     home.file =
       lib.optionalAttrs cfg.plugin.enable {

@@ -45,7 +45,7 @@ class MergeTest(unittest.TestCase):
 
     def test_interleaved_foreign_keys_inside_owned_subtree(self):
         # The /sandbox panel writes into the sandbox subtree; keys we never
-        # applied must survive a retarget.
+        # applied must survive a change of modules.
         current = dict(FRAG_A)
         current["sandbox"] = {**FRAG_A["sandbox"], "autoAllowBashIfSandboxed": True}
         merged, _ = merge(current, FRAG_A, FRAG_B)
@@ -55,7 +55,7 @@ class MergeTest(unittest.TestCase):
             FRAG_B["sandbox"]["filesystem"]["allowRead"],
         )
 
-    def test_retarget_removes_old_entries_and_keeps_adhoc(self):
+    def test_new_fragment_removes_old_entries_and_keeps_adhoc(self):
         current = dict(FRAG_A)
         current["sandbox"] = {
             **FRAG_A["sandbox"],

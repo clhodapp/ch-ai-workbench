@@ -15,9 +15,9 @@
  *                            warns once and leaves sockets as upstream
  *                            left them; "closed" refuses to run (exit 2).
  *
- * The home-manager module runs this inside Claude Code's sandbox as the
- * profile's shell wrapper. It exists to make a profile's unix-socket
- * allowlist real on Linux: upstream's seccomp filter is all-or-nothing,
+ * The home-manager module's socket shell runs this inside Claude Code's
+ * sandbox for every enrollment with a unix-socket allowlist. It exists
+ * to make that allowlist real on Linux: upstream's seccomp filter is all-or-nothing,
  * so the fragment opens it (allowAllUnixSockets) and this layer narrows
  * connect() back to the declared sockets. That is a genuine reach
  * barrier — it bounds which host services sandboxed code can talk to,

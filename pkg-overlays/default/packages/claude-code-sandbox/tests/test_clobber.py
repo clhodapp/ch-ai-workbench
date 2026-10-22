@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Integrity detection: applied content missing from the settings file
-(any cause — hand edit, tooling accident) must be visible to status as
-CLOBBERED (attention) and repaired by a plain sync."""
+(any cause, such as a hand edit or a tooling accident) must be visible to
+status as CLOBBERED (attention) and repaired by a plain sync."""
 
 import json
 import os
@@ -10,19 +10,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from claude_code_sandbox import cli
+from fixtures import WORK, WORK_FRAGMENT, write_registry
 
-FRAGMENT = {
-    "sandbox": {
-        "enabled": True,
-        "failIfUnavailable": True,
-        "filesystem": {
-            "denyRead": ["/nix/store"],
-            "allowRead": ["/nix/store/aaa-hello"],
-        },
-    },
-    "env": {"PATH": "/profile/bin"},
-}
+from claude_code_sandbox import cli
 
 
 class ClobberTest(unittest.TestCase):
@@ -33,26 +23,13 @@ class ClobberTest(unittest.TestCase):
         self.repo = tmp / "projects" / "demo"
         (self.repo / ".git").mkdir(parents=True)
         config = tmp / "config"
-        (config / "profiles").mkdir(parents=True)
-        fragment_path = config / "profiles" / "work.json"
-        fragment_path.write_text(json.dumps(FRAGMENT))
-        (config / "profiles" / "none.json").write_text("{}")
-        (config / "registry.json").write_text(
-            json.dumps(
-                {
-                    "profiles": {
-                        "work": str(fragment_path),
-                        "none": str(config / "profiles" / "none.json"),
-                    },
-                }
-            )
-        )
+        write_registry(config, {"work": WORK})
         patcher = mock.patch.dict(
             os.environ, {"CLAUDE_CODE_SANDBOX_CONFIG": str(config)}
         )
         patcher.start()
         self.addCleanup(patcher.stop)
-        cli.main(["enroll", "--profile", "work", str(self.repo), "--quiet"])
+        cli.main(["enroll", "work", "-C", str(self.repo), "--quiet"])
         self.settings_file = self.repo / ".claude" / "settings.local.json"
 
     def clobber(self):
@@ -62,24 +39,24 @@ class ClobberTest(unittest.TestCase):
         )
 
     def test_status_flags_clobbered_file(self):
-        self.assertEqual(cli.main(["status", str(self.repo)]), 0)
+        self.assertEqual(cli.main(["status", "-C", str(self.repo)]), 0)
         self.clobber()
-        self.assertEqual(cli.main(["status", str(self.repo)]), 2)
+        self.assertEqual(cli.main(["status", "-C", str(self.repo)]), 2)
 
     def test_sync_repairs_and_preserves_foreign_keys(self):
         self.clobber()
-        self.assertEqual(cli.main(["sync", str(self.repo), "--quiet"]), 0)
+        self.assertEqual(cli.main(["sync", "-C", str(self.repo), "--quiet"]), 0)
         settings = json.loads(self.settings_file.read_text())
-        self.assertEqual(settings["sandbox"], FRAGMENT["sandbox"])
+        self.assertEqual(settings["sandbox"], WORK_FRAGMENT["sandbox"])
         self.assertEqual(settings["permissions"], {"allow": ["Bash(date:*)"]})
-        self.assertEqual(cli.main(["status", str(self.repo)]), 0)
+        self.assertEqual(cli.main(["status", "-C", str(self.repo)]), 0)
 
     def test_partial_clobber_detected(self):
         # Writer kept the sandbox key but dropped env.
         content = json.loads(self.settings_file.read_text())
         del content["env"]
         self.settings_file.write_text(json.dumps(content))
-        self.assertEqual(cli.main(["status", str(self.repo)]), 2)
+        self.assertEqual(cli.main(["status", "-C", str(self.repo)]), 2)
 
 
 if __name__ == "__main__":
