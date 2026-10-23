@@ -162,15 +162,25 @@ let
   # The declaration as a store manifest: enabled hooks and the deny
   # rules, so a switched-off or deleted entry is absent from "new" and
   # the register prunes it against the sidecar's "base".
+  #
+  # A hook whose package this module installs is registered through the
+  # home-manager profile's bin directory rather than by bare name. The
+  # path is the same string in every generation, and it does not depend
+  # on PATH: a checkout enrolled in claude-code-sandbox sets the Claude
+  # Code process's PATH to its sandbox farms, which hooks inherit.
   hooksManifest = pkgs.writeText "claude-hooks-manifest.json" (
     builtins.toJSON {
       hooks = map (hook: {
         inherit (hook)
           event
           matcher
-          command
           timeout
           ;
+        command =
+          if hook.package != null && !(lib.hasPrefix "/" hook.command) then
+            "${config.home.profileDirectory}/bin/${hook.command}"
+          else
+            hook.command;
       }) (lib.attrValues enabledHooks);
       permissions.deny = cfg.permissions.deny;
     }
@@ -374,18 +384,22 @@ in
               type = lib.types.str;
               example = "claude-yours-check-hook";
               description = ''
-                Command line registered for the hook, and the key a
-                re-registration replaces. A bare name resolved on PATH
-                (see package) keeps the settings entry stable across
-                generations; a store path would go stale in the file
-                on every rebuild.
+                Command line for the hook. With `package` set, a command
+                that does not start with `/` names an executable of that
+                package and is registered as
+                `<home.profileDirectory>/bin/<command>`: the entry in
+                the settings file stays the same across generations
+                (a store path would change on every rebuild), and the
+                hook runs whatever PATH the Claude Code process has. The
+                registered command is the key a re-registration
+                replaces.
               '';
             };
 
             package = lib.mkOption {
               type = lib.types.nullOr lib.types.package;
               default = null;
-              description = "Package installed into the profile so that command resolves on PATH.";
+              description = "Package installed into the profile; command is registered through the profile's bin directory.";
             };
 
             timeout = lib.mkOption {
