@@ -170,6 +170,7 @@ in
           event = "PostToolUse";
           matcher = "EnterWorktree|ExitWorktree";
           command = "emacs-claude-cwd-hook";
+          package = cwdHook;
         };
         emacs-consent = {
           event = "PreToolUse";
