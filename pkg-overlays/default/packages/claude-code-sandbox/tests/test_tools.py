@@ -296,6 +296,7 @@ class ToolsTest(unittest.TestCase):
         value, error = self.call(self.server(), "request-module", module="github", reason="open a PR")
         self.assertFalse(error, value)
         self.assertIn("enabled github", value)
+        self.assertIn("/stop", value)
         self.assertEqual(self.sidecar()["modules"], ["github", "work"])
         settings = json.loads((self.repo / ".claude" / "settings.local.json").read_text())
         self.assertIn("/nix/store/gh-farm/bin", settings["env"]["PATH"])
