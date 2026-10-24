@@ -94,7 +94,8 @@ this isolates one test's revisions from every other test's."
     (dolist (id '("eval-elisp" "context" "list-buffers" "buffer-text"
                   "diagnostics" "find-references" "find-definition"
                   "symbol-info" "document-outline" "modified-buffers"
-                  "buffer-diff" "present" "sidebar" "edit-buffer" "edit-file"
+                  "buffer-diff" "present" "sidebar" "review-pull-request"
+                  "edit-buffer" "edit-file"
                   "transform" "buffer-file" "land-buffer-file"
                   "add-comment" "list-comments"
                   "feature-loaded" "hooks" "buffer-state" "key-binding"))
@@ -208,6 +209,36 @@ buffer in their project — the agent-worktree case."
     (let ((outline (ch-mcp-server--document-outline file)))
       (should (string-match-p "ch-mcp-tests-outline-one" outline))
       (should (string-match-p "^1: " outline)))))
+
+(defvar gh-review-cache-directory)
+(defvar gh-review-claude--inbox)
+
+(ert-deftest ch-mcp-tools-review-pull-request ()
+  "The tool fills the review inbox through gh-review-claude, and refuses
+anything but a pull request link."
+  ;; Loaded before the binding below, so the variable it binds is the
+  ;; package's special one.
+  (require 'gh-review-claude)
+  (let* ((root (make-temp-file "mcp-review" t))
+         (gh-review-cache-directory (file-name-as-directory root))
+         (fetched nil))
+    (unwind-protect
+        (progn
+          (setq gh-review-claude--inbox 'unread)
+          (cl-letf (((symbol-function 'gh-review-load)
+                     (lambda (pr &optional _callback) (push (gh-review-pr-key pr) fetched))))
+            (should (string-match-p
+                     "Put o/r#3 in the user's review inbox"
+                     (ch-mcp-server--review-pull-request
+                      "https://github.com/o/r/pull/3" "look at the parser")))
+            (should (equal fetched '("o/r#3")))
+            (with-current-buffer "*gh-review inbox*"
+              (should (string-search "look at the parser" (buffer-string))))
+            (should-error (ch-mcp-server--review-pull-request
+                           "https://github.com/o/r/issues/3" nil))))
+      (setq gh-review-claude--inbox 'unread)
+      (when (get-buffer "*gh-review inbox*") (kill-buffer "*gh-review inbox*"))
+      (delete-directory root t))))
 
 (ert-deftest ch-mcp-tools-present ()
   (ch-mcp-server--present "ert-present" "# Title\n\nbody" nil "no")

@@ -428,8 +428,9 @@ waits for it."
     (apply #'gh-review-claude--turn pr (car next) (cdr next))))
 
 (defun gh-review-claude--refresh-views (pr)
-  "Redraw PR's diff and conversation so they show Claude's state."
-  (gh-review-redisplay pr))
+  "Redraw PR's diff, conversation and inbox row so they show Claude's state."
+  (gh-review-redisplay pr)
+  (gh-review-claude--inbox-redraw))
 
 ;;; Prompts
 
@@ -1247,6 +1248,174 @@ taken back."
          "claude\\.ai/\\(?:code\\|chat\\)\\|session_[0-9A-Za-z]\\{8,\\}\\|Generated with \\[Claude Code\\]"
          text)
     (user-error "This text links a Claude conversation; remove the link before posting")))
+
+;;; The review inbox
+
+;; Pull requests an agent puts in front of the user, through the emacs
+;; MCP server's review-pull-request tool.  Surfacing one never takes
+;; the user's focus: it adds a row to the inbox, shows the inbox in a
+;; window of its own, and fetches the pull request in the background,
+;; so that Claude's review (with `gh-review-claude-auto-review') is
+;; under way by the time the user opens it.
+
+(defun gh-review-claude--inbox-file ()
+  "File keeping the review inbox."
+  (expand-file-name "claude/inbox.eld" gh-review-cache-directory))
+
+(defvar gh-review-claude--inbox 'unread
+  "The inbox entries, newest first, or `unread' before the file is read.
+Each entry is a plist with :key (OWNER/REPO#N), :reference (OWNER
+REPO N), :url, :note and :time.")
+
+(defun gh-review-claude--inbox-entries ()
+  "The inbox entries, read from disk on first use."
+  (when (eq gh-review-claude--inbox 'unread)
+    (let ((file (gh-review-claude--inbox-file)))
+      (setq gh-review-claude--inbox
+            (and (file-readable-p file)
+                 (ignore-errors
+                   (with-temp-buffer
+                     (insert-file-contents file)
+                     (read (current-buffer))))))))
+  gh-review-claude--inbox)
+
+(defun gh-review-claude--inbox-save ()
+  "Write the inbox entries to disk."
+  (let ((file (gh-review-claude--inbox-file)))
+    (make-directory (file-name-directory file) t)
+    (with-temp-file file
+      (let ((print-length nil) (print-level nil))
+        (prin1 (gh-review-claude--inbox-entries) (current-buffer))))))
+
+(defun gh-review-claude--inbox-entry-pr (entry)
+  "The pull request record of inbox ENTRY."
+  (apply #'gh-review-pr-for (plist-get entry :reference)))
+
+(defun gh-review-claude-surface (url &optional note)
+  "Put the pull request at URL in front of the user for review.
+NOTE, when given, says what the user should look at.  The pull
+request joins the review inbox, the inbox is shown without taking
+focus, and the pull request is fetched so its review starts.
+Return a sentence saying what happened."
+  (let ((reference (or (gh-review-parse-reference url)
+                       (user-error "Not a pull request link: %s" url))))
+    (let* ((key (apply #'format "%s/%s#%d" reference))
+           (note (and note (not (string-blank-p note))
+                      (truncate-string-to-width (string-trim note) 300 nil nil "…")))
+           (entry (list :key key :reference reference
+                        :url (format "https://%s/%s/%s/pull/%d" gh-review-host
+                                     (nth 0 reference) (nth 1 reference)
+                                     (nth 2 reference))
+                        :note note
+                        :time (format-time-string "%Y-%m-%d %H:%M")))
+           (pr (gh-review-claude--inbox-entry-pr entry)))
+      (setq gh-review-claude--inbox
+            (cons entry (seq-remove (lambda (e) (equal (plist-get e :key) key))
+                                    (gh-review-claude--inbox-entries))))
+      (gh-review-claude--inbox-save)
+      (when (memq (gh-review-pr-status pr) '(new error))
+        (gh-review-load pr (lambda (_) (gh-review-claude--inbox-redraw))))
+      (display-buffer (gh-review-claude-inbox-buffer))
+      (message "%s is ready for review (RET on it in %s)" key
+               (buffer-name (gh-review-claude-inbox-buffer)))
+      (format "Put %s in the user's review inbox%s" key
+              (if gh-review-claude-auto-review
+                  "; Claude's review of it starts once it is fetched"
+                "")))))
+
+(defun gh-review-claude--inbox-status (entry)
+  "What the inbox shows of ENTRY's review."
+  (let* ((pr (gh-review-claude--inbox-entry-pr entry))
+         (state (gh-review-claude-state pr))
+         (verdict (gh-review-claude-state-verdict state)))
+    (cond ((eq (gh-review-pr-status pr) 'loading) "fetching")
+          ((eq (gh-review-pr-status pr) 'error) "fetch failed")
+          ((gh-review-claude-state-busy state) "Claude reviewing")
+          (verdict (propertize (gh-review-claude--verdict-label verdict)
+                               'face (pcase (plist-get verdict :verdict)
+                                       ((or 'safe 'safe-with-follow-ups) 'success)
+                                       ('needs-work 'error)
+                                       (_ 'warning))))
+          (t ""))))
+
+(defun gh-review-claude--inbox-rows ()
+  "The inbox as `tabulated-list-entries'."
+  (mapcar (lambda (entry)
+            (let ((pr (gh-review-claude--inbox-entry-pr entry)))
+              (list (plist-get entry :key)
+                    (vector (plist-get entry :key)
+                            (or (gh-review-pr-title pr) "")
+                            (gh-review-claude--inbox-status entry)
+                            (or (plist-get entry :note) "")
+                            (plist-get entry :time)))))
+          (gh-review-claude--inbox-entries)))
+
+(defvar-keymap gh-review-claude-inbox-mode-map
+  :doc "Keymap of `gh-review-claude-inbox-mode'."
+  :parent tabulated-list-mode-map
+  "RET" #'gh-review-claude-inbox-open
+  "d" #'gh-review-claude-inbox-remove)
+
+(define-derived-mode gh-review-claude-inbox-mode tabulated-list-mode "PR Inbox"
+  "Major mode of the list of pull requests agents put up for review.
+
+\\{gh-review-claude-inbox-mode-map}"
+  :interactive nil
+  (setq tabulated-list-format
+        [("Pull request" 28 t) ("Title" 40 t) ("Review" 22 t)
+         ("Note" 40 nil) ("Added" 16 t)])
+  (setq tabulated-list-sort-key nil)
+  (add-hook 'tabulated-list-revert-hook #'gh-review-claude--inbox-fill nil t)
+  (tabulated-list-init-header))
+
+(defun gh-review-claude--inbox-fill ()
+  "Fill the inbox buffer's rows."
+  (setq tabulated-list-entries (gh-review-claude--inbox-rows)))
+
+(defun gh-review-claude-inbox-buffer ()
+  "The review inbox buffer, filled."
+  (with-current-buffer (get-buffer-create "*gh-review inbox*")
+    (unless (derived-mode-p 'gh-review-claude-inbox-mode)
+      (gh-review-claude-inbox-mode))
+    (gh-review-claude--inbox-fill)
+    (tabulated-list-print t)
+    (current-buffer)))
+
+(defun gh-review-claude--inbox-redraw ()
+  "Redraw the inbox buffer when it exists."
+  (when-let* ((buffer (get-buffer "*gh-review inbox*")))
+    (with-current-buffer buffer
+      (gh-review-claude--inbox-fill)
+      (tabulated-list-print t))))
+
+;;;###autoload
+(defun gh-review-claude-inbox ()
+  "Show the pull requests agents put up for review."
+  (interactive)
+  (pop-to-buffer (gh-review-claude-inbox-buffer)))
+
+(defun gh-review-claude--inbox-entry-at-point ()
+  "The inbox entry of the row at point, or a user error."
+  (let ((key (tabulated-list-get-id)))
+    (or (seq-find (lambda (e) (equal (plist-get e :key) key))
+                  (gh-review-claude--inbox-entries))
+        (user-error "No pull request on this line"))))
+
+(defun gh-review-claude-inbox-open ()
+  "Open the review of the pull request at point."
+  (interactive)
+  (apply #'gh-review-open (plist-get (gh-review-claude--inbox-entry-at-point)
+                                     :reference)))
+
+(defun gh-review-claude-inbox-remove ()
+  "Take the pull request at point out of the inbox."
+  (interactive)
+  (let ((key (plist-get (gh-review-claude--inbox-entry-at-point) :key)))
+    (setq gh-review-claude--inbox
+          (seq-remove (lambda (e) (equal (plist-get e :key) key))
+                      (gh-review-claude--inbox-entries)))
+    (gh-review-claude--inbox-save)
+    (gh-review-claude--inbox-redraw)))
 
 ;;; Wiring
 

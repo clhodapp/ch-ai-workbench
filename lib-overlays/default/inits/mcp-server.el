@@ -1545,6 +1545,30 @@ MCP Parameters:
           (display-buffer buffer)
           (format "Presented %s" (buffer-name buffer)))))))
 
+;;; Pull requests
+
+(declare-function gh-review-claude-surface "gh-review-claude")
+
+(defun ch-mcp-server--review-pull-request (url &optional note)
+  "Put the GitHub pull request at URL in the user's review inbox.
+
+The inbox (*gh-review inbox*) is shown without taking focus, and the
+pull request is fetched in the background; when gh-review-claude
+reviews pull requests on opening, that review starts once the fetch
+is done.  The user opens the full review from the inbox.  An entry
+for the same pull request is replaced, so a second call updates the
+note.
+
+MCP Parameters:
+  url - the pull request's link, https://github.com/OWNER/REPO/pull/N
+  note - optional text shown beside the pull request in the inbox"
+  (mcp-server-lib-with-error-handling
+    (unless (require 'gh-review-claude nil t)
+      (mcp-server-lib-tool-throw "gh-review-claude is not available in this Emacs"))
+    (condition-case err
+        (gh-review-claude-surface url (ch-mcp-server--opt note))
+      (user-error (mcp-server-lib-tool-throw (error-message-string err))))))
+
 ;;; Sidebars
 
 (defcustom ch-mcp-server-sidebar-width 0.2
@@ -2733,6 +2757,7 @@ error, so no text reaches the agent without passing through it."
     ch-mcp-server--buffer-state
     ch-mcp-server--key-binding
     ch-mcp-server--present
+    ch-mcp-server--review-pull-request
     ch-mcp-server--sidebar
     ch-mcp-server--edit-buffer
     ch-mcp-server--edit-file
@@ -2878,6 +2903,10 @@ the others."
           :id "present"
           :description
           "Present content to the user in an *agent/...* Emacs buffer (markdown, diff, clickable locations, or a rendered mermaid diagram)")
+    (list #'ch-mcp-server--review-pull-request
+          :id "review-pull-request"
+          :description
+          "Add a GitHub pull request (by link, with an optional note) to the user's review inbox in Emacs: the inbox is shown without taking focus and the pull request is fetched, which starts Claude's review of it when that is enabled")
     (list #'ch-mcp-server--sidebar
           :id "sidebar"
           :description

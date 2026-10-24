@@ -391,4 +391,46 @@ event, the canned answer and a result."
           (should (string-search "src/a.el, line 15, the head" context))
           (should (string-search "+new 15" context)))))))
 
+;;; The review inbox
+
+(ert-deftest gh-review-claude-inbox-surface ()
+  (gh-review-claude-test--with-scratch
+    (let ((gh-review-claude--inbox 'unread)
+          (fetched nil)
+          (opened nil))
+      (cl-letf (((symbol-function 'gh-review-load)
+                 ;; Like the real load, the record leaves `new' at once.
+                 (lambda (pr &optional _callback)
+                   (setf (gh-review-pr-status pr) 'loading)
+                   (push (gh-review-pr-key pr) fetched)))
+                ((symbol-function 'display-buffer) #'ignore)
+                ((symbol-function 'gh-review-open)
+                 (lambda (&rest reference) (setq opened reference))))
+        (gh-review-claude-surface "https://github.com/a/b/pull/1" "first note")
+        (gh-review-claude-surface "https://github.com/a/b/pull/2" nil)
+        ;; Surfacing the same pull request again replaces its entry.
+        (gh-review-claude-surface "https://github.com/a/b/pull/1/files" "second note")
+        (let ((entries (gh-review-claude--inbox-entries)))
+          (should (equal (mapcar (lambda (e) (plist-get e :key)) entries)
+                         '("a/b#1" "a/b#2")))
+          (should (equal (plist-get (car entries) :note) "second note"))
+          (should (equal (plist-get (car entries) :url) "https://github.com/a/b/pull/1")))
+        ;; Each pull request is fetched once; a loaded one is not fetched again.
+        (should (equal (sort fetched #'string<) '("a/b#1" "a/b#2")))
+        ;; The inbox survives on disk.
+        (setq gh-review-claude--inbox 'unread)
+        (should (= (length (gh-review-claude--inbox-entries)) 2))
+        (with-current-buffer (gh-review-claude-inbox-buffer)
+          (should (string-search "second note" (buffer-string)))
+          (goto-char (point-min))
+          (search-forward "a/b#2")
+          (gh-review-claude-inbox-open)
+          (should (equal opened '("a" "b" 2)))
+          (gh-review-claude-inbox-remove)
+          (should (equal (mapcar (lambda (e) (plist-get e :key))
+                                 (gh-review-claude--inbox-entries))
+                         '("a/b#1"))))
+        (should-error (gh-review-claude-surface "not a link") :type 'user-error))
+      (kill-buffer "*gh-review inbox*"))))
+
 ;;; gh-review-claude-ert.el ends here

@@ -1,6 +1,6 @@
 ---
 name: emacs-tools
-description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, edit-buffer/edit-file, transform, add-comment/list-comments, the session-fact tools feature-loaded/hooks/buffer-state/key-binding, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers — especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
+description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, review-pull-request, edit-buffer/edit-file, transform, add-comment/list-comments, the session-fact tools feature-loaded/hooks/buffer-state/key-binding, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers — especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
 ---
 
 # Emacs agent tools
@@ -108,6 +108,18 @@ artifacts the user keeps. Write paragraphs as single long lines; the
 window soft-wraps. Buffers are `*agent/sidebar/<name>*`; reusing a
 name rewrites the sidebar. A sidebar the user dismisses with `q` is
 gone from the session but stays in the history store below.
+
+## review-pull-request: the review inbox
+
+`review-pull-request (url, note)` adds a GitHub pull request to the
+user's review inbox (`*gh-review inbox*`), a list the user opens full
+reviews from. The inbox is displayed without taking focus. The pull
+request is fetched in the background, and when gh-review-claude reviews
+pull requests on opening, Claude's review of it starts once the fetch
+is done; the inbox row shows that review's verdict. `note` is shown
+beside the pull request; a second call for the same pull request
+replaces its entry. The URL must be a pull request link
+(`https://github.com/OWNER/REPO/pull/N`); anything else is an error.
 
 ## History: presentations survive the buffer
 
