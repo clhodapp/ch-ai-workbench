@@ -171,8 +171,10 @@ enrolling is the user's act. Otherwise it prompts the user and waits:
    answer ID`; the next `request-module` call for that module in the
    same session applies the answer.
 
-On "enable" the server runs the equivalent of `add`, and the running
-session picks up the rules when Claude Code reloads the settings file.
+On "enable" the server runs the equivalent of `add`. The running
+session keeps its old sandbox rules until the user stops it with
+`/stop` and starts it again, so the tool result tells the agent to
+relay that restart to the user.
 On "decline" the refusal goes into the sidecar under `declined`, with
 the time and the reason; the sidecar is write-guarded, so an agent
 cannot erase it. "Not now", a dismissed dialog, and a prompt left

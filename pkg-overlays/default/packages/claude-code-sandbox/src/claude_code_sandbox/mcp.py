@@ -111,8 +111,10 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Ask the user to enable a sandbox module in this session's checkout. The user is "
             "prompted with what the module allows and your reason, and the call waits for the "
-            "answer. On approval the module is enabled and Claude Code reloads the sandbox "
-            "settings for this session. A refusal is recorded and later requests for the module "
+            "answer. On approval the module is enabled in the checkout's settings, but this "
+            "session keeps its old sandbox rules: the user must stop the session with /stop and "
+            "start it again before the module's grants apply. A refusal is recorded and later "
+            "requests for the module "
             "report it without asking. Request only what the task needs, one module per call; "
             "check describe-module first."
         ),
@@ -351,8 +353,10 @@ class Server:
             enabled = checkout_state(root, registry)["enabled"]
             return (
                 f"The user enabled {name} in {root}. Enabled modules: {', '.join(sorted(enabled))}. "
-                "Claude Code reloads the settings file, so this session's sandboxed commands get "
-                "the new rules."
+                "This session's sandboxed commands still run under the old rules. The new rules "
+                "apply only after the user stops this session with /stop and starts it again. "
+                "Tell the user that, and do not retry the commands that need the module until "
+                "the session has restarted."
             )
         if decision == "decline":
             decline_modules(root, [name], text or None)
