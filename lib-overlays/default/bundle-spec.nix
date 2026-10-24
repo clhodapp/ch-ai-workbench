@@ -91,6 +91,14 @@ in
       packages = _epkgs: local: [ local.claude-queue ];
     };
 
+    # Claude's review of a pull request in the editor's gh-review:
+    # needs the editor's gh-review bundle and claude-queue above.
+    gh-review-claude = {
+      enable = true;
+      init = readInit "gh-review-claude.el";
+      packages = _epkgs: local: [ local.gh-review-claude ];
+    };
+
     # Needs collab-comments from the `emacs` group for its comment-thread
     # tools. Carries parenting itself: the sandboxed child Emacs is
     # spawned from this init, so a configuration with only this group

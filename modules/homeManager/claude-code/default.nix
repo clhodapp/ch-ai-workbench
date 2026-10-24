@@ -251,6 +251,14 @@ let
   # (script: claude-push-pr-check-hook.sh).
   claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
 
+  # PostToolUse hook on Bash: a command that creates a pull request
+  # (gh pr create, gh-stack) has each pull request link in its output
+  # recorded with the session that ran it, in
+  # $XDG_STATE_HOME/claude-pr-origins/origins.jsonl, so a review can
+  # find the conversation the pull request came from
+  # (script: claude-pr-origin-hook.sh).
+  claudePrOriginHook = workbench.mkClaudePrOriginHook { inherit pkgs; };
+
   enabledHooks = lib.filterAttrs (_name: hook: hook.enable) cfg.hooks;
 
   # The prompt API behind the consent spool (`pkgs.ch-ai-workbench.claude-consent`,
@@ -571,7 +579,10 @@ in
         also seeds push-pr-check, the PreToolUse hook on Bash that
         denies a command that appears to run git push once with a reminder to
         confirm the branch's pull request is not already merged, and
-        lets the identical re-issue through.
+        lets the identical re-issue through, and pr-origin, the
+        PostToolUse hook on Bash that records which session created a
+        pull request (gh pr create, gh-stack) in
+        $XDG_STATE_HOME/claude-pr-origins/origins.jsonl.
       '';
     };
 
@@ -1445,6 +1456,12 @@ in
         matcher = "Bash";
         command = "claude-push-pr-check-hook";
         package = claudePushPrCheckHook;
+      };
+      pr-origin = {
+        event = "PostToolUse";
+        matcher = "Bash";
+        command = "claude-pr-origin-hook";
+        package = claudePrOriginHook;
       };
     };
 

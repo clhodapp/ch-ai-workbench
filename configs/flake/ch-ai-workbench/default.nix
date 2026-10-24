@@ -114,6 +114,8 @@
             aiCommitSrc = workbench.emacsPackageSources.ai-commit;
             claudeQueueSrc = workbench.emacsPackageSources.claude-queue;
             semanticFinderSrc = workbench.emacsPackageSources.semantic-finder;
+            ghReviewClaudeSrc = workbench.emacsPackageSources.gh-review-claude;
+            ghReviewSrc = closure-lib.ch-emacs-config.packageSources.gh-review;
             # The ERT suites that exercise the full init rather than one
             # package: the MCP tools and the collab-comments integration.
             testsSrc = "${self}/tests/emacs";
@@ -304,6 +306,7 @@
             # The hook packages from this layer's library, so the checks
             # below drive the same scripts a real configuration installs.
             claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
+            claudePrOriginHook = workbench.mkClaudePrOriginHook { inherit pkgs; };
             claudeRedactHook = workbench.mkClaudeRedactHook { inherit pkgs; };
             claudeRevealHook = workbench.mkClaudeRevealHook {
               inherit pkgs;
@@ -1095,6 +1098,23 @@
                 touch $out
               '';
 
+              # gh-review-claude against a fake claude CLI: the verdict
+              # parser, the response policy, the origin lookup over hook
+              # records and transcripts, drafted reviews, the publishing
+              # guard, and whole review turns (a fresh session, then a
+              # question resuming it).
+              gh-review-claude-ert = pkgs.runCommand "gh-review-claude-ert" { } ''
+                export HOME="$TMPDIR"
+                ${emacs}/bin/emacs --batch \
+                  -L ${ghReviewClaudeSrc} \
+                  -L ${ghReviewSrc} \
+                  -L ${claudeQueueSrc} \
+                  -L ${semanticFinderSrc} \
+                  -l ${ghReviewClaudeSrc}/tests/gh-review-claude-ert.el \
+                  -f ert-run-tests-batch-and-exit
+                touch $out
+              '';
+
               claude-consent-ert = pkgs.runCommand "claude-consent-ert" { } ''
                 export HOME="$TMPDIR"
                 ${emacs}/bin/emacs --batch \
@@ -1431,6 +1451,48 @@
                     [ -z "$(run "git commit -m 'docs: rewrite the passages a phrasing review of the docs flagged'")" ]
 
                     kill %1
+                    touch $out
+                  '';
+
+              # The pull-request origin hook: gh pr create and gh-stack
+              # (bare and through nix shell) record each link of their
+              # output with the session, cwd and transcript, one line
+              # per link; gh pr list and gh pr view, a create without a
+              # link in its output, a payload without a session, and
+              # non-JSON stdin write nothing; the hook prints nothing
+              # in every case.
+              claude-pr-origin-hook =
+                pkgs.runCommand "claude-pr-origin-hook"
+                  {
+                    nativeBuildInputs = [ pkgs.jq ];
+                  }
+                  ''
+                    hook=${lib.getExe claudePrOriginHook}
+                    export XDG_STATE_HOME="$TMPDIR/state"
+                    log="$XDG_STATE_HOME/claude-pr-origins/origins.jsonl"
+                    call() {
+                      jq -cn --arg c "$1" --arg out "$2" \
+                        '{session_id: "sess-1", cwd: "/work/repo", transcript_path: "/t/sess-1.jsonl",
+                          tool_name: "Bash", tool_input: {command: $c},
+                          tool_response: {stdout: $out, stderr: ""}}' | "$hook"
+                    }
+                    count() { if [ -e "$log" ]; then wc -l <"$log"; else echo 0; fi; }
+                    [ -z "$(call 'gh pr create --fill' 'https://github.com/o/r/pull/12')" ]
+                    [ "$(count)" -eq 1 ]
+                    jq -e 'select(.url == "https://github.com/o/r/pull/12" and .session_id == "sess-1"
+                                  and .cwd == "/work/repo" and .transcript_path == "/t/sess-1.jsonl")' "$log" >/dev/null
+                    call "nix shell 'nixpkgs#gh-stack' -c gh-stack submit" \
+                      "Created https://github.com/o/r/pull/13 and https://github.com/o/r/pull/14"
+                    [ "$(count)" -eq 3 ]
+                    call 'gh pr list' 'https://github.com/o/r/pull/15'
+                    call 'gh pr view 16' 'https://github.com/o/r/pull/16'
+                    call 'gh pr create --fill' 'no link printed'
+                    [ "$(count)" -eq 3 ]
+                    jq -cn '{tool_name: "Bash", tool_input: {command: "gh pr create"},
+                             tool_response: {stdout: "https://github.com/o/r/pull/17"}}' | "$hook"
+                    [ "$(count)" -eq 3 ]
+                    [ -z "$(echo 'not json' | "$hook")" ]
+                    [ "$(count)" -eq 3 ]
                     touch $out
                   '';
 

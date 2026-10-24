@@ -48,12 +48,14 @@
       emacsPackageSources = {
         ai-commit = ./emacs-packages/ai-commit;
         claude-queue = ./emacs-packages/claude-queue;
+        gh-review-claude = ./emacs-packages/gh-review-claude;
         semantic-finder = ./emacs-packages/semantic-finder;
       };
 
       # The Claude Code hooks a real configuration installs and the
       # checks drive with synthetic payloads: each takes `pkgs` (and
       # what its script calls) and returns the hook as a package.
+      mkClaudePrOriginHook = import ./hooks/claude-pr-origin-hook.nix;
       mkClaudePushPrCheckHook = import ./hooks/claude-push-pr-check-hook.nix;
       mkClaudeRedactHook = import ./hooks/claude-redact-hook.nix;
       mkClaudeRevealHook = import ./hooks/claude-reveal-hook.nix;
