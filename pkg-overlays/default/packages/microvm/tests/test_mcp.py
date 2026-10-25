@@ -3,7 +3,10 @@
 guest MCP servers on socket pairs: the tools before any guest, a kind
 agents may not use, a guest without MCP, the tools of a guest after
 `microvm_up`, forwarding, names that collide, stopping, a dropped
-connection, and the stop of the session's slots at exit."""
+connection, and the stop of the session's slots at exit. Every test
+runs twice: once with the guests on socket pairs in place of
+`AF_VSOCK`, and once with the guests behind fake VMMs on the hybrid
+vsock sockets of their slots."""
 
 from __future__ import annotations
 
@@ -14,8 +17,9 @@ import threading
 import unittest
 from typing import Any
 
-from fixture import Fixture
+from fixture import FakeVmm, Fixture
 from microvm_slots.mcp import MANAGER_TOOLS, Server
+from microvm_slots.transport import Endpoint
 
 WAIT = 10.0
 
@@ -93,16 +97,27 @@ class FakeGuest:
 
 
 class ServerCase(Fixture):
+    """The server, connecting to the guests through `AF_VSOCK`, which
+    the fake `connect` stands in for."""
+
+    hybrid = False
+
     def setUp(self) -> None:
         super().setUp()
         self.claude = self.process(1000)
-        self.slots_, _ = self.slots(agents_only=True)
         self.guest_tools = {101: ["open_binary", "slow"], 102: ["open_binary"], 401: ["open_binary", "list_functions"]}
         self.guests: dict[int, FakeGuest] = {}
         self.connects: list[tuple[int, int]] = []
+        self.vmms: dict[str, FakeVmm] = {}
+        if self.hybrid:
+            self.serve_hybrid()
+        self.slots_, _ = self.slots(agents_only=True)
         self.sent: queue.Queue[dict[str, Any]] = queue.Queue()
         self.notes: list[dict[str, Any]] = []
-        self.server = Server(self.slots_, self.claude, self.sent.put, connect=self.connect)
+        if self.hybrid:
+            self.server = Server(self.slots_, self.claude, self.sent.put)
+        else:
+            self.server = Server(self.slots_, self.claude, self.sent.put, connect=self.connect)
         self.thread = threading.Thread(target=self.server.run, daemon=True)
         self.thread.start()
         self.addCleanup(self.finish)
@@ -116,12 +131,30 @@ class ServerCase(Fixture):
         for guest in self.guests.values():
             guest.release.set()
             guest.close()
+        for vmm in self.vmms.values():
+            vmm.close()
 
-    def connect(self, cid: int, port: int) -> socket.socket:
-        self.connects.append((cid, port))
+    def connect(self, endpoint: Endpoint) -> socket.socket:
+        self.assertIsNone(endpoint.vsock_socket)
         server_end, guest_end = socket.socketpair()
-        self.guests[cid] = FakeGuest(guest_end, self.guest_tools[cid])
+        self.accept(endpoint.cid, guest_end, endpoint.port)
         return server_end
+
+    def accept(self, cid: int, guest_end: socket.socket, port: int) -> None:
+        self.connects.append((cid, port))
+        self.guests[cid] = FakeGuest(guest_end, self.guest_tools[cid])
+
+    def serve_hybrid(self) -> None:
+        """Give every slot of a kind that serves MCP a vsock socket, with
+        a fake VMM on it that hands each accepted connection to a fake
+        guest."""
+        for kind in ("probe", "other"):
+            for slot in self.config["kinds"][kind]["slots"]:
+                path = self.root / f"{slot['name']}.vsock"
+                slot["vsockSocket"] = str(path)
+                self.vmms[slot["name"]] = FakeVmm(
+                    path, accepted=lambda conn, port, cid=slot["cid"]: self.accept(cid, conn, port)
+                )
 
     def send(self, method: str, params: dict[str, Any] | None = None) -> int:
         self.next_id += 1
@@ -268,13 +301,19 @@ class ServerCase(Fixture):
         self.assertEqual(self.connects, [(101, 5000), (101, 5000)])
 
     def test_a_guest_that_refuses_the_connection(self) -> None:
-        def refuse(cid: int, port: int) -> socket.socket:
+        def refuse(endpoint: Endpoint) -> socket.socket:
             raise ConnectionRefusedError("refused")
 
-        self.server.connect = refuse
+        if self.hybrid:
+            self.vmms["probe-1"].answer = lambda port: b"FAILED\n"
+        else:
+            self.server.connect = refuse
         result = self.call("microvm_up", {"kind": "probe"})
         self.assertTrue(result["isError"])
-        self.assertIn("refused the connection", self.text(result))
+        self.assertIn("the MCP server of probe-1 at ", self.text(result))
+        self.assertIn(" is not reachable: ", self.text(result))
+        if self.hybrid:
+            self.assertIn("probe-1 refused CONNECT 5000", self.text(result))
         self.assertEqual(self.tool_names(), list(MANAGER_TOOLS))
 
     def test_the_end_of_input_stops_the_slots_of_the_session(self) -> None:
@@ -288,6 +327,14 @@ class ServerCase(Fixture):
         self.assertTrue(all("--no-block" in call for call in self.calls() if "stop" in call))
         self.assertIsNone(self.lease("probe-1"))
         self.assertIsNone(self.lease("quiet-1"))
+
+
+class HybridServerCase(ServerCase):
+    """Every test of `ServerCase`, with the server connecting to the
+    guests through the hybrid vsock sockets of their slots, each served
+    by a fake VMM."""
+
+    hybrid = True
 
 
 if __name__ == "__main__":

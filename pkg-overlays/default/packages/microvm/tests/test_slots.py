@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 """The leases and the command line against a fake systemctl, a fake
 /proc and a fake vsock probe: claiming a free slot, using a held slot
-again, refusing to stop a slot another live session holds, reaping the
+again, waiting for a guest through its hybrid vsock socket, the end of
+the wait at a permission error, refusing to stop a slot another live session holds, reaping the
 slots of holders that are gone, the holding process of each verb, the
 kinds agents may use, and the refusal of every argument that is not a
 verb or a configured name."""
@@ -13,9 +14,10 @@ import io
 import json
 import unittest
 
-from fixture import Fixture, stat_line  # noqa: F401
-from microvm_slots import cli
+from fixture import FakeVmm, Fixture, stat_line  # noqa: F401
+from microvm_slots import cli, transport
 from microvm_slots.slots import Caller, Refused, start_time
+from microvm_slots.transport import Endpoint
 
 
 class SlotsCase(Fixture):
@@ -34,6 +36,7 @@ class SlotsCase(Fixture):
                 "kind": "probe",
                 "index": 2,
                 "cid": 102,
+                "vsockSocket": None,
                 "vsockPort": 5000,
                 "shares": [
                     {"name": "in", "source": "/var/lib/probe/probe-2/in", "readOnly": True},
@@ -150,6 +153,41 @@ class SlotsCase(Fixture):
         with self.assertRaisesRegex(Refused, "did not answer within 10 seconds"):
             slots.up("probe", self.process(1000))
         self.assertIsNotNone(self.lease("probe-1"))
+
+    def test_a_slot_with_a_vsock_socket_is_reached_through_it(self) -> None:
+        self.config["kinds"]["probe"]["slots"][1]["vsockSocket"] = "/run/probe-2.vsock"
+        slots, _ = self.slots()
+        self.assertEqual(slots.endpoint("probe-1"), Endpoint("probe-1", 101, 5000, None))
+        self.assertEqual(slots.endpoint("probe-2"), Endpoint("probe-2", 102, 5000, "/run/probe-2.vsock"))
+        self.assertIsNone(slots.endpoint("quiet-1"))
+
+    def test_up_waits_for_the_guest_through_its_vsock_socket(self) -> None:
+        path = self.root / "probe-1.vsock"
+        self.config["kinds"]["probe"]["slots"][0]["vsockSocket"] = str(path)
+        # The VMM refuses CONNECT twice, as it does while the guest boots.
+        answers = [None, b"FAILED\n", b"OK 1073741824\n"]
+        vmm = FakeVmm(path, answer=lambda port: answers.pop(0))
+        self.addCleanup(vmm.close)
+        slots, _ = self.slots()
+        slots.probe = transport.probe
+        self.assertEqual(slots.up("probe", self.process(1000)), "probe-1")
+        self.assertEqual(vmm.requests, [b"CONNECT 5000\n"] * 3)
+
+    def test_a_permission_error_ends_the_wait_at_once(self) -> None:
+        def denied(endpoint: Endpoint, timeout: float) -> None:
+            raise PermissionError(f"permission denied on the vsock socket /s of {endpoint.slot}")
+
+        slots, out = self.slots()
+        slots.probe = denied
+        started = self.now
+        with self.assertRaisesRegex(
+            Refused, "^probe-1 was started but permission denied on the vsock socket /s of probe-1; it stays leased"
+        ):
+            slots.up("probe", self.process(1000))
+        self.assertEqual(self.now, started)
+        self.assertIsNotNone(self.lease("probe-1"))
+        slots.status(self.process(1000), everything=False)
+        self.assertIn("probe-1  kind probe  active  not answering: permission denied", out.getvalue())
 
     def test_status_shows_the_slots_and_their_holders(self) -> None:
         slots, out = self.slots()

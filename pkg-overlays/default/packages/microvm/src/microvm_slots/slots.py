@@ -25,7 +25,6 @@ import fcntl
 import io
 import json
 import os
-import socket
 import subprocess
 import sys
 import tempfile
@@ -34,6 +33,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
+
+from . import transport
+from .transport import Endpoint
 
 
 class Refused(Exception):
@@ -49,17 +51,6 @@ class Caller:
     session: str | None
     pid: int | None
     start: str | None
-
-
-def vsock_probe(cid: int, port: int, timeout: float) -> bool:
-    """Whether a guest accepts a connection on its vsock port."""
-    try:
-        with socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM) as sock:
-            sock.settimeout(timeout)
-            sock.connect((cid, port))
-        return True
-    except OSError:
-        return False
 
 
 def start_time(proc_root: Path, pid: int) -> str | None:
@@ -94,8 +85,8 @@ def format_duration(seconds: float) -> str:
 
 def slots_of(kinds: dict[str, dict]) -> dict[str, dict]:
     """Every slot of the configured kinds, by name, with its kind, its
-    position in the kind, its CID, the vsock port of its kind and its
-    share directories."""
+    position in the kind, its CID, its hybrid vsock socket or None, the
+    vsock port of its kind and its share directories."""
     slots: dict[str, dict] = {}
     for kind, info in kinds.items():
         root = info.get("shareRoot")
@@ -111,6 +102,7 @@ def slots_of(kinds: dict[str, dict]) -> dict[str, dict]:
                 "kind": kind,
                 "index": index,
                 "cid": slot["cid"],
+                "vsockSocket": slot.get("vsockSocket"),
                 "vsockPort": info.get("vsockPort"),
                 "shares": shares,
             }
@@ -129,7 +121,7 @@ class Slots:
         agents_only: bool = False,
         proc_root: Path | None = None,
         run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-        probe: Callable[[int, int, float], bool] = vsock_probe,
+        probe: Callable[[Endpoint, float], None] = transport.probe,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
         out: TextIO | None = None,
@@ -285,11 +277,28 @@ class Slots:
         except ValueError:
             return None
 
-    def answering(self, slot: str, timeout: float = 1.0) -> bool | None:
-        port = self.slots[slot].get("vsockPort")
-        if port is None:
+    def endpoint(self, slot: str) -> Endpoint | None:
+        """The vsock port of the guest in `slot`, or None when its kind
+        serves on no port."""
+        info = self.slots[slot]
+        if info.get("vsockPort") is None:
             return None
-        return self.probe(self.slots[slot]["cid"], port, timeout)
+        return Endpoint(slot=slot, cid=info["cid"], port=info["vsockPort"], vsock_socket=info.get("vsockSocket"))
+
+    def answering(self, slot: str, timeout: float = 1.0) -> str | None:
+        """Whether the guest in `slot` answers on its vsock port, as the
+        words `status` shows, or None when its kind serves on no port. A
+        permission error is shown, since the user can act on it."""
+        endpoint = self.endpoint(slot)
+        if endpoint is None:
+            return None
+        try:
+            self.probe(endpoint, timeout)
+        except PermissionError as error:
+            return f"not answering: {error}"
+        except OSError:
+            return "not answering"
+        return "answering"
 
     # Verbs.
 
@@ -336,18 +345,26 @@ class Slots:
         return slot
 
     def wait_answering(self, slot: str) -> None:
-        port = self.slots[slot].get("vsockPort")
-        if port is None:
+        """Wait until the guest in `slot` answers on its vsock port. A
+        permission error ends the wait at once, since waiting does not
+        change it. Every other error is tried again until `upTimeout`."""
+        endpoint = self.endpoint(slot)
+        if endpoint is None:
             return
+        stays = f"it stays leased to this session, so stop it with down {slot}"
         deadline = self.clock() + self.up_timeout
         while True:
-            if self.probe(self.slots[slot]["cid"], port, 1.0):
+            try:
+                self.probe(endpoint, 1.0)
                 return
+            except PermissionError as error:
+                raise Refused(f"{slot} was started but {error}; {stays}") from None
+            except OSError as error:
+                last = str(error)
             if self.clock() >= deadline:
                 raise Refused(
-                    f"{slot} was started but its vsock port {port} did not answer within "
-                    f"{int(self.up_timeout)} seconds; it stays leased to this session, "
-                    f"so stop it with down {slot}"
+                    f"{slot} was started but its vsock port {endpoint.port} did not answer within "
+                    f"{int(self.up_timeout)} seconds ({last}); {stays}"
                 )
             self.sleep(0.5)
 
@@ -383,7 +400,7 @@ class Slots:
             if state == "active":
                 answering = self.answering(slot)
                 if answering is not None:
-                    parts.append("answering" if answering else "not answering")
+                    parts.append(answering)
                 up_for = self.uptime(slot)
                 if up_for is not None:
                     parts.append(f"up {format_duration(up_for)}")

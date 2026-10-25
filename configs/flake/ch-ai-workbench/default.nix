@@ -209,8 +209,9 @@
                   }
                 ];
               }).config;
-            # Two slots of `probe`, which serves MCP and has shares, and
-            # one of `quiet`, which serves no MCP and has no shares, both
+            # Two slots of `probe`, which serves MCP and has shares, the
+            # second reached through a hybrid vsock socket, and one of
+            # `quiet`, which serves no MCP and has no shares, both
             # for agents, and one of `hidden`, which has shares and which
             # agents may not use.
             microvmKinds = {
@@ -223,6 +224,7 @@
                   {
                     name = "probe-2";
                     cid = 102;
+                    vsockSocket = "/var/lib/microvms/probe-2/notify.vsock";
                   }
                 ];
                 vsockPort = 5000;
@@ -306,7 +308,9 @@
               # The microvm module with kinds from its options. The full
               # home gets the command with the kinds baked in, the reap
               # timer, and the plugin with the MCP server `microvm`, which
-              # offers the kinds for agents and no other. The home whose
+              # offers the kinds for agents and no other. The baked
+              # configuration carries the vsock socket of the slot that
+              # sets one, and null for the other slots. The home whose
               # only kind is not for agents gets the command and the
               # timer and no plugin. The home without kinds gets none of
               # it. A CID or a slot name that two kinds give, and a kind
@@ -385,6 +389,16 @@
 
                     # The command has every kind baked in. No systemd runs
                     # here, so the unit state is unknown.
+                    # The configuration the command reads carries the
+                    # vsock socket of the slot that sets one, and null
+                    # for the slot that does not.
+                    config=$(grep -ao '${builtins.storeDir}/[a-z0-9]*-microvm-kinds\.json' "$command" | head -n 1)
+                    jq -e '.kinds.probe.slots == [
+                      {name: "probe-1", cid: 101, vsockSocket: null},
+                      {name: "probe-2", cid: 102, vsockSocket: "/var/lib/microvms/probe-2/notify.vsock"}
+                    ]' "$config"
+                    jq -e '.kinds.quiet.slots == [{name: "quiet-1", cid: 201, vsockSocket: null}]' "$config"
+
                     "$command" status --all > status.txt
                     grep -qx 'probe-1  kind probe  free  unknown' status.txt
                     grep -qx 'probe-2  kind probe  free  unknown' status.txt

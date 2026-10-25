@@ -8,7 +8,8 @@ the guests itself. It serves the tools `microvm_up`, `microvm_down` and
 and for no other kind. It starts a guest only when `microvm_up` asks.
 
 When `microvm_up` brings up a guest of a kind that serves MCP, the
-server connects to the vsock port of the guest, initializes the MCP
+server connects to the vsock port of the guest, through `AF_VSOCK` or
+through the hybrid vsock socket of the slot, and initializes the MCP
 server of the guest, and adds the tools of that server to its own
 tools, under their own names. A name that a tool of this server or of a
 guest connected earlier already has gets the prefix `<kind>_`. The
@@ -36,8 +37,9 @@ import sys
 import threading
 from typing import Any, Callable
 
-from .guests import Guest, read_lines, vsock_connect
+from .guests import Guest, connect_guest, read_lines
 from .slots import Caller, Refused, Slots
+from .transport import Endpoint
 
 SERVER_INFO = {"name": "microvm", "version": "0.1.0"}
 PROTOCOL_VERSION = "2025-06-18"
@@ -142,7 +144,7 @@ class Server:
         caller: Caller,
         send: Callable[[dict[str, Any]], None],
         *,
-        connect: Callable[[int, int], socket.socket] = vsock_connect,
+        connect: Callable[[Endpoint], socket.socket] = connect_guest,
     ) -> None:
         self.slots = slots
         self.caller = caller
@@ -350,13 +352,14 @@ class Server:
         if slot is None:
             self.answer_waiting(kind, f"the {kind} guest is no longer held by this session", is_error=True)
             return
-        info = self.slots.slots[slot]
+        endpoint = self.slots.endpoint(slot)
+        assert endpoint is not None  # a kind with `mcp` has a vsock port
         try:
-            sock = self.connect(info["cid"], info["vsockPort"])
+            sock = self.connect(endpoint)
         except OSError as e:
             self.answer_waiting(
                 kind,
-                f"the MCP server of {slot} at vsock {info['cid']}:{info['vsockPort']} refused the connection: {e}",
+                f"the MCP server of {slot} at {endpoint} is not reachable: {e}",
                 is_error=True,
             )
             return

@@ -4,7 +4,10 @@
 A guest of a kind that serves MCP listens on the vsock port of its kind.
 The `microvm` MCP server opens one connection per running guest, speaks
 MCP to it as a client, one JSON-RPC message per line, and hands every
-message the guest sends to a callback.
+message the guest sends to a callback. `connect_guest` opens the
+connection through `transport.connect`, the function the readiness
+probe of `up` uses as well, so a slot with a hybrid vsock socket is
+reached through that socket.
 """
 
 from __future__ import annotations
@@ -14,18 +17,15 @@ import socket
 import threading
 from typing import Any, Callable
 
+from .transport import Endpoint, connect
 
-def vsock_connect(cid: int, port: int) -> socket.socket:
-    """A connection to port `port` of the guest with CID `cid`."""
-    sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
-    try:
-        sock.settimeout(5.0)
-        sock.connect((cid, port))
-        sock.settimeout(None)
-    except OSError:
-        sock.close()
-        raise
-    return sock
+# The number of seconds connecting to the MCP server of a guest waits.
+CONNECT_TIMEOUT = 5.0
+
+
+def connect_guest(endpoint: Endpoint) -> socket.socket:
+    """A connection to the MCP server of the guest at `endpoint`."""
+    return connect(endpoint, CONNECT_TIMEOUT)
 
 
 def read_lines(stream: Any, put: Callable[[dict[str, Any] | None], None]) -> None:

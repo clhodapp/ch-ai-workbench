@@ -58,6 +58,22 @@ let
         type = lib.types.ints.between 3 4294967294;
         description = "The vsock CID of the guest.";
       };
+      vsockSocket = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "/.+");
+        default = null;
+        example = "/var/lib/microvms/rea-1/notify.vsock";
+        description = ''
+          The hybrid vsock socket of the guest, or null. A guest that
+          runs under cloud-hypervisor offers its vsock as a Unix socket
+          on the host. When this is set, the program reaches the vsock
+          port of the guest through that socket, for the wait of `up`
+          and for the connection to the MCP server of the guest. With
+          null, it connects to the CID through `AF_VSOCK`. caisson
+          records the path as `outputs.slots.<slot>.vsockSocket` of a
+          caisson-microvm configuration. The user of this home must be
+          an operator of the guest to open the socket.
+        '';
+      };
     };
   };
 
@@ -181,7 +197,7 @@ let
   programConfig = pkgs.writeText "microvm-kinds.json" (
     builtins.toJSON {
       kinds = builtins.mapAttrs (_: kind: {
-        slots = map (slot: { inherit (slot) name cid; }) kind.slots;
+        slots = map (slot: { inherit (slot) name cid vsockSocket; }) kind.slots;
         inherit (kind)
           vsockPort
           shareRoot
@@ -272,7 +288,7 @@ in
         `microvm-host` NixOS module grants through
         `caisson.microvm-host.operators`. A machine that declares the
         slots in a caisson-microvm configuration gives the same names,
-        CIDs, port and share root here. Slot names and CIDs are unique
+        CIDs, vsock sockets, port and share root here. Slot names and CIDs are unique
         across the kinds.
       '';
     };
