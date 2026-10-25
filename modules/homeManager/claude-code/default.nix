@@ -874,13 +874,10 @@ in
           back. When nothing pushes back, the noul dimensions at or above
           reportAbove and every score reach the model with the next prompt
           as context (hooks.tic-check-context). Merged across all modules
-          that set it. This module seeds lib/judge-readability.nix, eight
-          scores of what a developer needs to know already to know what a
-          reply is talking about, from an average developer through the
-          ecosystem and this codebase up to the chat that produced it (the
-          reply as a whole, and by its length, density, complexity,
-          nuance, references, non-standard jargon, and generic concept
-          words), and the peer-programmer
+          that set it. This module seeds lib/judge-readability.nix (the
+          scores assumed-context and information-density, and the nouls
+          generic-concept-words and unexplained-references, asked of
+          replies and progress messages), and the peer-programmer
           style's rules that need judgment (lib/judge-dimensions.nix):
           arguing-with-ghosts (asked of writes only), final-message-recap
           (asked of finished turns only), count-obsession,

@@ -778,7 +778,7 @@
               # whatever the judge says; a verdict below
               # pushBackAbove (and a report-only dimension above it) does
               # not block and reaches the next prompt once as context,
-              # beside every readability score, highest first;
+              # beside every score, highest first;
               # the rewrite step is unchanged; the edit hook asks a code
               # write only the dimensions that target code, sends an
               # Edit's replaced text beside the new text, asks a prose
@@ -829,10 +829,10 @@
                     [ -z "$(stop 'The build passed and the branch is pushed.')" ]
                     jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
                     tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("count-obsession") and has("undefined-terms") and (has("arguing-with-ghosts") | not) and (has("elliptical-possessive") | not))'
-                    tail -n 1 requests.log | jq -e '.questions.density.type == "score" and (.questions.density.criteria | length) == 4'
+                    tail -n 1 requests.log | jq -e '.questions["assumed-context"].type == "score" and (.questions["assumed-context"].criteria | length) == 4 and (.questions | has("generic-concept-words") and has("unexplained-references"))'
                     tail -n 1 requests.log | jq -e '.questions["information-density"].criteria[1] | startswith("even")'
                     ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
-                    grep -q -- '- readability 0 of 3, most likely an average developer can follow it ' <<<"$ctx"
+                    grep -q -- '- assumed-context 0 of 3, most likely nothing beyond the subject' <<<"$ctx"
                     lacks 'These problems' <<<"$ctx"
                     [ -z "$(prompt)" ]
                     [ ! -e "$stored" ]
@@ -852,14 +852,14 @@
 
                     # Below pushBackAbove, and report-only: context, once.
                     # A score never blocks and is reported highest first.
-                    answers '{"fragments": 0.6, "undefined-terms": 0.99, "density": [0, 0.2, 0.6, 0.2]}'
+                    answers '{"fragments": 0.6, "undefined-terms": 0.99, "information-density": [0, 0.2, 0.6, 0.2]}'
                     [ -z "$(stop 'The build passed.')" ]
                     ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
                     grep -q '^tic-check: verdicts' <<<"$ctx"
                     grep -q -- '- undefined-terms 0.99: ' <<<"$ctx"
                     grep -q -- '- fragments 0.6: ' <<<"$ctx"
-                    grep -q -- '- density 2 of 3, most likely it needs a developer familiar with this codebase (0.6); aim: ' <<<"$ctx"
-                    [ "$(grep -n -- '- density ' <<<"$ctx" | cut -d: -f1)" -lt "$(grep -n -- '- readability ' <<<"$ctx" | cut -d: -f1)" ]
+                    grep -q -- '- information-density 2 of 3, most likely dense: several facts per sentence (0.6); aim: ' <<<"$ctx"
+                    [ "$(grep -n -- '- information-density ' <<<"$ctx" | cut -d: -f1)" -lt "$(grep -n -- '- assumed-context ' <<<"$ctx" | cut -d: -f1)" ]
                     [ -z "$(prompt)" ]
 
                     # The rewrite step.
@@ -915,12 +915,12 @@
                       jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "Build green, pushed."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
                     } > progress.jsonl
                     post() { jq -cn --arg s "$session" --arg t "$PWD/progress.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Bash", tool_input: {command: "ls"}, tool_response: {}}' | "$turnhook"; }
-                    answers '{"fragments": 0.6, "readability": [0, 0, 1, 0]}'
+                    answers '{"fragments": 0.6, "assumed-context": [0, 0, 1, 0]}'
                     ctx=$(post | jq -r .hookSpecificOutput.additionalContext)
                     grep -q '^tic-check: mid-turn verdicts' <<<"$ctx"
                     grep -q 'not from the Bash call: it is not part of the tool' <<<"$ctx"
                     grep -q -- '- fragments 0.6: ' <<<"$ctx"
-                    grep -q -- '- readability 2 of 3, most likely it needs a developer familiar with this codebase' <<<"$ctx"
+                    grep -q -- '- assumed-context 2 of 3, most likely a lot: many names' <<<"$ctx"
                     lacks 'information-density' <<<"$ctx"
                     tail -n 1 requests.log | jq -e '(.state.kind | contains("between tool calls")) and (.questions | has("fragments") and (has("final-message-recap") | not) and (has("arguing-with-ghosts") | not))'
                     before=$(wc -l < requests.log)
@@ -953,7 +953,7 @@
                     res=$(run "git add -A && git commit -m 'Build green, pushed.'")
                     [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
-                    tail -n 1 requests.log | jq -e '(.state.kind | contains("commit message")) and (.state.text | rtrimstr("\n")) == "Build green, pushed." and (.questions | has("arguing-with-ghosts") and (has("readability") | not))'
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("commit message")) and (.state.text | rtrimstr("\n")) == "Build green, pushed." and (.questions | has("arguing-with-ghosts") and (has("assumed-context") | not))'
                     [ -z "$(run "git add -A && git commit -m 'Build green, pushed.'")" ]
                     answers '{"arguing-with-ghosts": 0.95}'
                     res=$(run "gh pr review 59 --comment --body 'Nothing publishes into packages anymore.'")

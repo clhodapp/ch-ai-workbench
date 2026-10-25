@@ -606,23 +606,21 @@ output-style rule that needs judgment (seeded from
   been exercised by the flake check against the hook's output shape
   only. It has not been probed live in a CLI session the way the Stop
   facts above were.
-- **Readability.** The score dimensions in
-  `modules/homeManager/claude-code/lib/judge-readability.nix` share one
-  ladder of what a developer needs to know already to know what a reply
-  is talking about. The four levels, low to high, are an average
-  developer, a developer familiar with the ecosystem, a developer
-  familiar with this codebase, and someone who took part in the chat or
-  task that produced the reply, because the reply leans on references
-  that seem to come from it. One dimension places the reply as a whole.
-  Each of the others asks how far up the ladder one cause puts it:
-  length, density, sentence complexity, nuance, references to things
-  outside the message, non-standard jargon, and generic concept words
-  such as "the fold". A long reply that an average developer can follow
-  therefore scores low on length. A ninth score, `information-density`,
-  sits beside the ladder. It measures how much each sentence of the
-  reply carries, whoever reads it, from sparse (filler, restatement)
-  through even (one point per sentence) to packed.
-  qev answers a score with a probability per level and their expected
+- **Readability.** `modules/homeManager/claude-code/lib/judge-readability.nix`
+  holds two scores and two nouls about how much work a reply makes for
+  a developer who has not seen the work. `assumed-context` asks how
+  much the reply assumes beyond what its subject requires, from nothing
+  to a note only someone who took part could follow. It is relative to
+  the subject because an absolute ladder of who could follow a reply
+  measured the subject instead: in a run over recent sessions only
+  general-knowledge answers scored low, and every cause asked about
+  moved with the overall score. `information-density` asks how much
+  each sentence carries, from sparse (filler, restatement) through even
+  (one point per sentence) to packed. The nouls `generic-concept-words`
+  ("the fold" standing for a mechanism the reply never names) and
+  `unexplained-references` (a file, option, decision, or earlier message
+  mentioned without the few words a new reader needs) name causes with
+  a fix. qev answers a score with a probability per level and their expected
   level index. The client reports that index, the most likely level,
   and its probability. The context hook lists every score, highest
   effort first, with the style's aim for that cause. Scores never push
