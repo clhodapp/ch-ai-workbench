@@ -73,6 +73,7 @@ _GRANTS = (
     "deniedDomains",
     "allowUnixSockets",
     "allowAllUnixSockets",
+    "devices",
     "allowWrite",
     "extraAllowRead",
     "excludedCommands",
@@ -160,6 +161,8 @@ def describe_text(info: dict[str, Any]) -> str:
         lines.append("Unix sockets: every socket on the host is reachable.")
     elif info.get("allowUnixSockets"):
         lines.append("Unix sockets reachable: " + ", ".join(info["allowUnixSockets"]))
+    if info.get("devices"):
+        lines.append("Device nodes openable: " + ", ".join(info["devices"]))
     if info.get("allowWrite"):
         lines.append("Writable beyond the checkout: " + ", ".join(info["allowWrite"]))
     if info.get("extraAllowRead"):

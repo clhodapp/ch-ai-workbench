@@ -27,6 +27,14 @@ Landlock wrapper that reads the allowlist from ``SOCKETS_ENV_VAR`` in the
 settings env. That env is write-guarded at both the sandbox and
 permission layers, and Landlock restrictions only narrow once applied, so
 a command cannot widen the allowlist for itself or its children.
+
+A device list reaches the sandbox the same way: the base part's bwrap
+wrapper reads it from ``DEVICES_ENV_VAR`` and binds each listed device
+node into every sandbox it builds. The variable is in every fragment,
+empty when no module lists a device. Claude Code applies a changed env
+value to a running session, while a removed variable lingers until the
+next launch, so an empty value is what makes dropping a device module
+take effect at once.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ from .files import ToolError
 from .registry import load_part
 
 SOCKETS_ENV_VAR = "CLAUDE_CODE_SANDBOX_UNIX_SOCKETS"
+DEVICES_ENV_VAR = "CLAUDE_CODE_SANDBOX_DEVICES"
 FRAGMENT_LIMIT = 100_000
 
 _LIST_GRANTS = (
@@ -47,6 +56,7 @@ _LIST_GRANTS = (
     "deniedDomains",
     "excludedCommands",
     "allowUnixSockets",
+    "devices",
 )
 
 
@@ -161,6 +171,7 @@ def compose(
             + base["pathLast"]
         ),
         "SHELL": base["socketShell"] if narrows else base["shell"],
+        DEVICES_ENV_VAR: "\n".join(grants["devices"] or []),
     }
     if narrows:
         env[SOCKETS_ENV_VAR] = "\n".join(sockets or [])

@@ -179,6 +179,94 @@ let
     exec ${runtimeShell} "$@"
   '';
 
+  # The env variable that carries a composed device list to the bwrap
+  # wrapper; the CLI's composer writes it (DEVICES_ENV_VAR there).
+  devicesEnvVar = "CLAUDE_CODE_SANDBOX_DEVICES";
+
+  # The `bwrap` that every enrollment's PATH finds ahead of the one in
+  # runtime.sandboxTools. Claude Code builds each sandbox with its
+  # filesystem binds first and `--dev /dev` after them. That mounts a
+  # fresh /dev holding only null, zero, random, tty and a few others over
+  # anything bound there. Claude Code binds allowRead and allowWrite
+  # paths without device access, too. A device node therefore enters the
+  # sandbox through this wrapper. It inserts `--dev-bind-try NODE NODE`
+  # for every node of the composed device list right after the first
+  # `--dev /dev`, then execs the next bwrap on PATH. A call without
+  # `--dev /dev` (Claude Code's version and feature probes) and a call
+  # with an empty list reach that bwrap unchanged.
+  #
+  # The list arrives one pattern per line in the settings env, like the
+  # socket allowlist. The settings files are write-guarded, so a
+  # sandboxed command cannot add a device. Each pattern is a shell glob
+  # expanded every time a sandbox is built, so renumbered and hot-plugged
+  # devices are found. A match that is a symlink binds the node it
+  # resolves to, at that node's own path: libusb, for one, opens a USB
+  # device at /dev/bus/usb/BBB/DDD, a path that changes whenever the
+  # device re-enumerates, so a udev symlink is how a module names one
+  # USB device. A pattern that matches nothing binds nothing, so a module
+  # can name nodes that exist only while a driver is loaded. A match
+  # that does not resolve to a character or block device under /dev is
+  # skipped with a warning. A pattern outside /dev
+  # makes the wrapper refuse to build the sandbox.
+  devicesBwrap = pkgs.writeShellScriptBin "bwrap" ''
+    real=
+    IFS=: read -ra dirs <<<"$PATH"
+    for dir in "''${dirs[@]}"; do
+      if [ -x "$dir/bwrap" ] && ! [ "$dir/bwrap" -ef "''${BASH_SOURCE[0]}" ]; then
+        real=$dir/bwrap
+        break
+      fi
+    done
+    if [ -z "$real" ]; then
+      echo "claude-code-sandbox: no bwrap on PATH after the device wrapper" >&2
+      exit 127
+    fi
+    if [ -z "''${${devicesEnvVar}:-}" ]; then
+      exec "$real" "$@"
+    fi
+
+    binds=()
+    shopt -s nullglob
+    # The patterns arrive on fd 3, so the loop body keeps the stdin bwrap
+    # was given.
+    while IFS= read -r -u 3 pattern; do
+      case "$pattern" in
+        "") continue ;;
+        /dev/*) ;;
+        *)
+          echo "claude-code-sandbox: device pattern $pattern is outside /dev; refusing to build the sandbox" >&2
+          exit 2
+          ;;
+      esac
+      IFS=
+      nodes=($pattern)
+      unset IFS
+      for match in "''${nodes[@]}"; do
+        # A literal pattern survives globbing even when nothing is there.
+        if ! [ -e "$match" ]; then
+          continue
+        fi
+        node=$(${pkgs.coreutils}/bin/readlink -f -- "$match")
+        if [[ "$node" == /dev/* ]] && { [ -c "$node" ] || [ -b "$node" ]; }; then
+          binds+=(--dev-bind-try "$node" "$node")
+        else
+          echo "claude-code-sandbox: $match (from device pattern $pattern) is not a device node under /dev; skipping it" >&2
+        fi
+      done
+    done 3<<<"''$${devicesEnvVar}"
+
+    args=()
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --dev ] && [ "''${2-}" = /dev ]; then
+        shift 2
+        exec "$real" "''${args[@]}" --dev /dev "''${binds[@]}" "$@"
+      fi
+      args+=("$1")
+      shift
+    done
+    exec "$real" "''${args[@]}"
+  '';
+
   # The floor of every enrollment: the base farm (basic tools and the CLI
   # itself, so a sandboxed agent can run `claude-code-sandbox status`),
   # the ssh wrapper, the shells, and what the sandbox runtime needs.
@@ -202,6 +290,7 @@ let
             baseFarm
             sshWrapper
             socketShell
+            devicesBwrap
             cfg.runtime.claudePackage
             cfg.runtime.shellPackage
           ]
@@ -214,7 +303,14 @@ let
           # override; a user who fronts their own ssh knows what they are
           # doing.
           pathFirst = [ "${sshWrapper}/bin" ];
-          pathLast = [ "${baseFarm}/bin" ] ++ map (p: "${p}/bin") cfg.runtime.sandboxTools;
+          # The device wrapper's bin goes ahead of the sandbox tools, so
+          # Claude Code's lookup of `bwrap` finds the wrapper, and the
+          # wrapper finds the real bwrap after itself.
+          pathLast = [
+            "${baseFarm}/bin"
+            "${devicesBwrap}/bin"
+          ]
+          ++ map (p: "${p}/bin") cfg.runtime.sandboxTools;
           shell = runtimeShell;
           socketShell = "${socketShell}";
         };
@@ -264,6 +360,7 @@ let
           deniedDomains
           excludedCommands
           allowAllUnixSockets
+          devices
           ;
         masked = !module.allowNix;
         # What the module puts on PATH, for the people and agents that
@@ -324,9 +421,10 @@ let
         # extraSettings and extraEnv transport keys the composer does NOT
         # generate. The generated keys carry the module's guarantees (the
         # fail-closed posture, the mask, the farm PATH and SHELL, the
-        # checkout root, the socket allowlist) and may not be overridden
-        # through the escape hatch. Wanting a different value for one of
-        # these is a module-option request, not a passthrough.
+        # checkout root, the socket allowlist, the device list) and may
+        # not be overridden through the escape hatch. Wanting a different
+        # value for one of these is a module-option request, not a
+        # passthrough.
         OWNED = [
             ("settings", ["sandbox", "enabled"]),
             ("settings", ["sandbox", "failIfUnavailable"]),
@@ -339,6 +437,7 @@ let
             ("env", ["SHELL"]),
             ("env", ["CLAUDE_CODE_SANDBOX_ROOT"]),
             ("env", ["${socketsEnvVar}"]),
+            ("env", ["${devicesEnvVar}"]),
         ]
         def present(tree, path):
             for key in path:
@@ -670,6 +769,34 @@ let
           Landlock ABI 9+, i.e. 7.1+; runtime.landlock.socketFallback
           decides what older kernels do). Sockets a sandboxed command
           creates itself are always reachable.
+        '';
+      };
+      devices = lib.mkOption {
+        type = lib.types.nullOr (lib.types.listOf (lib.types.strMatching "/dev/.+"));
+        default = null;
+        example = [
+          "/dev/dri/renderD*"
+          "/dev/kfd"
+        ];
+        description = ''
+          Device nodes sandboxed commands may open, as absolute paths or
+          shell globs under /dev. A GPU used for compute, for example,
+          needs its render nodes (/dev/dri/renderD*), and ROCm also needs
+          /dev/kfd. Each matching character or block device is bound with
+          device access at the same path inside the sandbox, by the bwrap
+          wrapper every enrollment's PATH finds first. A match that is a
+          symlink binds the device it resolves to, at that device's own
+          path. A udev `SYMLINK` rule therefore selects one USB device,
+          which libusb opens at its /dev/bus/usb path. The globs are
+          expanded each time a sandbox is built, so a device that
+          re-enumerates during a command appears in the sandbox of the
+          command after it. A pattern that matches nothing binds nothing.
+
+          Opening a device node hands sandboxed code that driver's whole
+          ioctl interface, so name the nodes the tooling needs. The
+          display nodes /dev/dri/card* sit next to the render nodes and
+          drive modesetting; a compute workload needs only the render
+          nodes.
         '';
       };
       trustedExecutables = lib.mkOption {

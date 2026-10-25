@@ -35,6 +35,7 @@ WORK_FRAGMENT = {
         "PATH": "/nix/store/ssh-wrapper/bin:/nix/store/work-farm/bin"
         ":/nix/store/base-farm/bin:/nix/store/bwrap/bin",
         "SHELL": "/nix/store/bash/bin/bash",
+        "CLAUDE_CODE_SANDBOX_DEVICES": "",
     },
 }
 
