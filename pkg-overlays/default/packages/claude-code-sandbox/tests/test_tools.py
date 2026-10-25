@@ -11,6 +11,7 @@ import queue
 import sys
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -85,8 +86,12 @@ class ToolsTest(unittest.TestCase):
             "CLAUDE_PROJECT_DIR": str(self.repo),
             "CLAUDE_CODE_SESSION_ID": "0123abcd-0000-0000-0000-000000000000",
             "CLAUDE_CODE_SANDBOX_CONSENT": str(consent),
+            "CLAUDE_CODE_SANDBOX_STATE": str(tmp / "state"),
         }
-        patcher = mock.patch.dict(os.environ, {"CLAUDE_CODE_SANDBOX_CONFIG": str(self.config)})
+        patcher = mock.patch.dict(
+            os.environ,
+            {"CLAUDE_CODE_SANDBOX_CONFIG": str(self.config), "CLAUDE_CODE_SANDBOX_STATE": str(tmp / "state")},
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -395,10 +400,44 @@ class ToolsTest(unittest.TestCase):
     def test_elicitation_enable(self):
         self.cli("enroll", "work", "--quiet")
         self.consent_script([{"status": "fallback", "value": "elicit"}])
-        server = self.server(lambda _: {"action": "accept", "content": {"decision": "enable"}})
+        server = self.server(lambda _: {"action": "accept", "content": {"decision": "enable permanently"}})
         value, _ = self.call(server, "request-module", module="nix", reason="build")
         self.assertIn("enabled nix", value)
         self.assertEqual(self.sidecar()["modules"], ["nix", "work"])
+        self.assertNotIn("expires", self.sidecar())
+
+    def test_elicitation_enable_for_a_day(self):
+        self.cli("enroll", "work", "--quiet")
+        self.consent_script([{"status": "fallback", "value": "elicit"}])
+        server = self.server(lambda _: {"action": "accept", "content": {"decision": "enable for a day"}})
+        value, _ = self.call(server, "request-module", module="nix", reason="build")
+        self.assertIn("enabled nix", value)
+        self.assertIn(" until ", value)
+        self.assertEqual(list(self.sidecar()["expires"]), ["nix"])
+
+    def test_the_prompt_offers_a_day_a_week_and_permanently(self):
+        self.cli("enroll", "work", "--quiet")
+        self.consent_script([{"status": "answered", "value": "week"}])
+        value, _ = self.call(self.server(), "request-module", module="nix", reason="build")
+        (call,) = self.consent_calls()
+        options = [call["argv"][i + 1] for i, a in enumerate(call["argv"]) if a == "--option"]
+        self.assertEqual(
+            options[:3], ["day=Enable for a day", "week=Enable for a week", "enable=Enable permanently"]
+        )
+        self.assertIn(" until ", value)
+        at = datetime.fromisoformat(self.sidecar()["expires"]["nix"])
+        self.assertAlmostEqual((at - datetime.now(UTC)).total_seconds(), 7 * 86400, delta=60)
+
+    def test_an_expired_module_is_asked_for_again(self):
+        self.cli("enroll", "work", "--quiet")
+        self.cli("add", "nix", "--for", "day", "--quiet")
+        later = datetime.now(UTC) + timedelta(days=2)
+        self.consent_script([{"status": "answered", "value": "later"}])
+        with mock.patch.object(cli, "_now", return_value=later):
+            value, _ = self.call(self.server(), "request-module", module="nix", reason="build")
+        self.assertIn("not now", value)
+        self.assertEqual(len(self.consent_calls()), 1)
+        self.assertEqual(self.sidecar()["modules"], ["work"])
 
     def test_cancelled_elicitation_stores_the_question(self):
         # Headless sessions cancel an elicitation at once; the question

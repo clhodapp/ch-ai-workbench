@@ -574,6 +574,11 @@ let
     }
   );
 
+  # The user's index of checkouts that chose a module for a limited time.
+  # The expiry timer reads it; an agent that could edit it could keep a
+  # module past its deadline.
+  expiringIndex = "${config.xdg.stateHome}/claude-code-sandbox/expiring.json";
+
   monotoneBaseline = {
     sandbox = {
       enabled = true;
@@ -581,12 +586,14 @@ let
         ".claude/settings.json"
         ".claude/settings.local.json"
         ".claude/claude-code-sandbox.json"
+        expiringIndex
       ];
     };
     permissions.deny = [
       "Edit(.claude/settings.json)"
       "Edit(.claude/settings.local.json)"
       "Edit(.claude/claude-code-sandbox.json)"
+      "Edit(/${expiringIndex})"
     ];
   };
 
@@ -1214,7 +1221,33 @@ in
       }
     ) cfg.trustedExecutables;
 
-    systemd.user.services = lib.mapAttrs' (
+    # A session reads its sandbox rules at launch, before its SessionStart
+    # hook runs, so the hook alone would let the first session after a
+    # deadline start with the expired module. The timer drops due modules
+    # from every checkout in the expiring index.
+    systemd.user.timers.claude-code-sandbox-expire = {
+      Unit.Description = "Drop expired claude-code-sandbox modules";
+      Timer = {
+        OnCalendar = "*:0/10";
+        Persistent = true;
+      };
+      Install.WantedBy = [ "timers.target" ];
+    };
+
+    systemd.user.services = {
+      claude-code-sandbox-expire = {
+        Unit.Description = "Drop expired claude-code-sandbox modules";
+        Service = {
+          Type = "oneshot";
+          ExecStart = "${lib.getExe' cfg.package "claude-code-sandbox"} expire";
+          Environment = [
+            "XDG_CONFIG_HOME=${config.xdg.configHome}"
+            "XDG_STATE_HOME=${config.xdg.stateHome}"
+          ];
+        };
+      };
+    }
+    // lib.mapAttrs' (
       name: executable:
       lib.nameValuePair "${trustedUnit name}@" {
         Unit = {

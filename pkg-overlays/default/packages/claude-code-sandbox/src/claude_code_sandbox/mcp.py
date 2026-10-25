@@ -48,11 +48,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .cli import _status_line, decline_modules, enable_modules, refusal_text
+from .cli import _status_line, decline_modules, enable_modules, expire_due, refusal_text
 from .compose import check_known
 from .files import ToolError, find_repo_root
 from .registry import load_registry
-from .report import checkout_state, describe, describe_text, overview, require_enrolled
+from .report import (
+    checkout_state,
+    describe,
+    describe_text,
+    module_status,
+    overview,
+    require_enrolled,
+)
 
 SERVER_INFO = {"name": "claude-code-sandbox", "version": "0.1.0"}
 PROTOCOL_VERSION = "2025-06-18"
@@ -61,6 +68,13 @@ CONSENT_ENV = "CLAUDE_CODE_SANDBOX_CONSENT"
 # answer. A forgotten prompt otherwise holds the agent's turn.
 PROMPT_DEADLINE_SECONDS = 15 * 60
 POLL_SECONDS = 0.2
+
+# The answers that enable a module, to how long it stays chosen (None:
+# until the user drops it). ``enable`` keeps its key so an answer stored
+# before the time-limited choices existed still applies.
+ENABLE_DURATIONS: dict[str, str | None] = {"day": "day", "week": "week", "enable": None}
+# The elicitation dialog's spelling of the same answers.
+ELICIT_ENABLE = {"enable for a day": "day", "enable for a week": "week", "enable permanently": "enable"}
 
 _MODULE_ARG = {"type": "string", "description": "The sandbox module's name, as list-modules reports it."}
 
@@ -111,7 +125,9 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Ask the user to enable a sandbox module in this session's checkout. The user is "
             "prompted with what the module allows and your reason, and the call waits for the "
-            "answer. On approval the module is enabled in the checkout's settings, but this "
+            "answer. The user enables it for a day, for a week, or permanently; a module enabled "
+            "for a limited time is dropped at its deadline. On approval the module is enabled in "
+            "the checkout's settings, but this "
             "session keeps its old sandbox rules: the user must stop the session with /stop and "
             "start it again before the module's grants apply. A refusal is recorded and later "
             "requests for the module "
@@ -325,9 +341,10 @@ class Server:
         root = Path(state["checkout"])
         require_enrolled(state)
         check_known(registry, [name])
-        why = state["enabled"].get(name)
-        if why is not None:
-            return f"{name} is already enabled in {root} ({why})."
+        if expire_due(root):
+            state = checkout_state(root, registry)
+        if name in state["enabled"]:
+            return f"{name} is already {module_status(name, state)} in {root}."
         refusal = state["declined"].get(name)
         if refusal:
             return (
@@ -348,11 +365,12 @@ class Server:
         )
         decision, text, note = self.ask_user(root, name, title, detail, meta)
 
-        if decision == "enable":
-            enable_modules(root, [name])
+        if decision in ENABLE_DURATIONS:
+            until = enable_modules(root, [name], ENABLE_DURATIONS[decision])
             enabled = checkout_state(root, registry)["enabled"]
+            span = f" until {until.astimezone().isoformat(timespec='minutes')}" if until else ""
             return (
-                f"The user enabled {name} in {root}. Enabled modules: {', '.join(sorted(enabled))}. "
+                f"The user enabled {name} in {root}{span}. Enabled modules: {', '.join(sorted(enabled))}. "
                 "This session's sandboxed commands still run under the old rules. The new rules "
                 "apply only after the user stops this session with /stop and starts it again. "
                 "Tell the user that, and do not retry the commands that need the module until "
@@ -393,7 +411,11 @@ class Server:
             "--detail",
             detail,
             "--option",
-            "enable=Enable",
+            "day=Enable for a day",
+            "--option",
+            "week=Enable for a week",
+            "--option",
+            "enable=Enable permanently",
             "--option",
             "decline=Decline",
             "--option-text",
@@ -418,7 +440,7 @@ class Server:
         status = result.get("status")
         if status == "answered":
             value = result.get("value")
-            if value in ("enable", "decline"):
+            if value in ENABLE_DURATIONS or value == "decline":
                 return value, result.get("text"), ""
             return "none", None, f"The user chose not now for {name}; nothing is recorded, so you may ask later."
         if status == "timeout":
@@ -486,7 +508,7 @@ class Server:
                         "decision": {
                             "type": "string",
                             "title": "Decision",
-                            "enum": ["enable", "decline", "not now"],
+                            "enum": [*ELICIT_ENABLE, "decline", "not now"],
                         },
                         "reason": {
                             "type": "string",
@@ -505,8 +527,8 @@ class Server:
         content = result.get("content") or {}
         decision = content.get("decision")
         reason = str(content.get("reason") or "").strip() or None
-        if decision == "enable":
-            return "enable", None, ""
+        if decision in ELICIT_ENABLE:
+            return ELICIT_ENABLE[decision], None, ""
         if decision == "decline":
             return "decline", reason, ""
         return "none", None, "The user chose not now; nothing is recorded, so you may ask later."

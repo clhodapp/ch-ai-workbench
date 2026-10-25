@@ -14,11 +14,16 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 SETTINGS_NAME = "settings.local.json"
 SIDECAR_NAME = "claude-code-sandbox.json"
+EXPIRING_NAME = "expiring.json"
+
+# How long a module chosen for a limited time stays chosen.
+DURATIONS = {"day": timedelta(days=1), "week": timedelta(weeks=1)}
 
 
 class ToolError(Exception):
@@ -45,6 +50,22 @@ def settings_path(root: Path) -> Path:
 
 def sidecar_path(root: Path) -> Path:
     return claude_dir(root) / SIDECAR_NAME
+
+
+def state_dir() -> Path:
+    override = os.environ.get("CLAUDE_CODE_SANDBOX_STATE")
+    if override:
+        return Path(override)
+    xdg = os.environ.get("XDG_STATE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
+    return base / "claude-code-sandbox"
+
+
+def expiring_path() -> Path:
+    """The user's index of checkouts that chose a module for a limited
+    time. The deadlines live in each checkout's sidecar; the index only
+    tells the expiry run which checkouts to read."""
+    return state_dir() / EXPIRING_NAME
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -146,7 +167,11 @@ def update_json(
 def read_sidecar(root: Path) -> dict[str, Any] | None:
     """The checkout's binding, normalized to ``modules`` (the sorted
     chosen names, or None when abandoned), ``applied`` (the fragment this
-    tool last wrote), ``declined`` and ``legacy_profile``.
+    tool last wrote), ``expires``, ``declined`` and ``legacy_profile``.
+
+    ``expires`` maps each module the checkout chose for a limited time to
+    the time it stops being chosen (timezone-aware). A chosen module
+    absent from it is chosen until someone drops it.
 
     ``declined`` maps each module the user refused for this checkout to
     the refusal: ``at`` (an ISO 8601 time) and an optional ``reason``.
@@ -169,18 +194,30 @@ def read_sidecar(root: Path) -> dict[str, Any] | None:
     declined = value.get("declined", {})
     if not (isinstance(declined, dict) and all(isinstance(v, dict) for v in declined.values())):
         raise ToolError(f"{sidecar} is malformed (declined must map module names to objects)")
+    try:
+        expires = {name: datetime.fromisoformat(at) for name, at in value.get("expires", {}).items()}
+    except (AttributeError, TypeError, ValueError) as e:
+        raise ToolError(f"{sidecar} is malformed (expires must map module names to ISO 8601 times)") from e
+    if any(at.tzinfo is None for at in expires.values()):
+        raise ToolError(f"{sidecar} is malformed (expires times need a timezone)")
     if "modules" in value:
         modules = value["modules"]
         if modules is not None and not (
             isinstance(modules, list) and all(isinstance(m, str) for m in modules)
         ):
             raise ToolError(f"{sidecar} is malformed (modules must be a list of names or null)")
-        return {"modules": modules, "applied": applied, "declined": declined, "legacy_profile": None}
+        return {
+            "modules": modules,
+            "applied": applied,
+            "expires": expires,
+            "declined": declined,
+            "legacy_profile": None,
+        }
     profile = value.get("profile")
     if not isinstance(profile, str):
         raise ToolError(f"{sidecar} is malformed (expected modules + applied)")
     legacy = None if profile == "none" else profile
-    return {"modules": None, "applied": applied, "declined": declined, "legacy_profile": legacy}
+    return {"modules": None, "applied": applied, "expires": {}, "declined": declined, "legacy_profile": legacy}
 
 
 def write_sidecar(
@@ -188,8 +225,38 @@ def write_sidecar(
     modules: list[str] | None,
     applied: dict[str, Any],
     declined: dict[str, Any] | None = None,
+    expires: dict[str, datetime] | None = None,
 ) -> None:
+    """Record the binding. ``expires`` keeps only modules in ``modules``,
+    and the user's index of expiring checkouts follows it."""
     value: dict[str, Any] = {"modules": modules, "applied": applied}
+    kept = {name: at for name, at in (expires or {}).items() if name in (modules or [])}
+    if kept:
+        value["expires"] = {name: at.isoformat(timespec="seconds") for name, at in sorted(kept.items())}
     if declined:
         value["declined"] = dict(sorted(declined.items()))
     write_json_atomic(sidecar_path(root), value)
+    index_expiring(root, bool(kept))
+
+
+def index_expiring(root: Path, expiring: bool) -> None:
+    """Add ``root`` to the user's index of expiring checkouts, or remove
+    it."""
+    key = str(root)
+
+    def transform(current: dict[str, Any]) -> dict[str, Any]:
+        roots = set(current.get("checkouts") or [])
+        if expiring:
+            roots.add(key)
+        else:
+            roots.discard(key)
+        return {"checkouts": sorted(roots)}
+
+    path = expiring_path()
+    if not expiring and not path.exists():
+        return
+    update_json(path, transform)
+
+
+def expiring_checkouts() -> list[Path]:
+    return [Path(root) for root in read_json(expiring_path()).get("checkouts") or []]
