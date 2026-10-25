@@ -1,12 +1,17 @@
 # SPDX-License-Identifier: MIT
-"""The slots of a machine, their leases, and their units.
+"""The configured slots, their leases, and their units.
 
-A slot is a guest of a caisson-microvm configuration that one of its
-`slots.<kind>` pools declares. The program leases a slot to a Claude
-Code session: the lease records the session ID and the process that
-holds the slot, as its process ID and its start time (field 22 of
-/proc/<pid>/stat), since a process ID alone can be reused. A slot is
-free when it has no lease, or when the process of its lease is gone.
+A kind is a pool of guests that run one NixOS configuration. Each guest
+of a kind is a slot, with its own vsock CID and its own share
+directories. The home-manager module writes the kinds into the
+configuration file of the program.
+
+The program leases a slot to a holder: the process that keeps the slot,
+recorded as its process ID and its start time (field 22 of
+/proc/<pid>/stat), since a process ID alone can be reused. A lease also
+records the session ID of Claude Code when the caller knows it, for
+display. A slot is free when it has no lease, or when the process of
+its lease is gone.
 
 The leases live under `<stateDir>/leases/<slot>.json`. Every change to
 them happens under an exclusive lock on `<stateDir>/lock`, so two
@@ -17,12 +22,14 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import io
 import json
 import os
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,8 +42,9 @@ class Refused(Exception):
 
 @dataclass(frozen=True)
 class Caller:
-    """Who calls: the session ID it claims, and the process that holds
-    what it claims, with that process's start time."""
+    """Who calls: the process that holds what it claims, with that
+    process's start time, and the session ID of Claude Code when the
+    caller knows it."""
 
     session: str | None
     pid: int | None
@@ -84,14 +92,41 @@ def format_duration(seconds: float) -> str:
     return f"{secs}s"
 
 
+def slots_of(kinds: dict[str, dict]) -> dict[str, dict]:
+    """Every slot of the configured kinds, by name, with its kind, its
+    position in the kind, its CID, the vsock port of its kind and its
+    share directories."""
+    slots: dict[str, dict] = {}
+    for kind, info in kinds.items():
+        root = info.get("shareRoot")
+        for index, slot in enumerate(info["slots"], start=1):
+            name = slot["name"]
+            shares = []
+            if root is not None:
+                shares = [
+                    {"name": "in", "source": f"{root}/{name}/in", "readOnly": True},
+                    {"name": "out", "source": f"{root}/{name}/out", "readOnly": False},
+                ]
+            slots[name] = {
+                "kind": kind,
+                "index": index,
+                "cid": slot["cid"],
+                "vsockPort": info.get("vsockPort"),
+                "shares": shares,
+            }
+    return slots
+
+
 class Slots:
-    """The slots of one machine, as the generated configuration names
-    them, with the leases and units that go with them."""
+    """The slots of the configured kinds, with the leases and units that
+    go with them. With `agents_only`, only the kinds the configuration
+    lets agents use."""
 
     def __init__(
         self,
         config: dict,
         *,
+        agents_only: bool = False,
         proc_root: Path | None = None,
         run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
         probe: Callable[[int, int, float], bool] = vsock_probe,
@@ -99,10 +134,13 @@ class Slots:
         sleep: Callable[[float], None] = time.sleep,
         out: TextIO | None = None,
     ) -> None:
-        self.slots: dict[str, dict] = config["slots"]
+        kinds: dict[str, dict] = config["kinds"]
+        if agents_only:
+            kinds = {kind: info for kind, info in kinds.items() if info.get("agents")}
+        self.kind_info = kinds
+        self.slots = slots_of(kinds)
         self.state_dir = Path(config["stateDir"])
         self.systemctl = config["systemctl"]
-        self.socat = config.get("socat")
         self.up_timeout = float(config.get("upTimeout", 120))
         self.proc_root = proc_root or Path(config.get("procRoot", "/proc"))
         self.run = run
@@ -110,12 +148,24 @@ class Slots:
         self.clock = clock
         self.sleep = sleep
         self.out = out
+        self._captured = threading.local()
         self.kinds: dict[str, list[str]] = {}
         for name in sorted(self.slots, key=lambda n: (self.slots[n]["kind"], self.slots[n]["index"])):
             self.kinds.setdefault(self.slots[name]["kind"], []).append(name)
 
     def say(self, line: str = "") -> None:
-        print(line, file=self.out or sys.stdout, flush=True)
+        out = getattr(self._captured, "out", None) or self.out or sys.stdout
+        print(line, file=out, flush=True)
+
+    @contextlib.contextmanager
+    def capture(self) -> Iterator[io.StringIO]:
+        """Collect what this thread says while the context is open."""
+        out = io.StringIO()
+        self._captured.out = out
+        try:
+            yield out
+        finally:
+            self._captured.out = None
 
     # Leases.
 
@@ -175,11 +225,9 @@ class Slots:
 
     @staticmethod
     def holds(caller: Caller, lease: dict) -> bool:
-        """Whether the caller holds a lease: by the session ID of the
-        lease, or by its holding process when the caller names that
-        process."""
-        if caller.session is not None and lease.get("session") == caller.session:
-            return True
+        """Whether the caller holds a lease: the caller names the holding
+        process of the lease, with its start time. The session ID of a
+        lease is for display and decides nothing."""
         return (
             caller.pid is not None
             and caller.start is not None
@@ -211,8 +259,9 @@ class Slots:
             check=False,
         )
 
-    def control(self, verb: str, slot: str) -> None:
-        done = self.systemctl_run("--no-ask-password", verb, self.unit(slot))
+    def control(self, verb: str, slot: str, *, no_block: bool = False) -> None:
+        args = ["--no-ask-password", *(["--no-block"] if no_block else []), verb, self.unit(slot)]
+        done = self.systemctl_run(*args)
         if done.returncode != 0:
             detail = (done.stderr or done.stdout or "").strip()
             raise Refused(
@@ -248,22 +297,15 @@ class Slots:
         """Lease a slot of `kind` to the caller, start it, and wait until
         it answers. A slot the caller already holds is used again."""
         if caller.pid is None or caller.start is None:
-            raise Refused("up needs the calling process: CLAUDE_PID is not set to a running process")
+            raise Refused("up needs a holding process, and the calling process names none that runs")
         with self.locked():
             leases = self.leases()
             held = [slot for slot in self.kinds[kind] if slot in leases and self.holds(caller, leases[slot])]
             if held:
                 slot = held[0]
                 claimed = False
-                lease = dict(leases[slot])
-                lease.update(
-                    {
-                        "session": caller.session if caller.session is not None else lease.get("session"),
-                        "pid": caller.pid,
-                        "start": caller.start,
-                    }
-                )
-                self.write_lease(lease)
+                if caller.session is not None and leases[slot].get("session") != caller.session:
+                    self.write_lease(dict(leases[slot], session=caller.session))
             else:
                 free = [
                     slot for slot in self.kinds[kind] if slot not in leases or not self.alive(leases[slot])
@@ -271,7 +313,7 @@ class Slots:
                 if not free:
                     raise Refused(
                         f"every slot of the kind {kind} is held by another live session "
-                        f"({', '.join(self.kinds[kind])}); run `microvm status --all` to see the holders"
+                        f"({', '.join(self.kinds[kind])})"
                     )
                 slot = free[0]
                 claimed = True
@@ -305,7 +347,7 @@ class Slots:
                 raise Refused(
                     f"{slot} was started but its vsock port {port} did not answer within "
                     f"{int(self.up_timeout)} seconds; it stays leased to this session, "
-                    f"so run `microvm down {slot}` to stop it"
+                    f"so stop it with down {slot}"
                 )
             self.sleep(0.5)
 
@@ -316,7 +358,7 @@ class Slots:
         self.say(f"vsock cid {info['cid']}" + (f" port {port}" if port is not None else ""))
         for share in info.get("shares", []):
             mode = "read-only" if share.get("readOnly") else "writable"
-            self.say(f"share {share['source']} (guest {share['mountPoint']}, {mode})")
+            self.say(f"share {share['name']} {share['source']} ({mode} in the guest)")
 
     def status(self, caller: Caller, everything: bool) -> None:
         leases = self.leases()
@@ -346,7 +388,7 @@ class Slots:
                 if up_for is not None:
                     parts.append(f"up {format_duration(up_for)}")
             self.say("  ".join(parts))
-        self.say("kinds this session may use:")
+        self.say("kinds:")
         for kind in sorted(self.kinds):
             names = self.kinds[kind]
             free = [slot for slot in names if slot not in leases or not self.alive(leases[slot])]
@@ -362,7 +404,9 @@ class Slots:
             return f"held by {who}"
         return f"free (holder {who} is gone)"
 
-    def down(self, caller: Caller, slot: str | None) -> None:
+    def down(self, caller: Caller, slot: str | None, *, no_block: bool = False) -> None:
+        """Stop one slot, or every slot the caller holds. With
+        `no_block`, systemctl queues each stop and returns at once."""
         # Without leases there is nothing to stop and nothing to lock,
         # so the state directory is left as it is.
         if slot is None and not self.leases():
@@ -383,7 +427,7 @@ class Slots:
         failures = []
         for name in targets:
             try:
-                self.control("stop", name)
+                self.control("stop", name, no_block=no_block)
             except Refused as error:
                 failures.append(str(error))
                 continue
@@ -416,16 +460,3 @@ class Slots:
             self.say(f"reaped {name}")
         if failures:
             raise Refused("; ".join(failures))
-
-    def connect_argv(self, kind: str, caller: Caller) -> list[str]:
-        """Bring up the slot of `kind` the caller holds, or claim one,
-        and return the command that relays stdin and stdout to its vsock
-        port."""
-        # Every slot of a kind serves on the port of its kind.
-        if self.slots[self.kinds[kind][0]].get("vsockPort") is None:
-            raise Refused(f"the kind {kind} declares no vsock port, so there is nothing to connect to")
-        if not self.socat:
-            raise Refused("the configuration names no socat to relay with")
-        slot = self.up(kind, caller)
-        port = self.slots[slot]["vsockPort"]
-        return [self.socat, "STDIO", f"VSOCK-CONNECT:{self.slots[slot]['cid']}:{port}"]

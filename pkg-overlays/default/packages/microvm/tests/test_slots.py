@@ -1,160 +1,50 @@
 # SPDX-License-Identifier: MIT
-"""The program against a fake systemctl, a fake /proc and a fake vsock
-probe: claiming a free slot, using a held slot again, refusing to stop
-a slot another live session holds, reaping the slots of holders that
-are gone, the relay command of connect, and the refusal of every
-argument that is not a verb or a configured name."""
+"""The leases and the command line against a fake systemctl, a fake
+/proc and a fake vsock probe: claiming a free slot, using a held slot
+again, refusing to stop a slot another live session holds, reaping the
+slots of holders that are gone, the holding process of each verb, the
+kinds agents may use, and the refusal of every argument that is not a
+verb or a configured name."""
 
 from __future__ import annotations
 
 import contextlib
 import io
 import json
-import os
-import sys
-import tempfile
-import time
 import unittest
-from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "src"
-sys.path.insert(0, str(SRC))
-
-from microvm_slots import cli  # noqa: E402
-from microvm_slots.slots import Caller, Refused, Slots, start_time  # noqa: E402
-
-FAKE_SYSTEMCTL = """\
-import json, sys, time
-state_path, log_path = {state!r}, {log!r}
-args = sys.argv[1:]
-with open(log_path, "a") as log:
-    log.write(json.dumps(args) + "\\n")
-try:
-    state = json.load(open(state_path))
-except FileNotFoundError:
-    state = {{}}
-if args[:1] == ["--no-ask-password"]:
-    verb, unit = args[1], args[2]
-    if unit in state.get("fail", []):
-        print("Access denied", file=sys.stderr)
-        sys.exit(4)
-    active = state.setdefault("active", {{}})
-    if verb in ("start", "restart"):
-        if verb == "restart" or unit not in active:
-            active[unit] = int(time.time()) - 5
-    elif verb == "stop":
-        active.pop(unit, None)
-    json.dump(state, open(state_path, "w"))
-elif args[:1] == ["is-active"]:
-    on = args[1] in state.get("active", {{}})
-    print("active" if on else "inactive")
-    sys.exit(0 if on else 3)
-elif args[:1] == ["show"]:
-    since = state.get("active", {{}}).get(args[-1])
-    print("@%d" % since if since is not None else "")
-"""
-
-
-def stat_line(pid: int, start: str, comm: str = "claude") -> str:
-    return f"{pid} ({comm}) S " + " ".join(["0"] * 18) + f" {start} 0 0\n"
-
-
-class Fixture(unittest.TestCase):
-    def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-        self.proc = self.root / "proc"
-        self.proc.mkdir()
-        self.state = self.root / "state"
-        self.systemctl_state = self.root / "systemctl.json"
-        self.log = self.root / "systemctl.log"
-        fake = self.root / "systemctl"
-        fake.write_text(
-            f"#!{sys.executable}\n" + FAKE_SYSTEMCTL.format(state=str(self.systemctl_state), log=str(self.log))
-        )
-        fake.chmod(0o755)
-        self.config = {
-            "slots": {
-                f"probe-{k}": {
-                    "kind": "probe",
-                    "index": k,
-                    "cid": 100 + k,
-                    "vsockPort": 5000,
-                    "shares": [
-                        {
-                            "tag": "work-in",
-                            "source": f"/var/lib/probe/probe-{k}/in",
-                            "mountPoint": "/work/in",
-                            "readOnly": True,
-                        },
-                        {
-                            "tag": "work-out",
-                            "source": f"/var/lib/probe/probe-{k}/out",
-                            "mountPoint": "/work/out",
-                        },
-                    ],
-                }
-                for k in (1, 2)
-            }
-            | {"quiet-1": {"kind": "quiet", "index": 1, "cid": 201, "vsockPort": None, "shares": []}},
-            "stateDir": str(self.state),
-            "systemctl": str(fake),
-            "socat": "/nix/store/socat/bin/socat",
-            "upTimeout": 10,
-            "procRoot": str(self.proc),
-        }
-        self.answering: set[int] = {101, 102}
-        # The fake systemctl stamps units with the real time.
-        self.now = time.time()
-
-    # Fakes.
-
-    def process(self, pid: int, start: str = "4242") -> Caller:
-        (self.proc / str(pid)).mkdir(exist_ok=True)
-        (self.proc / str(pid) / "stat").write_text(stat_line(pid, start))
-        return Caller(session=f"session-{pid}", pid=pid, start=start)
-
-    def end(self, pid: int) -> None:
-        (self.proc / str(pid) / "stat").unlink()
-        (self.proc / str(pid)).rmdir()
-
-    def clock(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.now += seconds
-
-    def slots(self) -> tuple[Slots, io.StringIO]:
-        out = io.StringIO()
-        return (
-            Slots(
-                self.config,
-                probe=lambda cid, port, timeout: cid in self.answering,
-                clock=self.clock,
-                sleep=self.sleep,
-                out=out,
-            ),
-            out,
-        )
-
-    def calls(self) -> list[list[str]]:
-        if not self.log.exists():
-            return []
-        return [json.loads(line) for line in self.log.read_text().splitlines()]
-
-    def lease(self, slot: str) -> dict | None:
-        path = self.state / "leases" / f"{slot}.json"
-        return json.loads(path.read_text()) if path.exists() else None
+from fixture import Fixture, stat_line  # noqa: F401
+from microvm_slots import cli
+from microvm_slots.slots import Caller, Refused, start_time
 
 
 class SlotsCase(Fixture):
-
     def test_start_time_reads_field_22_past_a_command_with_parentheses(self) -> None:
         (self.proc / "7").mkdir()
         (self.proc / "7" / "stat").write_text(stat_line(7, "999", comm="a) (b c"))
         self.assertEqual(start_time(self.proc, 7), "999")
         self.assertIsNone(start_time(self.proc, 8))
+
+    def test_slots_come_from_the_kinds(self) -> None:
+        slots, _ = self.slots()
+        self.assertEqual(slots.kinds["probe"], ["probe-1", "probe-2"])
+        self.assertEqual(
+            slots.slots["probe-2"],
+            {
+                "kind": "probe",
+                "index": 2,
+                "cid": 102,
+                "vsockPort": 5000,
+                "shares": [
+                    {"name": "in", "source": "/var/lib/probe/probe-2/in", "readOnly": True},
+                    {"name": "out", "source": "/var/lib/probe/probe-2/out", "readOnly": False},
+                ],
+            },
+        )
+        self.assertEqual(slots.slots["quiet-1"]["shares"], [])
+        agents, _ = self.slots(agents_only=True)
+        self.assertEqual(sorted(agents.kinds), ["other", "probe", "quiet"])
+        self.assertNotIn("hidden-1", agents.slots)
 
     def test_up_claims_a_free_slot_and_records_the_holder(self) -> None:
         caller = self.process(1000)
@@ -169,11 +59,11 @@ class SlotsCase(Fixture):
         text = out.getvalue()
         self.assertIn("slot probe-1 (kind probe)", text)
         self.assertIn("vsock cid 101 port 5000", text)
-        self.assertIn("share /var/lib/probe/probe-1/in (guest /work/in, read-only)", text)
-        self.assertIn("share /var/lib/probe/probe-1/out (guest /work/out, writable)", text)
+        self.assertIn("share in /var/lib/probe/probe-1/in (read-only in the guest)", text)
+        self.assertIn("share out /var/lib/probe/probe-1/out (writable in the guest)", text)
         self.assertEqual(sorted(p.name for p in (self.state / "leases").iterdir()), ["probe-1.json"])
 
-    def test_up_uses_the_slot_the_session_holds_again(self) -> None:
+    def test_up_uses_the_slot_the_holder_holds_again(self) -> None:
         caller = self.process(1000)
         slots, _ = self.slots()
         slots.up("probe", caller)
@@ -188,6 +78,14 @@ class SlotsCase(Fixture):
             slots.up("probe", self.process(3000))
         self.assertIsNone(self.lease("quiet-1"))
 
+    def test_the_session_id_alone_holds_nothing(self) -> None:
+        slots, _ = self.slots()
+        slots.up("probe", self.process(1000))
+        same_session = Caller(session="session-1000", pid=2000, start="4242")
+        self.process(2000)
+        with self.assertRaisesRegex(Refused, "probe-1 is held by another live session"):
+            slots.down(same_session, "probe-1")
+
     def test_down_refuses_a_slot_another_live_session_holds(self) -> None:
         first, second = self.process(1000), self.process(2000)
         slots, out = self.slots()
@@ -195,12 +93,18 @@ class SlotsCase(Fixture):
         with self.assertRaisesRegex(Refused, "probe-1 is held by another live session"):
             slots.down(second, "probe-1")
         self.assertIsNotNone(self.lease("probe-1"))
-        # The session that holds it stops it, by the session ID alone, as
-        # the SessionEnd hook does.
-        slots.down(Caller(session="session-1000", pid=None, start=None), None)
+        slots.down(first, None)
         self.assertIsNone(self.lease("probe-1"))
         self.assertEqual(self.calls()[-1], ["--no-ask-password", "stop", "microvm@probe-1.service"])
         self.assertIn("stopped probe-1", out.getvalue())
+
+    def test_down_without_blocking_queues_the_stop(self) -> None:
+        caller = self.process(1000)
+        slots, _ = self.slots()
+        slots.up("probe", caller)
+        slots.down(caller, None, no_block=True)
+        self.assertEqual(self.calls()[-1], ["--no-ask-password", "--no-block", "stop", "microvm@probe-1.service"])
+        self.assertIsNone(self.lease("probe-1"))
 
     def test_a_reused_process_id_is_not_the_holder(self) -> None:
         slots, _ = self.slots()
@@ -269,27 +173,10 @@ class SlotsCase(Fixture):
         self.assertIn("probe-2  kind probe  held by session session-2000  active", text)
         self.assertIn("quiet-1  kind quiet  free  inactive", text)
 
-    def test_connect_relays_to_the_slot_and_up_finds_it_by_process(self) -> None:
-        slots, _ = self.slots()
-        claude = self.process(1000)
-        # An MCP server knows no session ID; its parent holds the slot.
-        server = Caller(session=None, pid=claude.pid, start=claude.start)
-        self.assertEqual(
-            slots.connect_argv("probe", server),
-            ["/nix/store/socat/bin/socat", "STDIO", "VSOCK-CONNECT:101:5000"],
-        )
-        self.assertIsNone(self.lease("probe-1")["session"])
-        # The agent's `up` in that session finds the slot by its process
-        # and records the session ID, so the SessionEnd hook stops it.
-        self.assertEqual(slots.up("probe", claude), "probe-1")
-        self.assertEqual(self.lease("probe-1")["session"], "session-1000")
-        with self.assertRaisesRegex(Refused, "declares no vsock port"):
-            slots.connect_argv("quiet", server)
-
 
 class CommandLineCase(Fixture):
-    """The command line, end to end over the same fakes, for a kind that
-    declares no vsock port, so no probe runs."""
+    """The command line, end to end over the same fakes, for kinds that
+    declare no vsock port, so no probe runs."""
 
     def main(self, *argv: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         config_path = self.root / "config.json"
@@ -316,6 +203,15 @@ class CommandLineCase(Fixture):
         self.assertEqual(code, 0)
         self.assertIn("stopped quiet-1", out)
 
+    def test_the_command_controls_a_kind_agents_may_not_use(self) -> None:
+        env = self.session_env(1000)
+        code, out, err = self.main("up", "hidden", env=env)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("slot hidden-1 (kind hidden)", out)
+        code, out, _ = self.main("down", env=env)
+        self.assertEqual(code, 0)
+        self.assertIn("stopped hidden-1", out)
+
     def test_arguments_outside_the_verbs_and_names_are_refused(self) -> None:
         env = self.session_env(1000)
         for argv in (
@@ -332,7 +228,9 @@ class CommandLineCase(Fixture):
             ["down", "probe-1", "probe-2"],
             ["down", "--all"],
             ["reap", "probe-1"],
-            ["connect"],
+            ["mcp", "probe"],
+            ["connect", "probe"],
+            ["relay", "probe"],
         ):
             with self.subTest(argv=argv):
                 code, out, err = self.main(*argv, env=env)
@@ -342,29 +240,36 @@ class CommandLineCase(Fixture):
         self.assertEqual(self.calls(), [])
         self.assertFalse(self.state.exists())
 
-    def test_the_trusted_wrapper_accepts_only_its_verbs(self) -> None:
-        env = self.session_env(1000) | {"MICROVM_VERBS": "up,status,down"}
-        for argv in (["reap"], ["connect", "probe"]):
-            with self.subTest(argv=argv):
-                code, _, err = self.main(*argv, env=env)
-                self.assertEqual(code, 2)
-                self.assertIn("unknown verb", err)
+    def test_a_bad_holder_is_refused(self) -> None:
+        code, _, err = self.main("up", "quiet", env={"CLAUDE_PID": "x1"})
+        self.assertEqual(code, 1)
+        self.assertIn("CLAUDE_PID is not a process ID", err)
+        code, _, err = self.main("up", "quiet", env={"CLAUDE_PID": "12345"})
+        self.assertEqual(code, 1)
+        self.assertIn("the holding process 12345 does not run", err)
         self.assertEqual(self.calls(), [])
 
-    def test_session_variables_are_checked(self) -> None:
-        code, _, err = self.main("up", "quiet", env={"CLAUDE_CODE_SESSION_ID": "x/../y", "CLAUDE_PID": "1"})
-        self.assertEqual(code, 1)
-        self.assertIn("not a session ID", err)
-        code, _, err = self.main("up", "quiet", env={"CLAUDE_CODE_SESSION_ID": "s", "CLAUDE_PID": "12345"})
-        self.assertEqual(code, 1)
-        self.assertIn("names no running process", err)
-        code, _, err = self.main("up", "quiet", env={"CLAUDE_CODE_SESSION_ID": "s"})
-        self.assertEqual(code, 1)
-        self.assertIn("CLAUDE_PID", err)
-        code, _, err = self.main("down")
-        self.assertEqual(code, 1)
-        self.assertIn("needs the calling session", err)
-        self.assertEqual(self.calls(), [])
+    def test_the_holder_is_claude_pid_or_the_parent(self) -> None:
+        self.process(1000)
+        self.process(2000, start="77")
+        env = {"CLAUDE_PID": "1000", "CLAUDE_CODE_SESSION_ID": "s-1"}
+        # A verb a user types names CLAUDE_PID when it is set.
+        self.assertEqual(
+            cli.caller_from(env, self.proc, 2000, claude_pid=True),
+            Caller(session="s-1", pid=1000, start="4242"),
+        )
+        self.assertEqual(
+            cli.caller_from({}, self.proc, 2000, claude_pid=True),
+            Caller(session=None, pid=2000, start="77"),
+        )
+        # The MCP server names its parent, Claude Code, whatever the
+        # environment says.
+        self.assertEqual(
+            cli.caller_from(env, self.proc, 2000, claude_pid=False),
+            Caller(session="s-1", pid=2000, start="77"),
+        )
+        # A malformed session ID is not recorded.
+        self.assertIsNone(cli.caller_from({"CLAUDE_CODE_SESSION_ID": "x/../y"}, self.proc, 2000, claude_pid=False).session)
 
     def test_without_a_configuration_nothing_runs(self) -> None:
         out, err = io.StringIO(), io.StringIO()

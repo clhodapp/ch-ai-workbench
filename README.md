@@ -44,10 +44,11 @@ CLI's native sandbox rules. Enforcement is Claude
 Code's own; Nix authors its configuration. Design and boundaries in
 [`docs/development/claude-code-sandbox.md`](docs/development/claude-code-sandbox.md).
 
-**Guests for sessions.** A home declared inside a caisson NixOS
-machine reads the microvm guest slots of that machine from the tree.
-A session leases a slot, starts it and stops it with the `microvm`
-command, through a trusted executable of the sandbox. Design in
+**Guests for sessions.** A home declares the microvm guest kinds of
+its machine as options. A session leases a guest, starts it and stops
+it through the MCP server `microvm`, which also offers the tools of a
+guest that serves MCP. Agents get only the kinds marked for them. The
+user controls every kind with the `microvm` command. Design in
 [`docs/development/microvm-guests.md`](docs/development/microvm-guests.md).
 
 **The two halves talking.** A session's working directory follows into
