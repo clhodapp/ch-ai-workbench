@@ -18,6 +18,7 @@
       claude-code
       claude-code-sandbox
       emacs-integration
+      microvm
       zsh
       ;
   };
@@ -189,6 +190,82 @@
                 ];
               }).config.home-files;
 
+            # Homes of `tester` that select the microvm module with the
+            # given kinds.
+            microvmHome =
+              kinds:
+              (inputs.home-manager.lib.homeManagerConfiguration {
+                inherit pkgs;
+                modules = [
+                  self.modules.homeManager.claude-code
+                  self.modules.homeManager.microvm
+                  {
+                    home.username = "tester";
+                    home.homeDirectory = "/home/tester";
+                    home.stateVersion = "25.05";
+                    ch-ai-workbench.claude-code.enable = true;
+                    ch-ai-workbench.microvm.kinds = kinds;
+                  }
+                ];
+              }).config;
+            # Two slots of `probe`, which serves MCP, and one of `quiet`,
+            # which does not, both for agents, and one of `hidden`, which
+            # agents may not use.
+            microvmKinds = {
+              probe = {
+                slots = [
+                  {
+                    name = "probe-1";
+                    cid = 101;
+                  }
+                  {
+                    name = "probe-2";
+                    cid = 102;
+                  }
+                ];
+                vsockPort = 5000;
+                shareRoot = "/var/lib/probe";
+                agents = true;
+                mcp.description = "Probes binaries.";
+              };
+              quiet = {
+                slots = [
+                  {
+                    name = "quiet-1";
+                    cid = 201;
+                  }
+                ];
+                agents = true;
+              };
+              hidden = {
+                slots = [
+                  {
+                    name = "hidden-1";
+                    cid = 301;
+                  }
+                ];
+              };
+            };
+            microvmFullHome = microvmHome microvmKinds;
+            microvmHiddenHome = microvmHome { inherit (microvmKinds) hidden; };
+            microvmBareHome = microvmHome { };
+            # Homes that fail an assertion of the module: a CID that two
+            # kinds give, a slot name that two kinds give, and a kind
+            # that serves MCP on no port. home-manager refuses to
+            # evaluate a home whose assertions fail.
+            microvmRefused =
+              kind:
+              !(builtins.tryEval (microvmHome ({ inherit (microvmKinds) hidden; } // kind)).home.packages)
+              .success;
+            microvmClash =
+              slot: extra:
+              microvmRefused {
+                clash = {
+                  slots = [ slot ];
+                }
+                // extra;
+              };
+
             # The hook packages from this layer's library, so the checks
             # below drive the same scripts a real configuration installs.
             claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
@@ -219,6 +296,111 @@
               landlock-shim = self.packages.${system}.landlock-shim;
               # Building runs the integration tests of call against serve.
               trusted-exec = self.packages.${system}.trusted-exec;
+              # Building runs the unittest suite of the microvm program
+              # against a fake systemctl, /proc and vsock probe.
+              microvm = self.packages.${system}.microvm;
+
+              # The microvm module with kinds from its options. The full
+              # home gets the command with the kinds baked in, the reap
+              # timer, and the plugin with the MCP server `microvm`, which
+              # offers the kinds for agents and no other. The home whose
+              # only kind is not for agents gets the command and the
+              # timer and no plugin. The home without kinds gets none of
+              # it. A CID or a slot name that two kinds give, and a kind
+              # that serves MCP on no port, fail an assertion.
+              microvm-home-module =
+                assert microvmFullHome.ch-ai-workbench.claude-code.skills ? microvm;
+                assert !(microvmHiddenHome.ch-ai-workbench.claude-code.skills ? microvm);
+                assert microvmHiddenHome.systemd.user.timers ? ch-ai-workbench-microvm-reap;
+                assert builtins.elem microvmHiddenHome.ch-ai-workbench.microvm.package
+                  microvmHiddenHome.home.packages;
+                assert !(microvmBareHome.ch-ai-workbench.claude-code.skills ? microvm);
+                assert !(microvmBareHome.systemd.user.timers ? ch-ai-workbench-microvm-reap);
+                assert
+                  !(builtins.elem microvmBareHome.ch-ai-workbench.microvm.package microvmBareHome.home.packages);
+                # The control: a kind of its own name and CID evaluates.
+                assert
+                  !microvmClash {
+                    name = "clash-1";
+                    cid = 302;
+                  } { };
+                assert microvmClash {
+                  name = "clash-1";
+                  cid = 301;
+                } { };
+                assert microvmClash {
+                  name = "hidden-1";
+                  cid = 302;
+                } { };
+                assert microvmClash {
+                  name = "clash-1";
+                  cid = 302;
+                } { mcp.description = "Nothing."; };
+                pkgs.runCommand "microvm-home-module"
+                  {
+                    nativeBuildInputs = [ pkgs.jq ];
+                    files = microvmFullHome.home-files;
+                    command = lib.getExe microvmFullHome.ch-ai-workbench.microvm.package;
+                    installed = builtins.elem microvmFullHome.ch-ai-workbench.microvm.package microvmFullHome.home.packages;
+                  }
+                  ''
+                    test "$installed" = 1
+                    units=$files/.config/systemd/user
+
+                    # The reap timer and its service, with the access the
+                    # module leaves it.
+                    grep -qx 'OnCalendar=minutely' "$units/ch-ai-workbench-microvm-reap.timer"
+                    service=$units/ch-ai-workbench-microvm-reap.service
+                    grep -qx "ExecStart=$command reap" "$service"
+                    for line in PrivateUsers=true ProtectSystem=strict ProtectHome=read-only \
+                      "ReadWritePaths=/home/tester/.local/state/ch-ai-workbench/microvm" \
+                      "RestrictAddressFamilies=AF_UNIX" NoNewPrivileges=true; do
+                      grep -qx "$line" "$service"
+                    done
+
+                    # The plugin declares the MCP server `microvm` and no
+                    # other.
+                    manifest=$files/.claude/skills/microvm/.claude-plugin/plugin.json
+                    jq -e '.name == "microvm"' "$manifest"
+                    jq -e --arg c "$command" '.mcpServers == {microvm: {command: $c, args: ["mcp"]}}' "$manifest"
+
+                    # The command has every kind baked in. No systemd runs
+                    # here, so the unit state is unknown.
+                    "$command" status --all > status.txt
+                    grep -qx 'probe-1  kind probe  free  unknown' status.txt
+                    grep -qx 'probe-2  kind probe  free  unknown' status.txt
+                    grep -qx 'hidden-1  kind hidden  free  unknown' status.txt
+                    grep -qx '  probe: 2 slots, 2 free' status.txt
+                    rc=0
+                    "$command" up nope 2> err.txt || rc=$?
+                    test "$rc" = 2
+                    grep -q "^microvm: unknown kind 'nope'" err.txt
+
+                    # The MCP server over stdio offers the kinds for agents
+                    # and refuses `hidden`. Its input stays open until the
+                    # four answers are out, since it stops at the end of
+                    # its input.
+                    touch mcp.jsonl
+                    {
+                      echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
+                      echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+                      echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"microvm_up","arguments":{"kind":"hidden"}}}'
+                      echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"microvm_status","arguments":{"all":true}}}'
+                      for _ in $(seq 600); do
+                        [ "$(wc -l < mcp.jsonl)" -ge 4 ] && break
+                        sleep 0.1
+                      done
+                    } | "$command" mcp > mcp.jsonl 2> mcp.err
+                    jq -s -e 'map(.id) | sort == [1, 2, 3, 4]' mcp.jsonl
+                    jq -s -e 'map(select(.id == 1))[0].result.serverInfo.name == "microvm"' mcp.jsonl
+                    jq -s -e 'map(select(.id == 2))[0].result.tools | map(.name) == ["microvm_up", "microvm_down", "microvm_status"]' mcp.jsonl
+                    jq -s -e 'map(select(.id == 2))[0].result.tools[0].inputSchema.properties.kind.enum == ["probe", "quiet"]' mcp.jsonl
+                    jq -s -e 'map(select(.id == 2))[0].result.tools[1].inputSchema.properties.slot.enum == ["probe-1", "probe-2", "quiet-1"]' mcp.jsonl
+                    jq -s -e 'map(select(.id == 3))[0].result | .isError and (.content[0].text | test("unknown kind .hidden."))' mcp.jsonl
+                    jq -s -e 'map(select(.id == 4))[0].result.content[0].text | test("probe-1  kind probe  free") and (test("hidden") | not)' mcp.jsonl
+                    grep -qx 'this session holds no slots' mcp.err
+                    touch $out
+                  '';
 
               # The CLI composing the parts the home-manager module
               # builds, end to end: the registry and parts come from a
@@ -403,6 +585,8 @@
                     self.modules.homeManager.claude-code
                     self.modules.homeManager.claude-code-sandbox
                     self.modules.homeManager.emacs-integration
+                    # Without kinds, the microvm module adds nothing.
+                    self.modules.homeManager.microvm
                     {
                       home.username = "tester";
                       home.homeDirectory = "/home/tester";
