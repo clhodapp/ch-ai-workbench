@@ -135,6 +135,29 @@ a thread of its own, so a guest that boots does not hold up the calls
 to other guests. The server starts a guest only when `microvm_up` asks
 for it.
 
+### Share directories from Bash
+
+Claude Code's sandbox of Bash lets a command write only the checkout
+and the temporary directory of the session. The share directories of a
+guest lie outside both. For each kind that sets `agents` and
+`shareRoot`, the module therefore declares the claude-code-sandbox
+module `microvm-<kind>`. It lists `<shareRoot>/<slot>` for every slot
+of the kind in both `extraAllowRead` and `allowWrite`. A checkout that
+chooses it, with `claude-code-sandbox add microvm-<kind>`, can copy a
+target into `<shareRoot>/<slot>/in` from Bash and read what the guest
+writes to `<shareRoot>/<slot>/out`. The grant names the directories of
+the slots and not `shareRoot` itself, so the commands reach nothing
+else that lies under the share root.
+
+There is one sandbox module per kind, so a checkout that works with
+one kind reaches the share directories of that kind and of no other.
+The module declares the sandbox modules only when the home also
+selects the claude-code-sandbox module of this layer, since the option
+they go in comes from that module. The result of `microvm_up` for a
+kind with a share root lists the host paths of the shares and says
+that Bash commands reach them only in a checkout that has chosen
+`microvm-<kind>`.
+
 ### Guests that serve MCP
 
 When `microvm_up` brings up a slot of a kind that sets `mcp` and its
@@ -227,7 +250,10 @@ A machine that runs guests for its sessions:
   `claude-code`, with `claude-code` enabled, and sets
   `ch-ai-workbench.microvm.kinds.<kind>` from the same names, CIDs,
   port and share root, with `agents = true` and `mcp` for a kind whose
-  guests serve MCP.
+  guests serve MCP;
+- selects `claude-code-sandbox` in that home as well when the Bash
+  commands of agents should reach the share directories, and chooses
+  `microvm-<kind>` in the checkouts that work with the kind.
 
 ## Checks
 
@@ -241,7 +267,10 @@ connection, and the stops at the end of input. The check
 `microvm-home-module` evaluates homes with kinds from the options. The
 home with kinds for agents gets the command, the reap timer and the
 plugin with the server `microvm`, whose tools over stdio list only the
-kinds for agents and refuse the others. A home whose only kind is not
-for agents gets the command and the timer and no plugin. A home
-without kinds gets none of it, and a repeated CID or slot name, or a
-kind with `mcp` and no port, fails an assertion.
+kinds for agents and refuse the others. That home also gets the
+sandbox module `microvm-probe`, whose read and write paths are exactly
+the directories of the two slots of `probe`, and no sandbox module for
+`quiet`, which has no share root. A home whose only kind is not for
+agents gets the command and the timer, no plugin and no sandbox
+module. A home without kinds gets none of it, and a repeated CID or
+slot name, or a kind with `mcp` and no port, fails an assertion.

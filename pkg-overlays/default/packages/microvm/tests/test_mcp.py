@@ -179,6 +179,7 @@ class ServerCase(Fixture):
         result = self.call("microvm_up", {"kind": "quiet"})
         self.assertNotIn("isError", result)
         self.assertIn("slot quiet-1 (kind quiet)\nvsock cid 201", self.text(result))
+        self.assertNotIn("sandbox module", self.text(result))
         self.assertEqual(self.connects, [])
         self.assertEqual(self.tool_names(), list(MANAGER_TOOLS))
 
@@ -186,6 +187,8 @@ class ServerCase(Fixture):
         result = self.call("microvm_up", {"kind": "probe"})
         self.assertNotIn("isError", result)
         self.assertIn("slot probe-1 (kind probe)", self.text(result))
+        self.assertIn("share out /var/lib/probe/probe-1/out (writable in the guest)", self.text(result))
+        self.assertIn("only when its checkout has chosen the sandbox module microvm-probe\n", self.text(result))
         self.assertIn("tools of this server now: open_binary, slow", self.text(result))
         self.assertEqual(self.connects, [(101, 5000)])
         self.assertEqual(self.list_changes(), 1)

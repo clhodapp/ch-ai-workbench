@@ -55,6 +55,17 @@ def kind_line(kind: str, info: dict) -> str:
     return line
 
 
+def share_line(kind: str, info: dict) -> str:
+    """What the result of `microvm_up` says about reaching the share
+    directories of a guest of `kind` from Bash."""
+    if info.get("shareRoot") is None:
+        return ""
+    return (
+        "Bash commands of a session reach these share directories only when its checkout has "
+        f"chosen the sandbox module microvm-{kind}\n"
+    )
+
+
 def manager_tools(slots: Slots) -> list[dict[str, Any]]:
     kinds = sorted(slots.kinds)
     names = sorted(slots.slots)
@@ -65,7 +76,9 @@ def manager_tools(slots: Slots) -> list[dict[str, Any]]:
             "description": (
                 "Lease a guest virtual machine of a kind to this session, start it, and wait until it "
                 "answers. The result names the slot, its vsock CID and port, and its share directories "
-                "on the host. A guest this session already holds is used again. When the kind serves "
+                "on the host. Bash commands reach the share directories of a kind only in a checkout "
+                "that has chosen the sandbox module microvm-<kind>. "
+                "A guest this session already holds is used again. When the kind serves "
                 "MCP, the tools of the guest then appear among the tools of this server. Start a guest "
                 "only when the task needs it: each takes memory and the slots of a kind are few. "
                 f"The kinds: {listing}."
@@ -293,7 +306,8 @@ class Server:
         if error is not None:
             self.reply(msg_id, text_result(text + error, is_error=True))
         elif name == "microvm_up":
-            self.connect_guest(args["kind"], msg_id, text)
+            kind = args["kind"]
+            self.connect_guest(kind, msg_id, text + share_line(kind, self.slots.kind_info[kind]))
         else:
             self.reply(msg_id, text_result(text))
 
