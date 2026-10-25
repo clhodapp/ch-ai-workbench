@@ -14,11 +14,20 @@
 # claude-code module of this layer, so a home that lets agents use a
 # kind selects that module as well.
 #
+# For each kind that agents may use and that has a share root, the
+# module declares the claude-code-sandbox module `microvm-<kind>`. It
+# grants Bash commands read and write access to `<shareRoot>/<slot>`
+# for every slot of the kind. A checkout that chooses it can put
+# targets into the `in` share of a slot and read its `out` share. The
+# module declares these sandbox modules when the home also selects the
+# claude-code-sandbox module of this layer.
+#
 # docs/development/microvm-guests.md describes the whole mechanism.
 { ... }:
 {
   config,
   lib,
+  options,
   pkgs,
   ...
 }:
@@ -94,7 +103,12 @@ let
         description = ''
           Whether agents may use the kind. The MCP server `microvm`
           offers only the kinds that set this. The `microvm` command
-          controls every kind.
+          controls every kind. When the kind has a `shareRoot` and the
+          home selects the claude-code-sandbox module of this layer, the
+          sandbox module `microvm-<kind>` grants read and write access
+          to `<shareRoot>/<slot>` for every slot of the kind. The Bash
+          commands of a checkout that chooses it reach the share
+          directories.
         '';
       };
       mcp = lib.mkOption {
@@ -123,6 +137,20 @@ let
   kinds = cfg.kinds;
 
   agentKinds = lib.filterAttrs (_: kind: kind.agents) kinds;
+
+  # One sandbox module per kind, so a checkout that works with one kind
+  # reaches the share directories of that kind and of no other.
+  sandboxModules = lib.mapAttrs' (
+    name: kind:
+    let
+      paths = map (slot: "${kind.shareRoot}/${slot.name}") kind.slots;
+    in
+    lib.nameValuePair "microvm-${name}" {
+      description = "Read and write the share directories of the microvm guests of kind ${name}: ${lib.concatStringsSep ", " paths}";
+      extraAllowRead = paths;
+      allowWrite = paths;
+    }
+  ) (lib.filterAttrs (_: kind: kind.shareRoot != null) agentKinds);
 
   allSlots = lib.concatMap (kind: kind.slots) (builtins.attrValues kinds);
 
@@ -339,6 +367,9 @@ in
         ];
 
         ch-ai-workbench.claude-code.skills.microvm.source = plugin;
+      })
+      (lib.optionalAttrs (options ? ch-ai-workbench.claude-code-sandbox) {
+        ch-ai-workbench.claude-code-sandbox.modules = sandboxModules;
       })
     ]
   );

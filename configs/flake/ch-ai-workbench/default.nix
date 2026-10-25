@@ -198,6 +198,7 @@
                 inherit pkgs;
                 modules = [
                   self.modules.homeManager.claude-code
+                  self.modules.homeManager.claude-code-sandbox
                   self.modules.homeManager.microvm
                   {
                     home.username = "tester";
@@ -208,8 +209,9 @@
                   }
                 ];
               }).config;
-            # Two slots of `probe`, which serves MCP, and one of `quiet`,
-            # which does not, both for agents, and one of `hidden`, which
+            # Two slots of `probe`, which serves MCP and has shares, and
+            # one of `quiet`, which serves no MCP and has no shares, both
+            # for agents, and one of `hidden`, which has shares and which
             # agents may not use.
             microvmKinds = {
               probe = {
@@ -244,6 +246,7 @@
                     cid = 301;
                   }
                 ];
+                shareRoot = "/var/lib/hidden";
               };
             };
             microvmFullHome = microvmHome microvmKinds;
@@ -307,8 +310,24 @@
               # only kind is not for agents gets the command and the
               # timer and no plugin. The home without kinds gets none of
               # it. A CID or a slot name that two kinds give, and a kind
-              # that serves MCP on no port, fail an assertion.
+              # that serves MCP on no port, fail an assertion. The full
+              # home gets the sandbox module `microvm-probe`, which grants
+              # exactly the directories of the slots of `probe`, and no
+              # sandbox module for `quiet`, which has no share root, or
+              # for `hidden`, which agents may not use.
               microvm-home-module =
+                let
+                  probeSlotDirs = [
+                    "/var/lib/probe/probe-1"
+                    "/var/lib/probe/probe-2"
+                  ];
+                  sandboxModulesOf = home: home.ch-ai-workbench.claude-code-sandbox.modules;
+                in
+                assert builtins.attrNames (sandboxModulesOf microvmFullHome) == [ "microvm-probe" ];
+                assert (sandboxModulesOf microvmFullHome).microvm-probe.allowWrite == probeSlotDirs;
+                assert (sandboxModulesOf microvmFullHome).microvm-probe.extraAllowRead == probeSlotDirs;
+                assert sandboxModulesOf microvmHiddenHome == { };
+                assert sandboxModulesOf microvmBareHome == { };
                 assert microvmFullHome.ch-ai-workbench.claude-code.skills ? microvm;
                 assert !(microvmHiddenHome.ch-ai-workbench.claude-code.skills ? microvm);
                 assert microvmHiddenHome.systemd.user.timers ? ch-ai-workbench-microvm-reap;

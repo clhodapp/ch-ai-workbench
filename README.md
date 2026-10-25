@@ -47,7 +47,10 @@ Code's own; Nix authors its configuration. Design and boundaries in
 **Guests for sessions.** A home declares the microvm guest kinds of
 its machine as options. A session leases a guest, starts it and stops
 it through the MCP server `microvm`, which also offers the tools of a
-guest that serves MCP. Agents get only the kinds marked for them. The
+guest that serves MCP. Agents get only the kinds marked for them. For
+each such kind with share directories, the home declares the sandbox
+module `microvm-<kind>`, and the Bash commands of a checkout that
+chooses it can write and read the share directories of the guests. The
 user controls every kind with the `microvm` command. Design in
 [`docs/development/microvm-guests.md`](docs/development/microvm-guests.md).
 
