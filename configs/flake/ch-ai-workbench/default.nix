@@ -831,6 +831,7 @@
                     jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
                     tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("undefined-terms") and (has("arguing-with-ghosts") | not))'
                     tail -n 1 requests.log | jq -e '.questions.density.type == "score" and (.questions.density.criteria | length) == 4'
+                    tail -n 1 requests.log | jq -e '.questions["information-density"].criteria[1] | startswith("even")'
                     ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
                     grep -q -- '- readability 0 of 3, most likely an average developer can follow it ' <<<"$ctx"
                     lacks 'These problems' <<<"$ctx"

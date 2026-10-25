@@ -40,5 +40,21 @@ in
 
   jargon = effort "given its jargon that is not standard for a working programmer in this domain: terms coined during the work, project-internal names used without saying what they are, unusual words where plain ones exist (standard technical terms of the domain count as ecosystem knowledge)" "define each project-specific concept at first use; no shorthand coined during the session";
 
+  # Off the ladder: how much the reply itself packs into each sentence,
+  # whoever reads it.  Both ends are a problem, filler at one and
+  # unbroken fact after fact at the other.
+  information-density = {
+    type = "score";
+    instructions = "How much does each sentence of the message carry, whoever reads it?";
+    levels = [
+      "sparse: filler, repetition, or points restated"
+      "even: about one point per sentence"
+      "dense: several facts per sentence"
+      "packed: nearly every clause carries a fact the reader has to stop and take in"
+    ];
+    rule = "one point per sentence, with the words it needs; cut filler and restatement";
+    targets = [ "reply" ];
+  };
+
   generic-concept-words = effort "given generic nouns used as if they named a specific concept without saying what it is, such as \"the fold\", \"the gate\", \"the surface\", \"the shape\", or \"the path\"" "name the actual thing (the function, the file, the check) instead of a generic noun that stands for it";
 }

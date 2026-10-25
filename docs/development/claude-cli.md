@@ -568,7 +568,10 @@ output-style rule that needs judgment (seeded from
   length, density, sentence complexity, nuance, references to things
   outside the message, non-standard jargon, and generic concept words
   such as "the fold". A long reply that an average developer can follow
-  therefore scores low on length.
+  therefore scores low on length. A ninth score, `information-density`,
+  sits beside the ladder. It measures how much each sentence of the
+  reply carries, whoever reads it, from sparse (filler, restatement)
+  through even (one point per sentence) to packed.
   qev answers a score with a probability per level and their expected
   level index. The client reports that index, the most likely level,
   and its probability. The context hook lists every score, highest
@@ -590,7 +593,7 @@ output-style rule that needs judgment (seeded from
 - **Latency.** On an R9700, decision-server answers a request of two or
   three questions over a few hundred tokens in 0.15 to 0.26 s, and ten
   questions over 5k tokens in 1.2 s (ch-local-llms README). The judge
-  asks a reply eighteen (ten nouls and the eight scores), a prose
+  asks a reply nineteen (ten nouls and the nine scores), a prose
   write the ten prose nouls plus arguing-with-ghosts, and a code write
   one. The hooks that run it are registered with a timeout of 10
   s plus the sum of the enabled endpoints' timeouts (30 s each by
