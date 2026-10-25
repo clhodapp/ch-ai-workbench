@@ -102,7 +102,17 @@ The verbs:
   a holder that is gone does not carry its state into the next
   session. A restart is not used because, with the pinned microvm.nix,
   a restart of a cloud-hypervisor guest that has a vsock CID does not
-  complete.
+  complete. Between the stop and the start, `up` empties the share
+  directories `in` and `out` of the newly leased slot, so the session
+  finds none of the files of an earlier holder. The two directories
+  stay. A share directory that does not exist stays missing, since the
+  host creates it when the guest starts. The guest can write symbolic
+  links into `out`, so `up` follows no symbolic link: it removes each
+  link and keeps its target. A share directory that is itself a
+  symbolic link is not emptied. When emptying a share fails, `up`
+  releases the lease, as it does when the start fails, and the error
+  names the slot and the path of the share. A slot the caller already
+  holds keeps the files in its shares.
 - `microvm status [--all]` shows the slots the caller holds, each with
   the state of its unit, whether it answers, and its uptime from the
   `ActiveEnterTimestamp` of the unit. With `--all` it shows every slot

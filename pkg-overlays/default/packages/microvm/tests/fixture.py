@@ -136,12 +136,15 @@ class Fixture(unittest.TestCase):
             f"#!{sys.executable}\n" + FAKE_SYSTEMCTL.format(state=str(self.systemctl_state), log=str(self.log))
         )
         fake.chmod(0o755)
+        # The share root of `probe`. No share directory exists until a
+        # test creates it.
+        self.shares = self.root / "shares"
         self.config = {
             "kinds": {
                 "probe": {
                     "slots": [{"name": "probe-1", "cid": 101}, {"name": "probe-2", "cid": 102}],
                     "vsockPort": 5000,
-                    "shareRoot": "/var/lib/probe",
+                    "shareRoot": str(self.shares),
                     "agents": True,
                     "mcp": {"description": "Probes binaries."},
                 },

@@ -25,6 +25,7 @@ import fcntl
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -107,6 +108,52 @@ def slots_of(kinds: dict[str, dict]) -> dict[str, dict]:
                 "shares": shares,
             }
     return slots
+
+
+def open_directory_nofollow(path: str) -> int:
+    """Open the directory at the absolute `path` one component at a time
+    from `/`, each without following a symbolic link, and return its
+    descriptor. A link at any component raises an error, so a session
+    that can write a directory above a share cannot point the share at
+    a directory elsewhere."""
+    if not os.path.isabs(path):
+        raise ValueError(f"{path} is not an absolute path")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open("/", flags)
+    try:
+        for part in [p for p in path.split("/") if p]:
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def empty_directory(path: str) -> None:
+    """Remove everything inside the directory `path` and keep `path`
+    itself. A missing `path` stays missing. The guest can write symbolic
+    links into a share, so no symbolic link is followed: a link is
+    removed and its target is kept. Every component of `path` is opened
+    without following a link, so a share directory, or a directory above
+    it, that was replaced by a link raises an error. The walk is relative
+    to open directories, with the `shutil.rmtree` that resists symbolic
+    link attacks."""
+    try:
+        fd = open_directory_nofollow(path)
+    except FileNotFoundError:
+        return
+    try:
+        with os.scandir(fd) as entries:
+            names = [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in entries]
+        for name, is_dir in names:
+            if is_dir:
+                shutil.rmtree(name, dir_fd=fd)
+            else:
+                os.unlink(name, dir_fd=fd)
+    finally:
+        os.close(fd)
 
 
 class Slots:
@@ -304,7 +351,8 @@ class Slots:
 
     def up(self, kind: str, caller: Caller) -> str:
         """Lease a slot of `kind` to the caller, start it, and wait until
-        it answers. A slot the caller already holds is used again."""
+        it answers. A slot the caller already holds is used again and
+        keeps its files. A newly claimed slot starts with empty shares."""
         if caller.pid is None or caller.start is None:
             raise Refused("up needs a holding process, and the calling process names none that runs")
         with self.locked():
@@ -333,9 +381,12 @@ class Slots:
             # gone, so it is stopped and then started: the session gets
             # a fresh guest. A restart is not used because, with the
             # pinned microvm.nix, a restart of a cloud-hypervisor guest
-            # that has a vsock CID does not complete.
+            # that has a vsock CID does not complete. The shares are
+            # emptied while the guest is stopped, so the session also
+            # gets none of the files of the holder before it.
             if claimed:
                 self.control("stop", slot)
+                self.clear_shares(slot)
             self.control("start", slot)
         except Refused:
             if claimed:
@@ -348,6 +399,18 @@ class Slots:
         self.wait_answering(slot)
         self.describe(slot)
         return slot
+
+    def clear_shares(self, slot: str) -> None:
+        """Empty the share directories of `slot` and keep the directories
+        themselves. A share directory that does not exist stays missing,
+        since the host creates it when the guest starts."""
+        for share in self.slots[slot]["shares"]:
+            try:
+                empty_directory(share["source"])
+            except OSError as error:
+                raise Refused(
+                    f"emptying the share {share['name']} of {slot} at {share['source']} failed: {error}"
+                ) from None
 
     def wait_answering(self, slot: str) -> None:
         """Wait until the guest in `slot` answers on its vsock port. A
