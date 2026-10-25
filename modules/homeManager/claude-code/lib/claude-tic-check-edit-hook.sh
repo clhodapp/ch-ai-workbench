@@ -2,7 +2,7 @@
 # NotebookEdit, and the emacs server's edit-file / edit-buffer): the
 # edit-side twin of claude-tic-check-hook.sh.  The text a call writes
 # (new_string, content, new_source, or new-string) is matched against
-# the same table, and for a prose file also scored by the judge
+# the same table, and also scored by the judge as prose or code
 # (tic_verdict and tic_findings from tic-check-match.sh, prepended by
 # the package wrapper with $table and $judge); on a finding the call is denied once
 # with the matching lines and rules, and the reason comes back to the
@@ -34,15 +34,19 @@ key=$(jq -c '{tool_name, tool_input}' <<<"$payload" 2>/dev/null | sha256sum | cu
 seen="$runtime/claude-tic-check/seen/${session:0:8}-$key"
 [ -e "$seen" ] && exit 0
 
-# The judge reads prose only: a write to a file (or a buffer named
-# like one) whose extension is in judge.proseExtensions.  Code and
-# its comments get the regex table alone.
+# A write to a file (or a buffer named like one) whose extension is in
+# judge.proseExtensions is judged as prose, any other write as code;
+# each kind is asked only the dimensions that target it.  The text an
+# Edit replaces and the user's latest messages (read from the session
+# transcript) go beside the new text, so the judge can see what the
+# edit removes and what correction the new text may be answering.
 target=$(field '.tool_input.file_path // .tool_input.notebook_path // .tool_input.file // .tool_input.buffer')
-verdict=
+kind=code
 if [[ $target == *.* ]] &&
   jq -en --arg ext "${target##*.}" --slurpfile c "$judge" '$c[0].proseExtensions | index($ext)' >/dev/null 2>&1; then
-  verdict=$(tic_verdict edit "$text")
+  kind=prose
 fi
+verdict=$(tic_verdict "$kind" "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
 
 findings=$(tic_findings "$text" "$verdict")
 [ -n "$findings" ] || exit 0

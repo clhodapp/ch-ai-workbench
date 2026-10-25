@@ -780,8 +780,10 @@
               # character fires whatever the judge says; a verdict below
               # pushBackAbove (and a report-only dimension above it) does
               # not block and reaches the next prompt once as context;
-              # the rewrite step is unchanged; the edit hook asks the
-              # judge for a prose file only and still lets an identical
+              # the rewrite step is unchanged; the edit hook asks a code
+              # write only the dimensions that target code, sends an
+              # Edit's replaced text beside the new text, asks a prose
+              # write the prose dimensions, and still lets an identical
               # re-issue through.
               claude-tic-check-judge =
                 pkgs.runCommand "claude-tic-check-judge"
@@ -825,7 +827,7 @@
                     # the next prompt, which has nothing to report.
                     [ -z "$(stop 'The merge step is yours.')" ]
                     jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
-                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("undefined-terms"))'
+                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("undefined-terms") and (has("arguing-with-ghosts") | not))'
                     [ -z "$(prompt)" ]
                     [ ! -e "$stored" ]
 
@@ -860,11 +862,25 @@
                     res=$(jq -cn '{session_id: "s", stop_hook_active: true, last_assistant_message: "tic-check: tic"}' | "$hook")
                     reason <<<"$res" | grep -q '^tic-check: rewrite'
 
-                    # The edit side: the judge for a prose file only.
+                    # The edit side: code is asked only the dimensions
+                    # that target code.
                     answers '{"fragments": 0.95}'
-                    before=$(wc -l < requests.log)
                     [ -z "$(write src/main.nix 'Build green, pushed.')" ]
-                    [ "$(wc -l < requests.log)" = "$before" ]
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("source file")) and (.questions | keys) == ["arguing-with-ghosts"]'
+
+                    # A comment explaining a deleted line after a
+                    # correction, judged with the replaced text and the
+                    # user's latest message beside it.
+                    answers '{"arguing-with-ghosts": 0.95}'
+                    jq -cn '{type: "user", message: {role: "user", content: "drop nix.package from the homes"}}' > transcript.jsonl
+                    res=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "home.nix", old_string: "nix.package = pkgs.nix;", new_string: "# nix.package is not set here."}}' | "$edit")
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '.state["replaced text"] == "nix.package = pkgs.nix;"'
+                    tail -n 1 requests.log | jq -e '[.state | to_entries[] | select(.key | contains("latest messages")) | .value] == [["drop nix.package from the homes"]]'
+
+                    # A prose file is asked the prose dimensions.
+                    answers '{"fragments": 0.95}'
                     res=$(write docs/notes.md 'Build green, pushed.')
                     [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.95): '

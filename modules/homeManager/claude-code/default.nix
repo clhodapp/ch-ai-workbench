@@ -128,6 +128,7 @@ let
         instructions
         criteria
         rule
+        targets
         pushBack
         ;
     }) enabledDimensions;
@@ -778,6 +779,28 @@ in
                 description = "One-line reminder returned to the model when the judge pushes back or reports on this dimension.";
               };
 
+              targets = lib.mkOption {
+                type = lib.types.listOf (
+                  lib.types.enum [
+                    "reply"
+                    "prose"
+                    "code"
+                  ]
+                );
+                default = [
+                  "reply"
+                  "prose"
+                ];
+                description = ''
+                  What the judge asks this question about: reply (a finished
+                  message), prose (a write to a file with an extension in
+                  judge.proseExtensions), and code (a write to any other
+                  file). For prose and code, the text an edit replaces and
+                  the user's latest messages from the session transcript are
+                  sent beside the new text.
+                '';
+              };
+
               pushBack = lib.mkOption {
                 type = lib.types.bool;
                 default = true;
@@ -794,8 +817,8 @@ in
         );
         default = { };
         description = ''
-          The questions the judge asks about every finished message and
-          every write to a prose file, each a yes/no (noul) question of
+          The questions the judge asks about finished messages and
+          writes to files (see targets), each a yes/no (noul) question of
           the System One API whose answer is the probability that the
           problem is present. A dimension at or above pushBackAbove is a
           finding of the tic-check cycle ("tic-check: check", then the
@@ -804,7 +827,9 @@ in
           next prompt as context (hooks.tic-check-context). Merged across
           all modules that set it. This module seeds the peer-programmer
           style's rules that need judgment (lib/judge-dimensions.nix):
-          elliptical-possessive, relationship-words, grows,
+          arguing-with-ghosts (asked of prose and code writes only),
+          elliptical-possessive,
+          relationship-words, grows,
           emphatic-never, performed-enthusiasm, selling, throat-clearing,
           fragments, process-narration, and undefined-terms (report
           only).
@@ -858,8 +883,9 @@ in
           "adoc"
         ];
         description = ''
-          File extensions whose writes the edit hook sends to the judge.
-          Writes to other files get the regex table alone.
+          File extensions whose writes the judge reads as prose and asks
+          the dimensions targeting prose. A write to any other file is
+          read as code and asked the dimensions targeting code.
         '';
       };
     };

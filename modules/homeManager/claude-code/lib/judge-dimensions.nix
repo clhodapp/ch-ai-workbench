@@ -11,6 +11,27 @@ let
   exempt = "Quoted text, text inside backticks, code, and the names of things do not count.";
 in
 {
+  # After the user corrects the assistant in the chat, it tends to
+  # write the fix's comments and docs as a correction to itself: they
+  # argue the difference from what the code no longer does, or from
+  # what was considered and not done ("`packages` is the project's own
+  # scope, and nothing else publishes there"; "`nix.package` is not
+  # set here").  They make sense only beside the chat or the old code.
+  # The judge sees the edit with its replaced text and the user's
+  # latest messages, so it can recognize the echo of a correction.
+  # The question is asked of writes to prose and code files; a reply
+  # to the person who made the correction may properly discuss the
+  # difference.
+  arguing-with-ghosts = {
+    instructions = "Is the new text written as a correction to its author's own earlier version instead of for a new reader who sees only the result? Look for comments, docs, or tests that argue a difference from something the code no longer does or that was chosen not to be done: saying what is not set, not published, not used, or not done anymore, or rebutting an approach that appears only in the replaced text or in the user's messages. A new reader would not have thought of that approach and does not need it ruled out.";
+    criteria.true = "A comment, doc sentence, or test contrasts the result with a removed or rejected alternative that only someone who saw the old code or the conversation would know about, for example a comment echoing what the user's message corrected, or a test asserting that a mistake from an earlier draft stays absent.";
+    criteria.false = "The text says what the code or design is and where things are. Every negative statement is a constraint a future editor could break (\"a machine must not read config.flake, because ...\"), and none answers the replaced text or the conversation.";
+    rule = "do not argue with ghosts: write for a new reader of the code, saying what it is and where things are, not how it differs from what was removed, corrected, or rejected; that story goes in the commit message or the PR body; keep a negative statement only for a constraint a future editor could break";
+    targets = [
+      "prose"
+      "code"
+    ];
+  };
   elliptical-possessive = {
     instructions = "Does the text hand work over by naming an owner with a possessive that stands without its noun, such as \"that step is yours\", \"the merge is the owner's\", \"the rest is mine\", or \"the choice is my own\"? ${exempt}";
     criteria.true = "A possessive (yours, mine, ours, theirs, my own, or a noun with 's) ends a clause in place of naming the next action.";

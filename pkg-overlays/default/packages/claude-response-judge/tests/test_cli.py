@@ -22,10 +22,17 @@ DIMENSIONS = {
     "fragments": {
         "instructions": "Does the prose drop subjects or verbs?",
         "criteria": {"true": "it does", "false": "it does not"},
+        "targets": ["reply", "prose"],
     },
     "never": {
         "instructions": "Is never used as emphasis?",
         "criteria": {"true": "it is", "false": "it is not"},
+        "targets": ["reply", "prose"],
+    },
+    "ghosts": {
+        "instructions": "Does a comment explain what is absent?",
+        "criteria": {"true": "one does", "false": "none does"},
+        "targets": ["reply", "prose", "code"],
     },
 }
 
@@ -114,17 +121,18 @@ class JudgeTest(unittest.TestCase):
         )
 
     def test_request_shape_and_verdict(self):
-        stub = self.stub(answers={"fragments": 0.93, "never": 0.04})
+        stub = self.stub(answers={"fragments": 0.93, "never": 0.04, "ghosts": 0.5})
         res = self.run_cli([endpoint("local", stub.url)], "Build green, pushed.\n```\nnever = 1\n```\nDone `x`.")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(
             json.loads(res.stdout),
-            {"endpoint": "local", "model": "local-model", "answers": {"fragments": 0.93, "never": 0.04}},
+            {"endpoint": "local", "model": "local-model", "answers": {"fragments": 0.93, "never": 0.04, "ghosts": 0.5}},
         )
         [req] = stub.requests
         self.assertEqual(req["path"], "/v1/systemone")
         self.assertIsNone(req["auth"])
         body = req["body"]
+        self.assertNotIn("replaced text", body["state"])
         self.assertEqual(body["model"], "local-model")
         # Code blocks are replaced, inline spans kept.
         self.assertEqual(body["state"]["text"], "Build green, pushed.\n[code block]\nDone `x`.")
@@ -134,13 +142,56 @@ class JudgeTest(unittest.TestCase):
             {"type": "noul", "instructions": "Is never used as emphasis?", "criteria": {"true": "it is", "false": "it is not"}},
         )
 
-    def test_edit_kind_and_truncation(self):
+    def test_transcript_gives_the_latest_typed_messages(self):
         stub = self.stub()
-        res = self.run_cli([endpoint("local", stub.url)], "x" * 50, "--kind", "edit", max_chars=10)
+        transcript = self.tmp / "session.jsonl"
+        entries = [
+            {"type": "user", "message": {"role": "user", "content": "first"}},
+            {"type": "user", "message": {"role": "user", "content": "use the registry"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "content": "output"}]}},
+            {"type": "user", "isMeta": True, "message": {"content": "Stop hook feedback:\ntic-check: check"}},
+            {"type": "user", "isSidechain": True, "message": {"content": "a subagent prompt"}},
+            {
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": "<system-reminder>x</system-reminder>no path refs"}]},
+            },
+            {"type": "user", "message": {"content": "do not keep packages"}},
+        ]
+        transcript.write_text("\n".join(json.dumps(e) for e in entries) + "\nnot json\n")
+        res = self.run_cli(
+            [endpoint("local", stub.url)], "x = 1", "--kind", "code", "--transcript", str(transcript)
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        [conversation] = [v for k, v in stub.requests[0]["body"]["state"].items() if "latest messages" in k]
+        self.assertEqual(conversation, ["use the registry", "no path refs", "do not keep packages"])
+        # A missing transcript costs the context, not the verdict.
+        res = self.run_cli([endpoint("local", stub.url)], "x", "--transcript", str(self.tmp / "absent"))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertFalse(any("latest messages" in k for k in stub.requests[1]["body"]["state"]))
+
+    def test_prose_kind_and_truncation(self):
+        stub = self.stub()
+        res = self.run_cli([endpoint("local", stub.url)], "x" * 50, "--kind", "prose", max_chars=10)
         self.assertEqual(res.returncode, 0, res.stderr)
         state = stub.requests[0]["body"]["state"]
         self.assertIn("prose file", state["kind"])
         self.assertEqual(state["text"], "x" * 10 + "\n[text cut here]")
+
+    def test_code_kind_asks_its_dimensions_with_the_replaced_text(self):
+        stub = self.stub()
+        old = self.tmp / "old"
+        old.write_text("pkg = pkgs.nix;\n```\nkept\n```\n")
+        text = "# pkg is not set here.\n```\nkept\n```\n"
+        res = self.run_cli([endpoint("local", stub.url)], text, "--kind", "code", "--replaced", str(old))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["answers"], {"ghosts": 0.5})
+        body = stub.requests[0]["body"]
+        self.assertEqual(list(body["questions"]), ["ghosts"])
+        # Code is the text in a code file, fences included.
+        self.assertEqual(body["state"]["text"], text)
+        self.assertEqual(body["state"]["replaced text"], old.read_text())
+        self.assertIn("source file", body["state"]["kind"])
 
     def test_refused_local_falls_through_to_cloud_with_key(self):
         cloud = self.stub()
@@ -185,7 +236,11 @@ class JudgeTest(unittest.TestCase):
         stub = self.stub()
         res = self.run_cli([endpoint("local", stub.url)], "hello", dimensions={})
         self.assertEqual(res.returncode, 1)
-        self.assertIn("no dimensions", res.stderr)
+        self.assertIn("no enabled dimension targets reply", res.stderr)
+        prose_only = {name: dim for name, dim in DIMENSIONS.items() if "code" not in dim["targets"]}
+        res = self.run_cli([endpoint("local", stub.url)], "x = 1", "--kind", "code", dimensions=prose_only)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("no enabled dimension targets code", res.stderr)
         self.assertEqual(stub.requests, [])
 
 

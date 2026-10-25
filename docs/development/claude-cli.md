@@ -556,10 +556,19 @@ output-style rule that needs judgment (seeded from
   been exercised by the flake check against the hook's output shape
   only. It has not been probed live in a CLI session the way the Stop
   facts above were.
-- **Edits.** The edit hook asks the judge only for a write whose
+- **Edits.** The edit hook asks the judge about every write. The
   target (`file_path`, `notebook_path`, or the emacs verbs' `file` and
-  `buffer`) has an extension in `judge.proseExtensions`. Writes to code
-  get the regex table alone.
+  `buffer`) decides the kind: prose when its extension is in
+  `judge.proseExtensions`, code otherwise. Each dimension's `targets`
+  lists the kinds it is asked of, and most target replies and prose
+  only. `arguing-with-ghosts` targets prose and code. It asks whether a
+  comment, doc, or test is written as a correction to the author's own
+  earlier version, arguing a difference from what was removed or
+  rejected, instead of for a new reader. For that question the request
+  carries the edit's replaced text (`old_string`) and the user's last
+  three typed messages, read from the tail of `transcript_path`
+  (entries of type `user` that are neither `isMeta`, which marks hook
+  feedback and skill bodies, nor `isSidechain`, nor tool results).
 - **Latency.** On an R9700, decision-server answers a request of two or
   three questions over a few hundred tokens in 0.15 to 0.26 s, and ten
   questions over 5k tokens in 1.2 s (ch-local-llms README). The judge
