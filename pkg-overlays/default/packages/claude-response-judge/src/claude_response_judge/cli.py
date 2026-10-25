@@ -73,14 +73,10 @@ USER_MESSAGES = 3
 USER_MESSAGE_CHARS = 2000
 
 
-def user_messages(transcript: Path) -> list[str]:
-    """The last USER_MESSAGES things the user typed in a Claude Code session transcript.
-
-    The transcript is JSON lines. A typed prompt is a `user` entry whose content is a string
-    or holds text blocks; tool results are `user` entries holding tool_result blocks, and hook
-    feedback and skill bodies are `user` entries marked isMeta. Only the file's last
-    TRANSCRIPT_TAIL bytes are read, since a long session's transcript runs to megabytes.
-    """
+def transcript_entries(transcript: Path) -> list[dict[str, Any]]:
+    """The entries of a Claude Code session transcript (JSON lines), oldest first, from its
+    last TRANSCRIPT_TAIL bytes only, since a long session's transcript runs to megabytes.
+    Subagent entries (isSidechain) and lines that are not JSON objects are left out."""
     with transcript.open("rb") as f:
         f.seek(0, 2)
         size = f.tell()
@@ -88,20 +84,37 @@ def user_messages(transcript: Path) -> list[str]:
         lines = f.read().decode(errors="replace").splitlines()
     if size > TRANSCRIPT_TAIL:
         lines = lines[1:]
-    found = []
-    for line in reversed(lines):
+    entries = []
+    for line in lines:
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        if entry.get("type") != "user" or entry.get("isMeta") or entry.get("isSidechain"):
-            continue
-        content = entry.get("message", {}).get("content")
-        if isinstance(content, list):
-            content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
-        if not isinstance(content, str):
-            continue
-        text = REMINDER.sub("", content).strip()
+        if isinstance(entry, dict) and not entry.get("isSidechain"):
+            entries.append(entry)
+    return entries
+
+
+def typed_prompt(entry: dict[str, Any]) -> str | None:
+    """The text the user typed, when ENTRY is a typed prompt. A typed prompt is a `user`
+    entry whose content is a string or holds text blocks; tool results are `user` entries
+    holding tool_result blocks, and hook feedback and skill bodies are `user` entries marked
+    isMeta."""
+    if entry.get("type") != "user" or entry.get("isMeta"):
+        return None
+    content = entry.get("message", {}).get("content")
+    if isinstance(content, list):
+        content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    if not isinstance(content, str):
+        return None
+    return REMINDER.sub("", content).strip() or None
+
+
+def user_messages(transcript: Path) -> list[str]:
+    """The last USER_MESSAGES things the user typed in a Claude Code session transcript."""
+    found = []
+    for entry in reversed(transcript_entries(transcript)):
+        text = typed_prompt(entry)
         if text:
             found.append(cut(text, USER_MESSAGE_CHARS))
             if len(found) == USER_MESSAGES:

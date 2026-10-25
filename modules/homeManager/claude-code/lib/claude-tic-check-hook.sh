@@ -1,5 +1,8 @@
-# Stop hook: a two-step double-check of the finished message against
-# the peer-programmer output style.  Two checkers feed it: the regex
+# Stop hook: a two-step double-check of the finished turn against the
+# peer-programmer output style.  The turn is every message the model
+# wrote since the user's last prompt: the CLI hands the hook only the
+# final one, and claude-turn-text adds the messages written between
+# tool calls from the transcript.  Two checkers feed it: the regex
 # table (ch-ai-workbench.claude-code.ticChecks: the possessive handoff
 # "X is yours", em-dashes, "click", arrows, ...) and the judge, a
 # System One decision model that scores the message on each of
@@ -61,14 +64,21 @@ if [ "$(field '.stop_hook_active')" = "true" ]; then
   case "$(printf '%s' "$message" | tr -d '[:space:]')" in
     'tic-check:tic')
       emit "tic-check: rewrite
-Post the message before your verdict again in full, with each flagged phrasing rewritten per the rules you were given, and nothing else (no preamble, no note about the change)."
+Post your final message (the one before your verdict) again in full, with each flagged phrasing rewritten per the rules you were given, and nothing else (no preamble, no note about the change). The earlier messages of the turn are already on screen: where a finding was in one of them, or the final message left out what the turn found, restate that point correctly in the final message when the reader needs it."
       ;;
   esac
   exit 0
 fi
 
-verdict=$(tic_verdict reply "$message")
-findings=$(tic_findings "$message" "$verdict")
+# The whole turn: the messages written between tool calls since the
+# user's last prompt, read from the transcript, then this final message
+# (claude-turn-text heads each, keeps the final message whole, and falls
+# back to the final message alone when the transcript cannot be read).
+turn=$(claude-turn-text --transcript "$(field '.transcript_path')" --max-chars "$(jq -r '.maxChars' "$judge" 2>/dev/null)" <<<"$message" 2>/dev/null) || turn=
+[ -n "$turn" ] || turn=$message
+
+verdict=$(tic_verdict reply "$turn")
+findings=$(tic_findings "$turn" "$verdict")
 store=$(tic_verdict_path "$(field '.session_id')") || store=
 
 if [ -z "$findings" ]; then
@@ -92,8 +102,8 @@ Entries marked judge carry the probability a decision model ($(jq -r '"\(.model)
 fi
 
 emit "tic-check: check
-The message you just finished may break the output style's rules:$findings$judged
-Re-read the message against each finding's rule, then reply with exactly one of the next two lines and nothing else, no explanation:
+The turn you just finished (your final message and the messages you wrote between tool calls since the user's prompt) may break the output style's rules:$findings$judged
+Re-read the turn against each finding's rule, then reply with exactly one of the next two lines and nothing else, no explanation:
 tic-check: clean
 tic-check: tic
-(clean: every finding is a false alarm, such as a quotation, a real possessive, or a literal symbol in quoted output; the message stands. tic: at least one finding is real; you will then be asked to post the message again without it.)"
+(clean: every finding is a false alarm, such as a quotation, a real possessive, or a literal symbol in quoted output; the turn stands. tic: at least one finding is real; you will then be asked to post your final message again with it fixed.)"

@@ -36,6 +36,18 @@ in
       "message"
     ];
   };
+  # The Stop hook judges a whole turn: the messages written between
+  # tool calls, each headed [earlier message of this turn], then the
+  # message headed [final message].  A reader may see only the last
+  # one, so it has to carry what the turn found, changed, decided, and
+  # left to do.
+  final-message-recap = {
+    instructions = "The text is one turn of an assistant's work: messages written between tool calls, each headed [earlier message of this turn], then the message headed [final message]. Does the final message leave out key context from the turn that a reader who sees only the final message would need: a finding, a change made, a decision, a failure or a skipped step, or the next action? When the text holds only a final message, the answer is no.";
+    criteria.true = "Something the reader needs to understand or act on the outcome appears only in an earlier message, or the final message relies on an earlier message to make sense.";
+    criteria.false = "A reader who sees only the final message knows what was found, what changed, what failed or was skipped, and what happens next; the earlier messages add only progress narration.";
+    rule = "close with a recap a reader who sees only the last message can act on: what was found, what changed, what failed or was skipped, and what happens next";
+    targets = [ "reply" ];
+  };
   elliptical-possessive = {
     instructions = "Does the text hand work over by naming an owner with a possessive that stands without its noun, such as \"that step is yours\", \"the merge is the owner's\", \"the rest is mine\", or \"the choice is my own\"? ${exempt}";
     criteria.true = "A possessive (yours, mine, ours, theirs, my own, or a noun with 's) ends a clause in place of naming the next action.";

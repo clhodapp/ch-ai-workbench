@@ -897,6 +897,21 @@
                     tail -n 1 requests.log | jq -e '.state.kind | contains("prose file")'
                     [ -z "$(write docs/notes.md 'Build green, pushed.')" ]
 
+                    # The whole turn: a finding in a message written
+                    # between tool calls, and a final message that leaves
+                    # out what the turn found.
+                    {
+                      jq -cn '{type: "user", message: {role: "user", content: "fix it"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "One — two."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
+                      jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "t", content: "ok"}]}}'
+                    } > turn.jsonl
+                    answers '{"final-message-recap": 0.95}'
+                    res=$(jq -cn --arg s "$session" --arg t "$PWD/turn.jsonl" '{session_id: $s, transcript_path: $t, stop_hook_active: false, last_assistant_message: "All fixed."}' | "$hook")
+                    reason <<<"$res" | grep -q '^The turn you just finished'
+                    reason <<<"$res" | grep -q -- '- em-dash (1): '
+                    reason <<<"$res" | grep -q -- '- final-message-recap (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '.state.text | contains("[earlier message of this turn]\nOne — two.") and contains("[final message]\nAll fixed.")'
+
                     # Commit messages, pull request texts, and reviews
                     # written through Bash.
                     msg=${lib.getExe judgeHooks.tic-check-message.package}

@@ -537,6 +537,24 @@ output-style rule that needs judgment (seeded from
   Api-Key <key>`. While that file is missing, the entry is skipped. When
   no endpoint answers, every hook behaves as it did with the regex
   table alone.
+- **The whole turn.** In a turn with tool calls, each stretch of
+  text between calls is its own assistant message, and the Stop
+  payload's `last_assistant_message` holds only the final one. This
+  session showed it: a regex match in a message written between tool
+  calls did not appear in the finished turn's check. So the Stop hook
+  runs `claude-turn-text`, a third program of the judge package. It
+  reads the assistant text since the user's last typed prompt from
+  `transcript_path`, splits it at tool calls, heads each earlier
+  message `[earlier message of this turn]`, and appends the final
+  message headed `[final message]`. The final message is dropped from
+  the transcript side when the CLI has already written it there, so it
+  appears once either way. The final message is kept whole, and the
+  earlier messages are kept newest first within `judge.maxChars`. The
+  regex table, the judge, and the stored verdict all work on that text.
+  The `final-message-recap` noul asks whether the final message leaves
+  out key context from the turn, such as a finding, a change, a
+  failure, or the next action. The rewrite step asks for the final
+  message again, restating any point the reader still needs.
 - **Push-back.** On the first stop the Stop hook asks the judge, then
   builds its findings from both checkers. A dimension with `pushBack`
   set at or above `judge.pushBackAbove` (0.9) is a finding. A regex hit

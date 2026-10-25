@@ -40,7 +40,7 @@ scores=$(jq -j --slurpfile c "$judge" '
 
 scorer=$(jq -r '"\(.model) at \(.endpoint)"' <<<"$verdict" 2>/dev/null) || exit 0
 context="tic-check: verdicts
-A decision model ($scorer) read your previous message against the output style."
+A decision model ($scorer) read your previous turn (the final message and the messages before it since the user's prompt) against the output style."
 if [ -n "$report" ]; then
   context+="
 These problems scored at or above $(jq -r '.reportAbove' "$judge"), below the level at which the check pushes back; each line gives the probability the model put on it and the rule:$report"
