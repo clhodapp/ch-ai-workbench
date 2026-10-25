@@ -19,17 +19,21 @@ in
   # set here").  They make sense only beside the chat or the old code.
   # The judge sees the edit with its replaced text and the user's
   # latest messages, so it can recognize the echo of a correction.
-  # The question is asked of writes to prose and code files; a reply
-  # to the person who made the correction may properly discuss the
-  # difference.
+  # The question is asked of writes to prose and code files and of
+  # commit messages and pull request texts; a reply to the person who
+  # made the correction may properly discuss the difference.  A commit
+  # or pull request may say what the change removes from the code
+  # before it, but not rebut what existed only in the chat or in a
+  # draft that never landed.
   arguing-with-ghosts = {
     instructions = "Is the new text written as a correction to its author's own earlier version instead of for a new reader who sees only the result? Look for comments, docs, or tests that argue a difference from something the code no longer does or that was chosen not to be done: saying what is not set, not published, not used, or not done anymore, or rebutting an approach that appears only in the replaced text or in the user's messages. A new reader would not have thought of that approach and does not need it ruled out.";
     criteria.true = "A comment, doc sentence, or test contrasts the result with a removed or rejected alternative that only someone who saw the old code or the conversation would know about, for example a comment echoing what the user's message corrected, or a test asserting that a mistake from an earlier draft stays absent.";
-    criteria.false = "The text says what the code or design is and where things are. Every negative statement is a constraint a future editor could break (\"a machine must not read config.flake, because ...\"), and none answers the replaced text or the conversation.";
+    criteria.false = "The text says what the code or design is and where things are. Every negative statement is a constraint a future editor could break (\"a machine must not read config.flake, because ...\"), and none answers the replaced text or the conversation. A commit message or pull request text may say what the change removes or replaces relative to the code before it.";
     rule = "do not argue with ghosts: write for a new reader of the code, saying what it is and where things are, not how it differs from what was removed, corrected, or rejected; that story goes in the commit message or the PR body; keep a negative statement only for a constraint a future editor could break";
     targets = [
       "prose"
       "code"
+      "message"
     ];
   };
   elliptical-possessive = {

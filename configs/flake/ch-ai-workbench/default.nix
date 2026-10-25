@@ -897,6 +897,23 @@
                     tail -n 1 requests.log | jq -e '.state.kind | contains("prose file")'
                     [ -z "$(write docs/notes.md 'Build green, pushed.')" ]
 
+                    # Commit messages, pull request texts, and reviews
+                    # written through Bash.
+                    msg=${lib.getExe judgeHooks.tic-check-message.package}
+                    run() { jq -cn --arg c "$1" --arg s "$session" --arg t "$PWD/transcript.jsonl" --arg d "$PWD" '{session_id: $s, transcript_path: $t, cwd: $d, tool_name: "Bash", tool_input: {command: $c}}' | "$msg"; }
+                    answers '{"fragments": 0.95}'
+                    before=$(wc -l < requests.log)
+                    [ -z "$(run 'ls -la && git log --oneline -3')" ]
+                    [ "$(wc -l < requests.log)" = "$before" ]
+                    res=$(run "git add -A && git commit -m 'Build green, pushed.'")
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("commit message")) and (.state.text | rtrimstr("\n")) == "Build green, pushed." and (.questions | has("arguing-with-ghosts") and (has("readability") | not))'
+                    [ -z "$(run "git add -A && git commit -m 'Build green, pushed.'")" ]
+                    answers '{"arguing-with-ghosts": 0.95}'
+                    res=$(run "gh pr review 59 --comment --body 'Nothing publishes into packages anymore.'")
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.95): '
+
                     kill %1
                     touch $out
                   '';

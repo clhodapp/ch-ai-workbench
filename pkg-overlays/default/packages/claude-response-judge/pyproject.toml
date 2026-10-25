@@ -12,6 +12,7 @@ license = "MIT"
 
 [project.scripts]
 claude-response-judge = "claude_response_judge.cli:main"
+claude-vcs-message = "claude_response_judge.vcs_message:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

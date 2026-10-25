@@ -590,6 +590,21 @@ output-style rule that needs judgment (seeded from
   three typed messages, read from the tail of `transcript_path`
   (entries of type `user` that are neither `isMeta`, which marks hook
   feedback and skill bodies, nor `isSidechain`, nor tool results).
+- **Commit messages, pull request texts, and reviews.** The model
+  writes these through Bash, so `tic-check-message` (PreToolUse on
+  `Bash`) checks them. `claude-vcs-message`, the second program of the
+  judge package, reads the command and prints the text it writes. That
+  covers `git ... commit` with `-m`, `--message`, or `-F` (a
+  here-document, the `"$(cat <<'EOF' ...)"` form, or a file), `gh pr
+  create|edit|comment|review` with `--title`, `--body`, or
+  `--body-file`, and `gh api` calls to a pull request's review and
+  comment endpoints, from `body` fields or every `body` in an
+  `--input` JSON document. The text is judged as kind `message`
+  together with the user's latest messages. Every noul with the
+  default targets asks about it, and so does arguing-with-ghosts, which
+  lets a message say what the change removes relative to the code
+  before it. A finding denies the command once, and an identical
+  re-issue runs.
 - **Latency.** On an R9700, decision-server answers a request of two or
   three questions over a few hundred tokens in 0.15 to 0.26 s, and ten
   questions over 5k tokens in 1.2 s (ch-local-llms README). The judge

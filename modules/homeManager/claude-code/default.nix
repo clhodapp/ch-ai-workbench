@@ -176,6 +176,17 @@ let
     claude-response-judge = cfg.judge.package;
   };
 
+  # PreToolUse on Bash: the commit message or pull request text a
+  # command writes is matched and judged the same way, and the command
+  # is denied once with the findings (script:
+  # lib/claude-tic-check-message-hook.sh).
+  claudeTicCheckMessageHook = import ./lib/claude-tic-check-message-hook.nix {
+    inherit pkgs;
+    checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
+  };
+
   # UserPromptSubmit: the judge's verdict on a message the Stop hook
   # let stand reaches the model with the next prompt, as context
   # (script: lib/claude-tic-check-context-hook.sh).
@@ -534,7 +545,9 @@ in
         check's verdict lines ("tic-check: clean" / "tic-check: tic")
         as status lines on screen, tic-check-edit, the PreToolUse
         hook that applies the same table to the text written by Edit,
-        Write, NotebookEdit, and the emacs server's edit verbs, and
+        Write, NotebookEdit, and the emacs server's edit verbs,
+        tic-check-message, the PreToolUse hook on Bash that applies it
+        to the commit message or pull request text a command writes, and
         redact, the PostToolUse hook that runs every tool result
         through betterleaks and replaces a recognized secret with
         [REDACTED:<rule>] before the model sees it, and reveal, the
@@ -825,19 +838,22 @@ in
                     "reply"
                     "prose"
                     "code"
+                    "message"
                   ]
                 );
                 default = [
                   "reply"
                   "prose"
+                  "message"
                 ];
                 description = ''
                   What the judge asks this question about: reply (a finished
                   message), prose (a write to a file with an extension in
-                  judge.proseExtensions), and code (a write to any other
-                  file). For prose and code, the text an edit replaces and
-                  the user's latest messages from the session transcript are
-                  sent beside the new text.
+                  judge.proseExtensions), code (a write to any other file),
+                  and message (a commit message or pull request text a Bash
+                  command writes). For prose, code, and message, the user's
+                  latest messages from the session transcript are sent beside
+                  the text, and for an edit also the text it replaces.
                 '';
               };
 
@@ -1032,6 +1048,13 @@ in
         matcher = "Edit|Write|NotebookEdit|mcp__emacs__edit-file|mcp__emacs__edit-buffer";
         command = "claude-tic-check-edit-hook";
         package = claudeTicCheckEditHook;
+        timeout = judgeHookTimeout;
+      };
+      tic-check-message = {
+        event = "PreToolUse";
+        matcher = "Bash";
+        command = "claude-tic-check-message-hook";
+        package = claudeTicCheckMessageHook;
         timeout = judgeHookTimeout;
       };
       redact = {

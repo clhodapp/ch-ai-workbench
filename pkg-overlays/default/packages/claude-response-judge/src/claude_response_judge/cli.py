@@ -43,6 +43,7 @@ KINDS = {
     "reply": "a reply an AI coding assistant wrote to a working programmer",
     "prose": "text an AI coding assistant is writing into a prose file",
     "code": "code, with its comments, an AI coding assistant is writing into a source file",
+    "message": "a commit message, pull request text, or code review an AI coding assistant is writing for other developers",
 }
 
 
