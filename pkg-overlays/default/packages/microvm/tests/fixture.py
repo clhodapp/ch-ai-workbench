@@ -35,12 +35,12 @@ except FileNotFoundError:
     state = {{}}
 if args[:1] == ["--no-ask-password"]:
     verb, unit = args[-2], args[-1]
-    if unit in state.get("fail", []):
+    if verb in state.get("fail", {{}}).get(unit, []):
         print("Access denied", file=sys.stderr)
         sys.exit(4)
     active = state.setdefault("active", {{}})
-    if verb in ("start", "restart"):
-        if verb == "restart" or unit not in active:
+    if verb == "start":
+        if unit not in active:
             active[unit] = int(time.time()) - 5
     elif verb == "stop":
         active.pop(unit, None)

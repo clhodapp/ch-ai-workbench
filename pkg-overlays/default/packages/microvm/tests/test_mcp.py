@@ -319,12 +319,14 @@ class ServerCase(Fixture):
     def test_the_end_of_input_stops_the_slots_of_the_session(self) -> None:
         self.call("microvm_up", {"kind": "probe"})
         self.call("microvm_up", {"kind": "quiet"})
+        before = len(self.calls())
         self.server.client(None)
         self.thread.join(WAIT)
         self.assertFalse(self.thread.is_alive())
-        stops = sorted(call[-1] for call in self.calls() if "stop" in call)
+        teardown = self.calls()[before:]
+        stops = sorted(call[-1] for call in teardown if "stop" in call)
         self.assertEqual(stops, ["microvm@probe-1.service", "microvm@quiet-1.service"])
-        self.assertTrue(all("--no-block" in call for call in self.calls() if "stop" in call))
+        self.assertTrue(all("--no-block" in call for call in teardown if "stop" in call))
         self.assertIsNone(self.lease("probe-1"))
         self.assertIsNone(self.lease("quiet-1"))
 

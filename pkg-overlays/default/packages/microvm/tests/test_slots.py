@@ -58,7 +58,13 @@ class SlotsCase(Fixture):
             {k: lease[k] for k in ("slot", "kind", "session", "pid", "start")},
             {"slot": "probe-1", "kind": "probe", "session": "session-1000", "pid": 1000, "start": "4242"},
         )
-        self.assertEqual(self.calls(), [["--no-ask-password", "restart", "microvm@probe-1.service"]])
+        self.assertEqual(
+            self.calls(),
+            [
+                ["--no-ask-password", "stop", "microvm@probe-1.service"],
+                ["--no-ask-password", "start", "microvm@probe-1.service"],
+            ],
+        )
         text = out.getvalue()
         self.assertIn("slot probe-1 (kind probe)", text)
         self.assertIn("vsock cid 101 port 5000", text)
@@ -124,10 +130,11 @@ class SlotsCase(Fixture):
         slots.up("probe", self.process(1000))
         slots.up("probe", self.process(2000))
         self.end(1000)
+        before = len(self.calls())
         slots.reap()
         self.assertIsNone(self.lease("probe-1"))
         self.assertIsNotNone(self.lease("probe-2"))
-        stops = [call for call in self.calls() if call[1:2] == ["stop"]]
+        stops = [call for call in self.calls()[before:] if call[1:2] == ["stop"]]
         self.assertEqual(stops, [["--no-ask-password", "stop", "microvm@probe-1.service"]])
         self.assertIn("reaped probe-1", out.getvalue())
 
@@ -138,12 +145,18 @@ class SlotsCase(Fixture):
         self.end(1000)
         self.assertEqual(slots.up("probe", self.process(3000)), "probe-1")
         self.assertEqual(self.lease("probe-1")["session"], "session-3000")
-        self.assertEqual(self.calls()[-1], ["--no-ask-password", "restart", "microvm@probe-1.service"])
+        self.assertEqual(
+            self.calls()[-2:],
+            [
+                ["--no-ask-password", "stop", "microvm@probe-1.service"],
+                ["--no-ask-password", "start", "microvm@probe-1.service"],
+            ],
+        )
 
     def test_a_failed_start_releases_the_claim(self) -> None:
-        self.systemctl_state.write_text(json.dumps({"fail": ["microvm@probe-1.service"]}))
+        self.systemctl_state.write_text(json.dumps({"fail": {"microvm@probe-1.service": ["start"]}}))
         slots, _ = self.slots()
-        with self.assertRaisesRegex(Refused, "systemctl restart microvm@probe-1.service failed .*Access denied"):
+        with self.assertRaisesRegex(Refused, "systemctl start microvm@probe-1.service failed .*Access denied"):
             slots.up("probe", self.process(1000))
         self.assertIsNone(self.lease("probe-1"))
 
