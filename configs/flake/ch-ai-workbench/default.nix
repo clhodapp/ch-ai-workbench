@@ -912,6 +912,30 @@
                     reason <<<"$res" | grep -q -- '- final-message-recap (judge 0.95): '
                     tail -n 1 requests.log | jq -e '.state.text | contains("[earlier message of this turn]\nOne — two.") and contains("[final message]\nAll fixed.")'
 
+                    # Mid-turn: a labeled note after a tool call, for the
+                    # messages not judged yet, and nothing for the next
+                    # call until a new message is written.
+                    turnhook=${lib.getExe judgeHooks.tic-check-turn.package}
+                    {
+                      jq -cn '{type: "user", message: {role: "user", content: "ship it"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "Build green, pushed."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
+                    } > progress.jsonl
+                    post() { jq -cn --arg s "$session" --arg t "$PWD/progress.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Bash", tool_input: {command: "ls"}, tool_response: {}}' | "$turnhook"; }
+                    answers '{"fragments": 0.6, "readability": [0, 0, 1, 0]}'
+                    ctx=$(post | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q '^tic-check: mid-turn verdicts' <<<"$ctx"
+                    grep -q 'not from the Bash call: it is not part of the tool' <<<"$ctx"
+                    grep -q -- '- fragments 0.6: ' <<<"$ctx"
+                    grep -q -- '- readability 2 of 3, most likely it needs a developer familiar with this codebase' <<<"$ctx"
+                    lacks 'information-density' <<<"$ctx"
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("between tool calls")) and (.questions | has("fragments") and (has("final-message-recap") | not) and (has("arguing-with-ghosts") | not))'
+                    before=$(wc -l < requests.log)
+                    [ -z "$(post)" ]
+                    [ "$(wc -l < requests.log)" = "$before" ]
+                    jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "Now the docs."}, {type: "tool_use", id: "u", name: "Edit", input: {}}]}}' >> progress.jsonl
+                    post | jq -r .hookSpecificOutput.additionalContext | grep -q '^tic-check: mid-turn verdicts'
+                    tail -n 1 requests.log | jq -e '.state.text | contains("Now the docs.") and (contains("Build green") | not)'
+
                     # Commit messages, pull request texts, and reviews
                     # written through Bash.
                     msg=${lib.getExe judgeHooks.tic-check-message.package}

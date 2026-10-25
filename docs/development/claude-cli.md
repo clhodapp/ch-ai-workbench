@@ -556,6 +556,23 @@ output-style rule that needs judgment (seeded from
   out key context from the turn, such as a finding, a change, a
   failure, or the next action. The rewrite step asks for the final
   message again, restating any point the reader still needs.
+- **Mid-turn.** `tic-check-turn` (PostToolUse, every tool) judges the
+  messages the model writes between tool calls while the turn is still
+  running. After each tool call, `claude-turn-text --progress-state`
+  prints this turn's messages the hook has not judged yet, tracked by
+  digest under `$XDG_RUNTIME_DIR/claude-tic-check/progress/`. A tool
+  call with no new message before it costs a transcript read and no
+  judge call, and a `flock` makes parallel tool calls abstain instead of
+  judging the same text twice. The text is judged as kind `progress`,
+  which the prose nouls and the readability scores target but
+  `final-message-recap` and `arguing-with-ghosts` do not. The result
+  comes back as PostToolUse `additionalContext`, the channel the
+  redaction hook's notes use. The note is headed `tic-check: mid-turn
+  verdicts` and says that it comes from the hook and is not part of the
+  tool's output. It lists the regex and confident findings, the noul
+  problems at or above `judge.reportAbove`, and the scores at or above
+  `judge.turnScoresAbove` (1, a level up from the first). It never
+  blocks, and the Stop hook still checks the whole turn at its end.
 - **Push-back.** On the first stop the Stop hook asks the judge, then
   builds its findings from both checkers. A dimension with `pushBack`
   set at or above `judge.pushBackAbove` (0.9) is a finding. A regex hit

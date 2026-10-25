@@ -41,6 +41,7 @@ FENCE = re.compile(r"^[ \t]*```.*?^[ \t]*```[^\n]*$", re.MULTILINE | re.DOTALL)
 
 KINDS = {
     "reply": "a reply an AI coding assistant wrote to a working programmer",
+    "progress": "messages an AI coding assistant wrote to a working programmer between tool calls, while still working",
     "prose": "text an AI coding assistant is writing into a prose file",
     "code": "code, with its comments, an AI coding assistant is writing into a source file",
     "message": "a commit message, pull request text, or code review an AI coding assistant is writing for other developers",

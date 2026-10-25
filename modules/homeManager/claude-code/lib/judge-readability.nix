@@ -22,7 +22,10 @@ let
     type = "score";
     instructions = "What does a developer need to know already to know what the message is talking about, ${cause}?";
     inherit levels rule;
-    targets = [ "reply" ];
+    targets = [
+      "reply"
+      "progress"
+    ];
   };
 in
 {
@@ -53,7 +56,10 @@ in
       "packed: nearly every clause carries a fact the reader has to stop and take in"
     ];
     rule = "one point per sentence, with the words it needs; cut filler and restatement";
-    targets = [ "reply" ];
+    targets = [
+      "reply"
+      "progress"
+    ];
   };
 
   generic-concept-words = effort "given generic nouns used as if they named a specific concept without saying what it is, such as \"the fold\", \"the gate\", \"the surface\", \"the shape\", or \"the path\"" "name the actual thing (the function, the file, the check) instead of a generic noun that stands for it";

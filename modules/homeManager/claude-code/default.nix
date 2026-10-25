@@ -148,6 +148,7 @@ let
       pushBackAbove
       dismissBelow
       reportAbove
+      turnScoresAbove
       maxChars
       proseExtensions
       ;
@@ -181,6 +182,17 @@ let
   # is denied once with the findings (script:
   # lib/claude-tic-check-message-hook.sh).
   claudeTicCheckMessageHook = import ./lib/claude-tic-check-message-hook.nix {
+    inherit pkgs;
+    checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
+  };
+
+  # PostToolUse on every tool: the messages written since the last
+  # tool call are judged while the turn runs, and the verdict comes
+  # back as a labeled note after the tool result (script:
+  # lib/claude-tic-check-turn-hook.sh).
+  claudeTicCheckTurnHook = import ./lib/claude-tic-check-turn-hook.nix {
     inherit pkgs;
     checks = ticCheckTable;
     judge = judgeConfig;
@@ -538,6 +550,10 @@ in
         carries permissions.deny. Merged across all modules that set
         it. This module seeds
         tic-check, the Stop hook driven by ticChecks and the judge,
+        tic-check-turn, the PostToolUse hook that judges the messages
+        written between tool calls while a turn runs and hands the
+        verdict to the model as a note labeled "tic-check: mid-turn
+        verdicts",
         tic-check-context, the UserPromptSubmit hook that hands the
         judge's verdict on a message the Stop hook let stand to the
         model with the next prompt, and
@@ -836,6 +852,7 @@ in
                 type = lib.types.listOf (
                   lib.types.enum [
                     "reply"
+                    "progress"
                     "prose"
                     "code"
                     "message"
@@ -843,12 +860,14 @@ in
                 );
                 default = [
                   "reply"
+                  "progress"
                   "prose"
                   "message"
                 ];
                 description = ''
                   What the judge asks this question about: reply (a finished
-                  message), prose (a write to a file with an extension in
+                  turn), progress (the messages written between tool calls
+                  during a turn, judged by hooks.tic-check-turn), prose (a write to a file with an extension in
                   judge.proseExtensions), code (a write to any other file),
                   and message (a commit message or pull request text a Bash
                   command writes). For prose, code, and message, the user's
@@ -922,6 +941,18 @@ in
           Probability at or above which a dimension is listed in the
           context the model gets with the next prompt, when the Stop hook
           let the message stand. Set to 0 to report every dimension.
+        '';
+      };
+
+      turnScoresAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 1.0;
+        description = ''
+          Expected position on its scale (0 is the first level) at or above
+          which a score is listed in the mid-turn note of
+          hooks.tic-check-turn. The note after a finished turn lists every
+          score; the mid-turn note, which can come after every tool call,
+          lists only the scores that are off the first level by this much.
         '';
       };
 
@@ -1048,6 +1079,12 @@ in
         matcher = "Edit|Write|NotebookEdit|mcp__emacs__edit-file|mcp__emacs__edit-buffer";
         command = "claude-tic-check-edit-hook";
         package = claudeTicCheckEditHook;
+        timeout = judgeHookTimeout;
+      };
+      tic-check-turn = {
+        event = "PostToolUse";
+        command = "claude-tic-check-turn-hook";
+        package = claudeTicCheckTurnHook;
         timeout = judgeHookTimeout;
       };
       tic-check-message = {

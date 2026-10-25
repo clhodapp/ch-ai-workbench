@@ -17,7 +17,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from claude_response_judge.turn import turn_text
+from claude_response_judge.turn import progress_text, turn_text
 
 
 def prompt(text):
@@ -75,6 +75,39 @@ class TurnTextTest(unittest.TestCase):
         self.assertEqual(len(cut), 80)
         long_final = "x" * 500
         self.assertEqual(turn_text(long_final, ENTRIES, 120), marker + "x" * (120 - len(marker)))
+
+    def test_progress_prints_only_new_messages(self):
+        head = "[message written in this turn since the last tic-check note]\n"
+        text, seen = progress_text(ENTRIES[:5], set(), 10000)
+        self.assertEqual(text, head + "Reading the parser.")
+        text, seen = progress_text(ENTRIES[:8], set(seen), 10000)
+        self.assertEqual(text, head + "Found it.\n\nFixing the tab case.")
+        text, _ = progress_text(ENTRIES[:8], set(seen), 10000)
+        self.assertEqual(text, "")
+        # A new turn starts from its own prompt.
+        text, _ = progress_text([*ENTRIES, prompt("next"), say("Starting.", tool())], set(seen), 10000)
+        self.assertEqual(text, head + "Starting.")
+
+    def test_progress_cli(self):
+        env = dict(os.environ, PYTHONPATH=str(SRC))
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript, state = Path(tmp, "t.jsonl"), Path(tmp, "state", "s.json")
+            transcript.write_text("\n".join(json.dumps(e) for e in ENTRIES[:5]) + "\n")
+
+            def run():
+                return subprocess.run(
+                    [sys.executable, "-m", "claude_response_judge.turn", "--transcript", str(transcript),
+                     "--progress-state", str(state)],
+                    input="",
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False,
+                )
+
+            self.assertIn("Reading the parser.", run().stdout)
+            self.assertEqual(run().stdout, "")
+            self.assertEqual(len(json.loads(state.read_text())), 1)
 
     def test_cli(self):
         env = dict(os.environ, PYTHONPATH=str(SRC))
