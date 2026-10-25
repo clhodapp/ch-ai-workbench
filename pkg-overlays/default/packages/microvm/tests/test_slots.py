@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """The leases and the command line against a fake systemctl, a fake
 /proc and a fake vsock probe: claiming a free slot, using a held slot
-again, waiting for a guest through its hybrid vsock socket, the end of
+again, emptying the shares of a newly claimed slot, waiting for a guest through its hybrid vsock socket, the end of
 the wait at a permission error, refusing to stop a slot another live session holds, reaping the
 slots of holders that are gone, the holding process of each verb, the
 kinds agents may use, and the refusal of every argument that is not a
@@ -12,7 +12,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import re
+import shutil
 import unittest
+from pathlib import Path
 
 from fixture import FakeVmm, Fixture, stat_line  # noqa: F401
 from microvm_slots import cli, transport
@@ -39,8 +42,8 @@ class SlotsCase(Fixture):
                 "vsockSocket": None,
                 "vsockPort": 5000,
                 "shares": [
-                    {"name": "in", "source": "/var/lib/probe/probe-2/in", "readOnly": True},
-                    {"name": "out", "source": "/var/lib/probe/probe-2/out", "readOnly": False},
+                    {"name": "in", "source": f"{self.shares}/probe-2/in", "readOnly": True},
+                    {"name": "out", "source": f"{self.shares}/probe-2/out", "readOnly": False},
                 ],
             },
         )
@@ -68,8 +71,8 @@ class SlotsCase(Fixture):
         text = out.getvalue()
         self.assertIn("slot probe-1 (kind probe)", text)
         self.assertIn("vsock cid 101 port 5000", text)
-        self.assertIn("share in /var/lib/probe/probe-1/in (read-only in the guest)", text)
-        self.assertIn("share out /var/lib/probe/probe-1/out (writable in the guest)", text)
+        self.assertIn(f"share in {self.shares}/probe-1/in (read-only in the guest)", text)
+        self.assertIn(f"share out {self.shares}/probe-1/out (writable in the guest)", text)
         self.assertEqual(sorted(p.name for p in (self.state / "leases").iterdir()), ["probe-1.json"])
 
     def test_up_uses_the_slot_the_holder_holds_again(self) -> None:
@@ -159,6 +162,94 @@ class SlotsCase(Fixture):
         with self.assertRaisesRegex(Refused, "systemctl start microvm@probe-1.service failed .*Access denied"):
             slots.up("probe", self.process(1000))
         self.assertIsNone(self.lease("probe-1"))
+
+    def fill_shares(self, slot: str) -> Path:
+        """Fill both shares of `slot` with a file, a nested directory and
+        a symbolic link to a directory outside the share, and return
+        that outside directory."""
+        outside = self.root / "outside"
+        outside.mkdir(exist_ok=True)
+        (outside / "keep").write_text("kept")
+        for name in ("in", "out"):
+            share = self.shares / slot / name
+            (share / "nested" / "deeper").mkdir(parents=True)
+            (share / "file").write_text("old")
+            (share / "nested" / "deeper" / "file").write_text("old")
+            (share / "link").symlink_to(outside, target_is_directory=True)
+        return outside
+
+    def test_rmtree_resists_symbolic_link_attacks(self) -> None:
+        self.assertTrue(shutil.rmtree.avoids_symlink_attacks)
+
+    def test_a_new_claim_empties_the_shares(self) -> None:
+        outside = self.fill_shares("probe-1")
+        slots, _ = self.slots()
+        self.assertEqual(slots.up("probe", self.process(1000)), "probe-1")
+        for name in ("in", "out"):
+            share = self.shares / "probe-1" / name
+            self.assertTrue(share.is_dir())
+            self.assertEqual(list(share.iterdir()), [])
+        self.assertEqual((outside / "keep").read_text(), "kept")
+
+    def test_a_claim_of_a_slot_whose_holder_is_gone_empties_its_shares(self) -> None:
+        slots, _ = self.slots()
+        slots.up("probe", self.process(1000))
+        outside = self.fill_shares("probe-1")
+        self.end(1000)
+        self.assertEqual(slots.up("probe", self.process(2000)), "probe-1")
+        self.assertEqual(list((self.shares / "probe-1" / "out").iterdir()), [])
+        self.assertEqual((outside / "keep").read_text(), "kept")
+
+    def test_the_holder_keeps_its_files(self) -> None:
+        caller = self.process(1000)
+        slots, _ = self.slots()
+        slots.up("probe", caller)
+        self.fill_shares("probe-1")
+        self.assertEqual(slots.up("probe", caller), "probe-1")
+        self.assertEqual((self.shares / "probe-1" / "out" / "file").read_text(), "old")
+        self.assertEqual((self.shares / "probe-1" / "in" / "nested" / "deeper" / "file").read_text(), "old")
+
+    def test_a_missing_share_directory_stays_missing(self) -> None:
+        (self.shares / "probe-1" / "out").mkdir(parents=True)
+        (self.shares / "probe-1" / "out" / "file").write_text("old")
+        slots, _ = self.slots()
+        self.assertEqual(slots.up("probe", self.process(1000)), "probe-1")
+        self.assertFalse((self.shares / "probe-1" / "in").exists())
+        self.assertEqual(list((self.shares / "probe-1" / "out").iterdir()), [])
+
+    def test_a_failed_clear_releases_the_claim(self) -> None:
+        # A share directory replaced by a symbolic link is not followed,
+        # so emptying it fails.
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("kept")
+        (self.shares / "probe-1").mkdir(parents=True)
+        (self.shares / "probe-1" / "out").symlink_to(outside, target_is_directory=True)
+        slots, _ = self.slots()
+        with self.assertRaisesRegex(
+            Refused, f"^emptying the share out of probe-1 at {re.escape(str(self.shares))}/probe-1/out failed: "
+        ):
+            slots.up("probe", self.process(1000))
+        self.assertIsNone(self.lease("probe-1"))
+        self.assertEqual((outside / "keep").read_text(), "kept")
+        self.assertEqual(self.calls(), [["--no-ask-password", "stop", "microvm@probe-1.service"]])
+
+    def test_a_slot_directory_replaced_by_a_link_is_not_followed(self) -> None:
+        # A session can write the directory of the slot, above its
+        # shares. A link there would point the shares at a directory
+        # elsewhere, so emptying them fails and the files there stay.
+        outside = self.root / "elsewhere"
+        for name in ("in", "out"):
+            (outside / name).mkdir(parents=True)
+            (outside / name / "keep").write_text("kept")
+        self.shares.mkdir(parents=True, exist_ok=True)
+        (self.shares / "probe-1").symlink_to(outside, target_is_directory=True)
+        slots, _ = self.slots()
+        with self.assertRaisesRegex(Refused, "^emptying the share .* of probe-1 at .* failed: "):
+            slots.up("probe", self.process(1000))
+        self.assertIsNone(self.lease("probe-1"))
+        for name in ("in", "out"):
+            self.assertEqual((outside / name / "keep").read_text(), "kept")
 
     def test_a_guest_that_never_answers_stays_leased(self) -> None:
         self.answering = set()
