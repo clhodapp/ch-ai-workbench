@@ -20,9 +20,13 @@ start, stop and restart, through a polkit rule.
 
 The option `ch-ai-workbench.microvm.kinds.<kind>` declares a kind:
 
-- `slots`: the guests of the kind, each as `{ name; cid; }`, in the
-  order a session claims them. Slot names and CIDs are unique across
-  the kinds, and an assertion refuses a home that repeats one.
+- `slots`: the guests of the kind, each as
+  `{ name; cid; vsockSocket; }`, in the order a session claims them.
+  Slot names and CIDs are unique across the kinds, and an assertion
+  refuses a home that repeats one. `vsockSocket` is null by default.
+  For a guest that runs under cloud-hypervisor, it is the path of the
+  hybrid vsock socket of the guest, which the section on reaching a
+  guest describes.
 - `vsockPort`: the vsock port the guests serve on, or null. `up` waits
   until a started guest accepts a connection on it.
 - `shareRoot`: the directory of the share directories, or null. The
@@ -40,7 +44,45 @@ The option `ch-ai-workbench.microvm.kinds.<kind>` declares a kind:
 
 The module reads nothing about the guests from the tree. A machine
 that declares its slots in a caisson-microvm configuration gives the
-same names, CIDs, port and share root to this option.
+same names, CIDs, port and share root to this option. For a guest
+under cloud-hypervisor, it also gives the path that caisson records as
+`outputs.slots.<slot>.vsockSocket`.
+
+## Reaching a guest
+
+The program reaches the vsock port of a guest in two places: the wait
+of `up` for the guest to answer, and the connection of the MCP server
+to a guest that serves MCP. Both go through one function,
+`transport.connect`, which takes the slot, its CID, the port of its
+kind and its `vsockSocket`.
+
+A slot without `vsockSocket` is reached through an `AF_VSOCK` socket
+connected to `<cid>:<port>`.
+
+A slot with `vsockSocket` is reached through the hybrid vsock of
+cloud-hypervisor. The VMM of the guest listens on that Unix socket on
+the host. The program connects to it and sends `CONNECT <port>` and a
+newline. The VMM answers `OK <host-port>` and a newline when the guest
+accepts the connection. Any other answer, or the end of the stream,
+means the guest refused it. After the answer, the stream is the
+connection to the port of the guest. The program reads the answer one
+byte at a time, so nothing the guest sends after it is lost.
+
+Connecting and the exchange each wait at most one second in the wait
+of `up`, and five seconds for the MCP connection. A failure names the
+slot and the cause:
+
+- the socket does not exist, or nothing listens on it, when the VMM of
+  the guest does not run;
+- permission is denied on the socket, when the user is not an operator
+  of the guest in `caisson.microvm-host.operators`;
+- the VMM refuses `CONNECT`, with the answer it gave.
+
+The wait of `up` tries again every half second until `upTimeout`, and
+the message at the timeout carries the last failure. A permission
+error ends the wait at once, since waiting does not change it.
+`status` shows a permission error after `not answering`, and every
+other failure as `not answering` alone.
 
 ## The program
 
@@ -115,7 +157,8 @@ sets `agents`. Its `.claude-plugin/plugin.json` declares one MCP
 server, `microvm`, which runs `microvm mcp`. This is how the other
 plugins of this layer declare their MCP servers. Claude Code starts the
 server with the session, outside the sandbox of Bash, so the server
-reaches the system bus and the vsock of the guests itself. No sandbox
+reaches the system bus and the vsock of the guests, or their hybrid
+vsock sockets, itself. No sandbox
 module and no trusted executable is involved.
 
 The server speaks MCP over stdio, one JSON-RPC message per line, with
@@ -161,8 +204,8 @@ that Bash commands reach them only in a checkout that has chosen
 ### Guests that serve MCP
 
 When `microvm_up` brings up a slot of a kind that sets `mcp` and its
-vsock port answers, the server connects to the port with an `AF_VSOCK`
-socket. It sends `initialize` and `notifications/initialized` to the
+vsock port answers, the server connects to the port as the section on
+reaching a guest describes. It sends `initialize` and `notifications/initialized` to the
 MCP server of the guest, then fetches its `tools/list`. It adds those
 tools to its own `tools/list` under their own names and sends Claude
 Code `notifications/tools/list_changed`. The result of `microvm_up`
@@ -250,7 +293,8 @@ A machine that runs guests for its sessions:
   `claude-code`, with `claude-code` enabled, and sets
   `ch-ai-workbench.microvm.kinds.<kind>` from the same names, CIDs,
   port and share root, with `agents = true` and `mcp` for a kind whose
-  guests serve MCP;
+  guests serve MCP, and with the `vsockSocket` of each slot from
+  `outputs.slots.<slot>.vsockSocket` for guests under cloud-hypervisor;
 - selects `claude-code-sandbox` in that home as well when the Bash
   commands of agents should reach the share directories, and chooses
   `microvm-<kind>` in the checkouts that work with the kind.
@@ -259,15 +303,25 @@ A machine that runs guests for its sessions:
 
 The package build runs the unittest suites of the program. The lease
 suite runs against a fake systemctl, a fake `/proc` and a fake vsock
-probe. The MCP suite runs the server against the same fakes and fake
-guest MCP servers on socket pairs: the tools before any guest, a kind
-agents may not use, a kind without MCP, the tools of a guest after
-`microvm_up`, forwarding, names that collide, stopping, a dropped
-connection, and the stops at the end of input. The check
+probe. It also waits for a guest through a fake VMM on a hybrid vsock
+socket, and ends the wait at a permission error. The transport suite
+runs the hybrid vsock exchange against a fake VMM on a Unix socket in
+a temporary directory: an accepted connection, a refused `CONNECT`, an
+answer that is not `OK `, a missing socket, a socket nothing listens
+on, a socket the user may not open, and a VMM that never answers. The
+MCP suite runs the server against the same fakes and fake guest MCP
+servers: the tools before any guest, a kind agents may not use, a kind
+without MCP, the tools of a guest after `microvm_up`, forwarding,
+names that collide, stopping, a dropped connection, and the stops at
+the end of input. It runs every test twice, once with the guests on
+socket pairs in place of `AF_VSOCK` and once with the guests behind
+fake VMMs on the hybrid vsock sockets of their slots. The check
 `microvm-home-module` evaluates homes with kinds from the options. The
 home with kinds for agents gets the command, the reap timer and the
 plugin with the server `microvm`, whose tools over stdio list only the
-kinds for agents and refuse the others. That home also gets the
+kinds for agents and refuse the others. The configuration baked into
+its command carries the `vsockSocket` of the slot that sets one, and
+null for the others. That home also gets the
 sandbox module `microvm-probe`, whose read and write paths are exactly
 the directories of the two slots of `probe`, and no sandbox module for
 `quiet`, which has no share root. A home whose only kind is not for

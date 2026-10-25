@@ -1,23 +1,27 @@
 # SPDX-License-Identifier: MIT
 """The fakes the tests share: a systemctl that keeps unit state in a
-file, a /proc of stat files, a vsock probe, and a configuration of four
-kinds. `probe` and `other` serve MCP, `quiet` serves nothing, and agents
+file, a /proc of stat files, a vsock probe, the hybrid vsock socket of
+a VMM, and a configuration of four kinds. `probe` and `other` serve MCP, `quiet` serves nothing, and agents
 may not use `hidden`."""
 
 from __future__ import annotations
 
 import io
 import json
+import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from typing import Callable
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
 from microvm_slots.slots import Caller, Slots  # noqa: E402
+from microvm_slots.transport import Endpoint  # noqa: E402
 
 FAKE_SYSTEMCTL = """\
 import json, sys, time
@@ -53,6 +57,68 @@ elif args[:1] == ["show"]:
 
 def stat_line(pid: int, start: str, comm: str = "claude") -> str:
     return f"{pid} ({comm}) S " + " ".join(["0"] * 18) + f" {start} 0 0\n"
+
+
+class FakeVmm:
+    """The hybrid vsock socket of a cloud-hypervisor VMM, listening at
+    `path`. For each connection it reads one line, records it in
+    `requests`, and sends what `answer` returns for the requested port,
+    or closes the connection when `answer` returns None. After an
+    answer that starts with `OK `, it hands the connection and the port
+    to `accepted`, or closes the connection when `accepted` is None."""
+
+    def __init__(
+        self,
+        path: Path,
+        answer: Callable[[int], bytes | None] = lambda port: b"OK 1073741824\n",
+        accepted: Callable[[socket.socket, int], None] | None = None,
+    ) -> None:
+        self.path = path
+        self.answer = answer
+        self.accepted = accepted
+        self.requests: list[bytes] = []
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(path))
+        self.listener.listen(8)
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.listener.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.handle, args=(conn,), daemon=True).start()
+
+    def handle(self, conn: socket.socket) -> None:
+        line = bytearray()
+        while not line.endswith(b"\n"):
+            byte = conn.recv(1)
+            if not byte:
+                conn.close()
+                return
+            line += byte
+        self.requests.append(bytes(line))
+        verb, _, port = line.decode().strip().partition(" ")
+        reply = self.answer(int(port)) if verb == "CONNECT" and port.isdigit() else None
+        if reply is None:
+            conn.close()
+            return
+        if reply:
+            conn.sendall(reply)
+        if not reply.startswith(b"OK "):
+            conn.close()
+        elif self.accepted is not None:
+            self.accepted(conn, int(port))
+        else:
+            conn.close()
+
+    def close(self) -> None:
+        try:
+            self.listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.listener.close()
 
 
 class Fixture(unittest.TestCase):
@@ -125,13 +191,17 @@ class Fixture(unittest.TestCase):
     def sleep(self, seconds: float) -> None:
         self.now += seconds
 
+    def probe(self, endpoint: Endpoint, timeout: float) -> None:
+        if endpoint.cid not in self.answering:
+            raise ConnectionRefusedError(f"{endpoint.slot} does not answer")
+
     def slots(self, agents_only: bool = False) -> tuple[Slots, io.StringIO]:
         out = io.StringIO()
         return (
             Slots(
                 self.config,
                 agents_only=agents_only,
-                probe=lambda cid, port, timeout: cid in self.answering,
+                probe=self.probe,
                 clock=self.clock,
                 sleep=self.sleep,
                 out=out,
