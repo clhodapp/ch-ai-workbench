@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fixtures import BASE, WORK, WORK_FRAGMENT, write_registry
 
-from claude_code_sandbox.compose import SOCKETS_ENV_VAR, compose
+from claude_code_sandbox.compose import DEVICES_ENV_VAR, SOCKETS_ENV_VAR, compose
 from claude_code_sandbox.files import ToolError, read_json
 
 
@@ -146,6 +146,24 @@ class ComposeTest(unittest.TestCase):
         self.assertIs(fragment["sandbox"]["network"]["allowAllUnixSockets"], True)
         self.assertEqual(fragment["env"]["SHELL"], BASE["shell"])
         self.assertNotIn(SOCKETS_ENV_VAR, fragment["env"])
+
+    def test_devices_union_into_the_wrapper_variable(self):
+        fragment = self.compose(
+            {
+                "a": part("a", devices=["/dev/dri/renderD*", "/dev/kfd"]),
+                "b": part("b", devices=["/dev/kfd", "/dev/fuse"]),
+            },
+            ["a", "b"],
+        )
+        self.assertEqual(fragment["env"][DEVICES_ENV_VAR], "/dev/dri/renderD*\n/dev/kfd\n/dev/fuse")
+        self.assertNotIn("devices", fragment["sandbox"])
+
+    def test_no_devices_writes_an_empty_variable(self):
+        # A running session applies a changed value and keeps a removed
+        # variable, so the empty value is what unbinds the devices of a
+        # dropped module.
+        fragment = self.compose({"work": WORK, "a": part("a", devices=[])}, ["work", "a"])
+        self.assertEqual(fragment["env"][DEVICES_ENV_VAR], "")
 
     def test_no_sockets_keeps_the_plain_shell(self):
         fragment = self.compose({"work": WORK}, ["work"])

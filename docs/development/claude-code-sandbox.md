@@ -70,6 +70,10 @@ fragment for Claude Code's built-in sandbox carries:
   pinned to the base bash.
 - The union of the chosen modules' list grants: read and write paths,
   allowed and denied domains, excluded commands, unix sockets.
+- The union of the `devices` patterns every chosen module lists, in
+  `env.CLAUDE_CODE_SANDBOX_DEVICES`, one pattern per line. The variable
+  is in every fragment and is empty when no chosen module lists a
+  device (see the device-node boundary below).
 - Fail-closed posture: `failIfUnavailable` so a sandbox that cannot
   initialize refuses commands instead of silently running them
   unsandboxed.
@@ -401,6 +405,33 @@ auto-sync); the design is correct without it.
 - A checkout that chooses a module with `allowNix` necessarily leaves
   the store unmasked for all its modules: an unmasked store makes every
   installed tool reachable.
+- Device nodes: Claude Code builds every sandbox with its filesystem
+  binds first and `--dev /dev` after them, which mounts a fresh `/dev`
+  holding only `null`, `zero`, `random`, `tty` and a few others. It
+  binds `allowRead` and `allowWrite` paths without device access. A
+  device node such as a GPU's `/dev/dri/renderD128` therefore enters
+  the sandbox through the base part's `bwrap` wrapper, which every
+  enrollment's PATH finds ahead of the real bubblewrap. The wrapper
+  reads the composed `devices` patterns from
+  `CLAUDE_CODE_SANDBOX_DEVICES`, expands them as shell globs when each
+  sandbox is built, and inserts `--dev-bind-try NODE NODE` for every
+  matching character or block device right after the first
+  `--dev /dev`. Then it execs the next `bwrap` on PATH. A match that is
+  a symlink binds the device it resolves to, at that device's own path.
+  This is how a module names one USB device: libusb opens it at
+  `/dev/bus/usb/BBB/DDD`, a path that changes whenever the device
+  re-enumerates, so a udev `SYMLINK` rule gives the module a stable
+  pattern. A call without
+  `--dev /dev` (Claude Code's probes) passes through unchanged. The
+  composer writes the variable into every fragment, empty when no
+  chosen module lists a device. Claude Code applies a changed env value
+  to a running session and keeps a removed variable until the next
+  launch, so the empty value is what makes dropping a device module
+  take effect at once. A device node is a kernel driver interface, so
+  a module should name the nodes its tooling needs: a GPU compute
+  module wants the render nodes and, for ROCm, `/dev/kfd`, rather than
+  all of `/dev/dri`, which also holds the display nodes `card*`.
+  Verified against Claude Code 2.1.304 on 2026-10-24.
 - Fragment size is bounded: the rules are passed through the exec
   environment, which fails around 128KB. The CLI refuses a composition
   past 100KB, and a part's build fails if that part alone is past it.
@@ -452,8 +483,8 @@ are the correctness core: any change to `merge.py` needs a test for the
 affected rule (domain invariant, ad-hoc persistence, removal asymmetry,
 scalar authority, pruning, idempotence), and any change to `compose.py`
 needs one in `tests/test_compose.py` (unions, masking, PATH order,
-`requires` and `baseModules`, socket narrowing, conflicts, the size
-limit). `checks.<system>.claude-code-sandbox-compose` runs the CLI
+`requires` and `baseModules`, socket narrowing, the device list,
+conflicts, the size limit). `checks.<system>.claude-code-sandbox-compose` runs the CLI
 against the parts a home-manager configuration really builds.
 
 From this repository's root:

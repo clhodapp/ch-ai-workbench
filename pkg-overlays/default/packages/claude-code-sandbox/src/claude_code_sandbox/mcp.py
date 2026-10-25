@@ -89,7 +89,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "describe-module",
         "description": (
             "Show what a sandbox module would allow: the commands and packages it puts on PATH, "
-            "network domains, unix sockets, writable and readable paths, commands it runs "
+            "network domains, unix sockets, device nodes, writable and readable paths, commands it runs "
             "outside the sandbox, environment, whether it unmasks the Nix store, and the modules "
             "enabling it would also enable. Also its status in this checkout."
         ),

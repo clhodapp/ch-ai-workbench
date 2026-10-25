@@ -148,6 +148,16 @@
                   toolset = [ pkgs.hello ];
                 };
                 forge.trustedExecutables = [ "greet" ];
+                # Nodes the Nix build sandbox has: a glob, a symlink
+                # (/dev/stdin resolves to /dev/null when stdin is
+                # /dev/null), a match that is not a device node, and a
+                # path that does not exist.
+                devices.devices = [
+                  "/dev/zer*"
+                  "/dev/stdin"
+                  "/dev/shm"
+                  "/dev/ccs-absent"
+                ];
               };
               baseModules = [ "agent" ];
               # A program whose ExecStart words carry a $ (systemd
@@ -250,6 +260,7 @@
                     jq -e '.sandbox.network.allowedDomains | sort == ["*.anthropic.com", "*.githubusercontent.com", "github.com"]' "$settings"
                     jq -e '.sandbox.network.allowUnixSockets == ["/run/agent.sock"] and .sandbox.network.allowAllUnixSockets' "$settings"
                     jq -e '.env.CLAUDE_CODE_SANDBOX_UNIX_SOCKETS == "/run/agent.sock"' "$settings"
+                    jq -e '.env.CLAUDE_CODE_SANDBOX_DEVICES == ""' "$settings"
                     shell=$(jq -r .env.SHELL "$settings")
                     case "$shell" in *ccs-socket-shell) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
                     for cmd in fd gh git ssh claude-code-sandbox bwrap; do
@@ -282,6 +293,40 @@
                     claude-code-sandbox decline nix --reason 'no store here' -C repo
                     claude-code-sandbox status -C repo | grep -q 'declined \[nix\]'
 
+                    # A device list, and the bwrap wrapper applying it. A
+                    # bwrap that prints its arguments stands in for the
+                    # real one after the wrapper on PATH.
+                    git init -q repo3
+                    claude-code-sandbox enroll devices -C repo3
+                    settings3=repo3/.claude/settings.local.json
+                    devices=$(jq -r .env.CLAUDE_CODE_SANDBOX_DEVICES "$settings3")
+                    test "$devices" = "$(printf '%s\n' '/dev/zer*' /dev/stdin /dev/shm /dev/ccs-absent)"
+                    claude-code-sandbox show devices -C repo3 \
+                      | grep -qx 'Device nodes openable: /dev/zer\*, /dev/stdin, /dev/shm, /dev/ccs-absent'
+                    wrapper=$(PATH=$(jq -r .env.PATH "$settings3") command -v bwrap)
+                    case "$wrapper" in *-bubblewrap-*) echo "PATH finds $wrapper first"; exit 1 ;; esac
+                    mkdir recorder
+                    printf '#!${pkgs.bash}/bin/sh\nprintf "%%s\\n" "$@"\n' > recorder/bwrap
+                    chmod +x recorder/bwrap
+                    wrap() {
+                      CLAUDE_CODE_SANDBOX_DEVICES=$1 PATH="''${wrapper%/*}:$PWD/recorder" "$wrapper" "''${@:2}" < /dev/null
+                    }
+                    wrap "$devices" --ro-bind / / --dev /dev --unshare-pid -- sh -c 'echo --dev /dev' \
+                      > argv.txt 2> wrapper.err
+                    printf '%s\n' --ro-bind / / --dev /dev \
+                      --dev-bind-try /dev/zero /dev/zero --dev-bind-try /dev/null /dev/null \
+                      --unshare-pid -- sh -c 'echo --dev /dev' > want.txt
+                    diff want.txt argv.txt
+                    grep -q '/dev/shm .*is not a device node' wrapper.err
+                    if grep -q ccs-absent wrapper.err; then
+                      echo "the wrapper warned about a path that does not exist"; exit 1
+                    fi
+                    test "$(wrap "$devices" --version)" = --version
+                    test "$(wrap "" --dev /dev true)" = "$(printf '%s\n' --dev /dev true)"
+                    if wrap /etc/passwd --dev /dev true; then
+                      echo "the wrapper bound a path outside /dev"; exit 1
+                    fi
+
                     # The agent tools over stdio against the same registry.
                     # The declined module is reported without a prompt.
                     {
@@ -292,7 +337,7 @@
                     } | CLAUDE_PROJECT_DIR="$PWD/repo" claude-code-sandbox mcp > mcp.jsonl
                     jq -s -e 'map(.id) == [1, 2, 3, 4]' mcp.jsonl
                     jq -s -e '.[1].result.content[0].text | fromjson | .modules | map({(.name): .status}) | add
-                      == {agent: "enabled (base)", forge: "available", git: "available", github: "available", nix: "declined", search: "enabled"}' mcp.jsonl
+                      == {agent: "enabled (base)", devices: "available", forge: "available", git: "available", github: "available", nix: "declined", search: "enabled"}' mcp.jsonl
                     jq -s -e '.[2].result.content[0].text | test("declined nix .*no store here")' mcp.jsonl
                     jq -s -e '.[3].result.content[0].text | fromjson | .commands == ["fd"]' mcp.jsonl
 
