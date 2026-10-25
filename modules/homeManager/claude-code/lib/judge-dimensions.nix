@@ -5,8 +5,11 @@
 # (code blocks replaced by a marker) and answers each question with
 # the probability that its `true` criterion holds.  `rule` is the
 # reminder the model writing the message gets back when the judge
-# pushes back or reports.  The literal-character bans (em-dash, the
-# arrow) are left to the regex table, which catches them exactly.
+# pushes back or reports.  Bans on a word or a character (the
+# possessive handoff, "load-bearing", the em-dash, ...) are left to the
+# regex table, which finds them exactly; a run of elephant-1 over
+# recent sessions found it answering such questions from the tone of
+# the text rather than the presence of the word.
 let
   exempt = "Quoted text, text inside backticks, code, and the names of things do not count.";
 in
@@ -48,35 +51,31 @@ in
     rule = "close with a recap a reader who sees only the last message can act on: what was found, what changed, what failed or was skipped, and what happens next";
     targets = [ "reply" ];
   };
-  elliptical-possessive = {
-    instructions = "Does the text hand work over by naming an owner with a possessive that stands without its noun, such as \"that step is yours\", \"the merge is the owner's\", \"the rest is mine\", or \"the choice is my own\"? ${exempt}";
-    criteria.true = "A possessive (yours, mine, ours, theirs, my own, or a noun with 's) ends a clause in place of naming the next action.";
-    criteria.false = "Every possessive is followed by the noun it modifies, or the text has none.";
-    rule = "no elliptical possessive (\"X is yours\", \"X is the owner's\", \"is mine\", \"is my own\"); a handoff names the next action and who does it in a plain sentence, not the owner";
+  # Numbers reported for their own sake: tallies of edits, lines,
+  # files, sections, checks, or attempts, where the reader needed to
+  # know what changed or what was found.  A pattern has no handle on
+  # this, since the same number is the finding in one sentence and
+  # noise in the next.
+  count-obsession = {
+    instructions = "Does the text report counts that tell the reader nothing they need: how many edits, lines, files, tests, commits, sections, steps, or attempts there were, the size of a diff, or a tally of what was checked, in place of saying what changed, what was found, or what it means? A number is fine when it is itself the finding or the reader needs it to act, such as how many tests fail, a measurement the question asked for, or a version.";
+    criteria.true = "At least one count is reported for its own sake, a tally of the work, its size, or its parts, where saying what it is or what it means would serve the reader.";
+    criteria.false = "Every number answers the reader's question or is needed to act on it, or the text has no numbers.";
+    rule = "report what changed and what it means, not tallies of the work (edits, lines, files, sections, checks); give a number only when the number is the finding";
   };
-  relationship-words = {
-    instructions = "Does the prose use a figurative word in place of the real relationship between two things: \"rides\" or \"rides along with\", \"travels with\", \"substrate\", \"load-bearing\", or \"seam\"? ${exempt}";
-    criteria.true = "One of those words stands in for a dependency, a foundation, importance, or a design boundary.";
-    criteria.false = "None of those words is used figuratively for a relationship between parts of a system.";
-    rule = "say the actual relationship, what breaks, or what the thing is, not \"rides\", \"travels\", \"substrate\", \"load-bearing\", or \"seam\"";
+  # Clipped verdicts delivered as a sentence of their own for effect.
+  staccato-pronouncements = {
+    instructions = "Does the text make staccato pronouncements: clipped verdicts set off as sentences or lines of their own for effect, such as \"Fair.\", \"Recorded.\", \"Confirmed at the source.\", \"Decisive and favorable:\", or \"That settles it.\", where a full sentence would say what was found or decided? A plain one-word answer to a yes/no question does not count.";
+    criteria.true = "At least one short fragment stands alone to grade, announce, or punctuate instead of saying something about the subject in a full sentence.";
+    criteria.false = "Every sentence says something about the subject in full, or a short answer directly answers a yes/no question.";
+    rule = "no staccato pronouncements; say what was found or decided in a full sentence instead of grading it in a clipped line";
   };
-  grows = {
-    instructions = "Does the text say that a system, a tool, or a person \"grows\" a capability or a feature? ${exempt}";
-    criteria.true = "A form of \"grow\" describes software gaining a capability or someone adding a feature.";
-    criteria.false = "No form of \"grow\" is used that way; a number or a file growing in size does not count.";
-    rule = "say what happens (\"if we add a title hook\", \"once the parser handles nested lists\"), not that something \"grows\" a capability";
-  };
-  emphatic-never = {
-    instructions = "Does the text use \"never\" as emphasis on an instruction, a negation, or a contrast, where \"not\" or \"rather than\" would say the same thing? ${exempt}";
-    criteria.true = "\"Never\" dresses up a flat negation, an instruction, or a contrast.";
-    criteria.false = "\"Never\" is absent, or each use is a real claim about frequency or possibility.";
-    rule = "use \"not\" or \"rather than\" for a flat negation or contrast; keep \"never\" for real claims about frequency or possibility";
-  };
-  performed-enthusiasm = {
-    instructions = "Does the text perform enthusiasm or eagerness, or attribute it to the reader, as in \"happy to\", \"glad to\", \"great question\", or \"you'll love this\"? ${exempt}";
-    criteria.true = "The text performs enthusiasm, flatters, or tells the reader how they will feel.";
-    criteria.false = "The text states offers and results plainly.";
-    rule = "no performed enthusiasm; make offers as plain conditionals (\"I can open a PR if the analysis holds\")";
+  # Phrases that tell the reader a point matters or is interesting
+  # instead of showing why.
+  rhetorical-hooks = {
+    instructions = "Does the text use rhetorical hooks, phrases that tell the reader something is important, interesting, or surprising instead of showing why, such as \"and it matters\", \"here's the thing\", \"that's the key part\", \"the interesting bit is\", \"this is where it gets subtle\", or \"the short version\"?";
+    criteria.true = "A phrase announces the weight or interest of a point rather than stating the point or its consequence.";
+    criteria.false = "Points are stated with their consequences, and no phrase only advertises them.";
+    rule = "no rhetorical hooks (\"and it matters\", \"here's the thing\"); state the point and what follows from it";
   };
   selling = {
     instructions = "Does the text sell instead of describing: \"one X for all Y\" framing, claims that a problem vanishes or is solved for good, or grand or marketing language? ${exempt}";

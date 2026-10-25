@@ -89,10 +89,6 @@ let
   ticCheckTable = lib.mapAttrsToList (name: check: {
     inherit name;
     inherit (check) pattern rule;
-    # A regex entry is dismissed by the judge only through a dimension
-    # the judge is asked about.
-    dimension =
-      if check.dimension != null && enabledDimensions ? ${check.dimension} then check.dimension else null;
   }) (lib.filterAttrs (_name: check: check.enable) cfg.ticChecks);
 
   # The judge: a System One decision model that scores every finished
@@ -109,12 +105,6 @@ let
       else
         dimension.criteria.true == null || dimension.criteria.false == null
     ) enabledDimensions
-  );
-
-  unknownTicCheckDimensions = lib.mapAttrsToList (name: check: "${name} (${check.dimension})") (
-    lib.filterAttrs (
-      _name: check: check.dimension != null && !(cfg.judge.dimensions ? ${check.dimension})
-    ) cfg.ticChecks
   );
 
   enabledEndpoints = lib.sort (a: b: a.order < b.order) (
@@ -146,7 +136,6 @@ let
     }) enabledDimensions;
     inherit (cfg.judge)
       pushBackAbove
-      dismissBelow
       reportAbove
       turnScoresAbove
       maxChars
@@ -640,21 +629,6 @@ in
               example = "a handoff names the next action, not the owner";
               description = "One-line reminder returned to the model beside the matching lines.";
             };
-
-            dimension = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              example = "elliptical-possessive";
-              description = ''
-                The judge dimension (an entry of judge.dimensions) that
-                asks about the same rule. When the judge answers and puts
-                that dimension below judge.dismissBelow, a match of this
-                entry is dropped as a false positive; when no endpoint
-                answers, the match stands as it would without the judge.
-                Null for an entry a regex decides exactly, such as a
-                literal character.
-              '';
-            };
           };
         }
       );
@@ -687,13 +661,11 @@ in
         reason string. The same table drives hooks.tic-check-edit,
         which denies an edit or write once with the findings and lets
         an identical re-issue through. The judge (judge.*) feeds the
-        same cycle, and an entry that names a dimension is dismissed
-        when the judge puts that dimension below judge.dismissBelow.
-        Merged across all
-        modules that set it. This module seeds the peer-programmer
-        style's regex-catchable bans (lib/tic-checks.nix):
-        elliptical-possessive, em-dash, click, arrow,
-        relationship-words, performed-enthusiasm.
+        same cycle with the rules a pattern cannot decide. Merged
+        across all modules that set it. This module seeds the
+        peer-programmer style's bans on a word or a character
+        (lib/tic-checks.nix): elliptical-possessive, em-dash, click,
+        arrow, relationship-words, grows, performed-enthusiasm.
       '';
     };
 
@@ -910,12 +882,11 @@ in
           nuance, references, non-standard jargon, and generic concept
           words), and the peer-programmer
           style's rules that need judgment (lib/judge-dimensions.nix):
-          arguing-with-ghosts (asked of prose and code writes only),
-          elliptical-possessive,
-          relationship-words, grows,
-          emphatic-never, performed-enthusiasm, selling, throat-clearing,
-          fragments, process-narration, and undefined-terms (report
-          only).
+          arguing-with-ghosts (asked of writes only), final-message-recap
+          (asked of finished turns only), count-obsession,
+          staccato-pronouncements, rhetorical-hooks, selling,
+          throat-clearing, fragments, process-narration, and
+          undefined-terms (report only).
         '';
       };
 
@@ -923,15 +894,6 @@ in
         type = lib.types.float;
         default = 0.9;
         description = "Probability at or above which a dimension with pushBack set is a finding of the tic-check cycle.";
-      };
-
-      dismissBelow = lib.mkOption {
-        type = lib.types.float;
-        default = 0.2;
-        description = ''
-          Probability below which the judge's answer on a dimension
-          drops a match of a ticChecks entry that names that dimension.
-        '';
       };
 
       reportAbove = lib.mkOption {
@@ -995,10 +957,6 @@ in
       {
         assertion = malformedDimensions == [ ];
         message = "ch-ai-workbench.claude-code.judge.dimensions: a noul needs criteria.true and criteria.false, a score 2 to 10 levels: ${lib.concatStringsSep ", " malformedDimensions}";
-      }
-      {
-        assertion = unknownTicCheckDimensions == [ ];
-        message = "ch-ai-workbench.claude-code.ticChecks entries name dimensions not in judge.dimensions: ${lib.concatStringsSep ", " unknownTicCheckDimensions}";
       }
       {
         assertion = duplicateClaims == { };

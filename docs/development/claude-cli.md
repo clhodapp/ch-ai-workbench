@@ -587,11 +587,13 @@ output-style rule that needs judgment (seeded from
   another edit.
 - **Push-back.** On the first stop the Stop hook asks the judge, then
   builds its findings from both checkers. A dimension with `pushBack`
-  set at or above `judge.pushBackAbove` (0.9) is a finding. A regex hit
-  whose entry names a `dimension` is dropped when the judge put that
-  dimension below `judge.dismissBelow` (0.2), and otherwise carries the
-  judge's probability. Literal-character entries (em-dash, the arrow)
-  name no dimension and always fire. The findings go out under
+  set at or above `judge.pushBackAbove` (0.9) is a finding, and every
+  regex hit is one. The two checkers split the rules: a ban on a word
+  or a character is a regex entry, and the judge asks only what a
+  pattern cannot decide. A run of elephant-1 over recent sessions found
+  it answering word questions from the tone of a text rather than the
+  presence of the word, and its dismissals of regex hits dropped half of
+  the real ones. The findings go out under
   `tic-check: check`, and the verdict and rewrite steps are unchanged:
   the model writing the message still has the last word.
 - **Context.** When the Stop hook lets a message stand, it writes the

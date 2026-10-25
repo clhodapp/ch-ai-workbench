@@ -1,6 +1,6 @@
 # Shared by the tic-check hooks (prepended to each script by its
 # package wrapper, after `table=` is set to the JSON array of
-# {name, pattern, rule, dimension} rendered from ticChecks and
+# {name, pattern, rule} rendered from ticChecks and
 # `judge=` to the judge config rendered from judge.*; the
 # claude-response-judge program is on PATH).
 #
@@ -22,14 +22,10 @@
 #     and up to three matching lines.  Code fences and backtick spans
 #     are removed before matching: quoted paths, commands, and output
 #     are not the model's prose.  Patterns are GNU grep EREs, matched
-#     case-insensitively.  When the entry names a dimension and the
-#     judge put that dimension below judge.dismissBelow, the hit is
-#     dropped as a false positive; otherwise the judge's probability
-#     is printed beside the count.
+#     case-insensitively.
 #   - A dimension with pushBack set that the judge put at or above
 #     judge.pushBackAbove prints its name, the probability, its rule,
-#     and its `true` criterion, unless a regex entry for the same
-#     dimension already printed.
+#     and its `true` criterion.
 
 tic_verdict() {
   local kind=$1 text=$2 replaced=${3:-} transcript=${4:-} file='' args=()
@@ -42,33 +38,22 @@ tic_verdict() {
 }
 
 tic_findings() {
-  local text=$1 verdict=${2:-} prose name pattern rule dimension hits count lines p note
-  local covered=()
+  local text=$1 verdict=${2:-} prose name pattern rule hits count lines
   # The backticks are literal markdown fence and span markers.
   # shellcheck disable=SC2016
   prose=$(sed -e '/^[[:space:]]*```/,/^[[:space:]]*```/d' -e 's/`[^`]*`//g' <<<"$text")
-  while IFS= read -r name && IFS= read -r pattern && IFS= read -r rule && IFS= read -r dimension; do
+  while IFS= read -r name && IFS= read -r pattern && IFS= read -r rule; do
     hits=$(grep -n -i -E -- "$pattern" <<<"$prose" 2>/dev/null) || continue
-    note=
-    if [ -n "$verdict" ] && [ -n "$dimension" ]; then
-      p=$(jq -r --arg d "$dimension" '.answers[$d] // empty' <<<"$verdict" 2>/dev/null) || p=
-      if [ -n "$p" ]; then
-        jq -en --argjson p "$p" --slurpfile c "$judge" '$p < $c[0].dismissBelow' >/dev/null 2>&1 && continue
-        note=", judge $(jq -rn --argjson p "$p" '($p * 100 | round) / 100')"
-        covered+=("$dimension")
-      fi
-    fi
     count=$(grep -o -i -E -- "$pattern" <<<"$prose" | wc -l)
     # The lines that matched, so the model can find them without
     # re-reading the whole text; each cut to keep the reason short.
     lines=$(head -n 3 <<<"$hits" | cut -c1-160 | sed 's/^\([0-9]*\):/    line \1: /')
-    printf '\n- %s (%s%s): %s\n%s' "$name" "$count" "$note" "$rule" "$lines"
-  done < <(jq -r '.[] | .name, .pattern, .rule, (.dimension // "")' "$table" 2>/dev/null)
+    printf '\n- %s (%s): %s\n%s' "$name" "$count" "$rule" "$lines"
+  done < <(jq -r '.[] | .name, .pattern, .rule' "$table" 2>/dev/null)
   [ -n "$verdict" ] || return 0
-  jq -j --slurpfile c "$judge" --argjson covered "$(jq -cn '$ARGS.positional' --args "${covered[@]}")" '
+  jq -j --slurpfile c "$judge" '
     $c[0] as $c
     | .answers | to_entries[]
-    | select(.key as $k | $covered | index($k) | not)
     | $c.dimensions[.key] as $d
     | select($d != null and $d.pushBack and .value >= $c.pushBackAbove)
     | "\n- \(.key) (judge \((.value * 100 | round) / 100)): \($d.rule)\n    the judge read the text as: \($d.criteria.true)"

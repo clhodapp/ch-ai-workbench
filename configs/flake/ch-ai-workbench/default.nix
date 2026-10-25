@@ -773,11 +773,9 @@
 
               # The tic-check hooks with the judge, against a stub System
               # One server: with the judge down the regex table decides
-              # alone; the judge clears a regex hit it puts below
-              # dismissBelow, pushes back on a dimension at or above
-              # pushBackAbove that no regex catches, and annotates a regex
-              # hit it does not clear without listing it twice; a literal
-              # character fires whatever the judge says; a verdict below
+              # alone; the judge pushes back on a dimension at or above
+              # pushBackAbove that no regex catches; a regex hit fires
+              # whatever the judge says; a verdict below
               # pushBackAbove (and a report-only dimension above it) does
               # not block and reaches the next prompt once as context,
               # beside every readability score, highest first;
@@ -824,12 +822,13 @@
                       sleep 0.1
                     done
 
-                    # A regex hit the judge clears; the verdict waits for
-                    # the next prompt, which reports the readability
-                    # scores and no problems.
-                    [ -z "$(stop 'The merge step is yours.')" ]
+                    # A clean message; the verdict waits for the next
+                    # prompt, which reports the readability scores and no
+                    # problems. The word bans are the regex table, not
+                    # judge questions.
+                    [ -z "$(stop 'The build passed and the branch is pushed.')" ]
                     jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
-                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("undefined-terms") and (has("arguing-with-ghosts") | not))'
+                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("count-obsession") and has("undefined-terms") and (has("arguing-with-ghosts") | not) and (has("elliptical-possessive") | not))'
                     tail -n 1 requests.log | jq -e '.questions.density.type == "score" and (.questions.density.criteria | length) == 4'
                     tail -n 1 requests.log | jq -e '.questions["information-density"].criteria[1] | startswith("even")'
                     ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
@@ -846,14 +845,9 @@
                     reason <<<"$res" | grep -q 'elephant-1 at local'
                     [ ! -e "$stored" ]
 
-                    # A regex hit the judge does not clear, listed once.
-                    answers '{"elliptical-possessive": 0.95}'
-                    res=$(stop 'The merge step is yours.')
-                    reason <<<"$res" | grep -q -- '- elliptical-possessive (1, judge 0.95): '
-                    [ "$(reason <<<"$res" | grep -c -- '- elliptical-possessive')" = 1 ]
-
-                    # A literal character.
+                    # A regex hit stands whatever the judge says.
                     answers '{}'
+                    reason <<<"$(stop 'The merge step is yours.')" | grep -q -- '- elliptical-possessive (1): '
                     reason <<<"$(stop 'One — two.')" | grep -q -- '- em-dash (1): '
 
                     # Below pushBackAbove, and report-only: context, once.
