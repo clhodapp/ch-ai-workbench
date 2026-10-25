@@ -19,6 +19,7 @@ Where things live in this repository:
 | CLI (Python, stdlib only) | `pkg-overlays/default/packages/claude-code-sandbox/` |
 | Skills-dir plugin (enrollment skill, session-start hook, agent tools MCP server) | `pkg-overlays/default/packages/claude-code-sandbox-plugin/` |
 | Landlock shim (unix-socket narrowing) | `pkg-overlays/default/packages/landlock-shim/` |
+| `trusted-exec` (trusted-executable stub and service, Rust, std only) | `pkg-overlays/default/packages/trusted-exec/` |
 
 ## Principles
 
@@ -185,6 +186,107 @@ The tools go through Claude Code's usual permission check for MCP
 tools, so the first call of each may itself ask for permission, unless
 a permission rule allows `mcp__plugin_claude-code-sandbox_sandbox`.
 
+## Trusted executables
+
+A trusted executable is a program that a sandboxed command runs outside
+Claude Code's sandbox, in a second sandbox with different access. The
+home-manager option `trustedExecutables.<name>` declares the program,
+and a sandbox module grants it by listing the name in its own
+`trustedExecutables`. A checkout that chooses the module gets a stub
+named `<name>` on PATH. Running the stub runs the program on the other
+side of a unix socket, with stdin, stdout and stderr streamed over that
+socket.
+
+```nix
+{
+  ch-ai-workbench.claude-code-sandbox = {
+    trustedExecutables.gh = {
+      description = "gh with the user's GitHub token";
+      program = lib.getExe pkgs.gh;
+      passEnv = [ "GH_REPO" ];
+      serviceConfig = {
+        PrivateUsers = true;
+        ProtectSystem = "strict";
+        ProtectHome = "read-only";
+        ReadWritePaths = [ "%h/.config/gh" ];
+      };
+    };
+    modules.github-api.trustedExecutables = [ "gh" ];
+  };
+}
+```
+
+Each declaration becomes two systemd user units. The socket unit
+`ccs-trusted-<name>.socket` listens at
+`$XDG_STATE_HOME/claude-code-sandbox/trusted/<name>.sock` (mode 0600)
+with `Accept=yes`, so systemd starts one instance of the service
+template `ccs-trusted-<name>@.service` per connection, with the
+connection as stdin. The instance runs `trusted-exec serve`, which
+starts the program under the settings in `serviceConfig`. Those
+settings are the second sandbox. The socket lives under the state
+directory because composition writes socket paths into the checkout's
+settings at enroll time, and `$XDG_RUNTIME_DIR` contains the uid, which
+the home evaluation does not know.
+
+The grant is the socket. A granting module adds the socket to its
+`allowUnixSockets`, so the composer's Landlock narrowing admits it, and
+adds the stub to its farm. The stub is a compiled wrapper around
+`trusted-exec call`. Any program inside the sandbox that can connect to
+the socket can speak the protocol, so a checkout that does not choose
+the module has no way to reach the program.
+
+The service treats the request as untrusted input. It takes from the
+caller the arguments (after the declared `args`), stdin, the working
+directory (only when `workingDirectory` is null), and the values of the
+variables listed in `passEnv`. The program, the rest of its
+environment, and its sandbox come from the declaration. The service
+also refuses a peer whose uid differs from its own.
+
+A trusted program can still be steered by what the agent writes. With
+`workingDirectory` null the program runs in the caller's directory,
+which is usually a checkout the agent can write, and a program that
+reads configuration from there (git reads `.git/config` and runs hooks)
+then runs code the agent wrote, outside Claude Code's sandbox. We
+recommend declaring trusted executables only for programs whose
+behaviour the caller's arguments, stdin and directory cannot widen, and
+fixing `workingDirectory` or narrowing the service with `serviceConfig`
+otherwise.
+
+The protocol (`src/protocol.rs`) is a sequence of frames: one kind
+byte, a four-byte big-endian length, and the payload. The caller sends
+argument, directory and variable frames as raw bytes, then a run frame,
+in one write. After that it sends stdin chunks and forwarded signals
+(SIGHUP, SIGINT, SIGQUIT and SIGTERM, delivered to the program's
+process group). The service sends stdout and stderr chunks, then an
+exit frame with the exit code or the signal that ended the program, or
+an error frame when the program did not start. Each side reads into a
+buffer that keeps room for the header in front of the data, so every
+chunk of up to 64 KiB leaves in a single write, and blocking writes
+give backpressure in both directions. In a local measurement, 1 GiB
+passes through `cat` and back in about 0.24 s, against 0.1 s for a
+plain pipe, and a call of `true` takes about 1 ms. The stub exits with
+the program's exit code or 128 plus the signal. It exits 255 when it
+cannot reach the service or loses the connection, as ssh does, and 126
+or 127 when the service refuses the request or cannot start the
+program. When the connection closes before the program exits, the
+service sends SIGHUP to the program's process group, then SIGKILL after
+five seconds.
+
+Two limits follow from the design. The program sees pipes, never a
+terminal, so interactive prompts and terminal colour detection behave
+as they do in a pipeline. A process the program leaves running that
+keeps its stdout or stderr open holds the call open until it closes
+them, as with ssh.
+
+In a user service, the systemd settings that need file-system
+namespacing (`ProtectSystem`, `ProtectHome`, `ReadWritePaths`,
+`PrivateTmp` and the like) only take effect together with
+`PrivateUsers = true` (systemd.exec(5)). Inside that user namespace,
+files owned by root, store-symlinked dotfiles among them, appear owned
+by nobody, and tools that check the ownership of their configuration
+(ssh, for one) reject them. Every instance also gets
+`NoNewPrivileges = true` unless `serviceConfig` sets it.
+
 ## Module sketch
 
 ```nix
@@ -260,7 +362,11 @@ auto-sync); the design is correct without it.
   kernel without ABI 9 (Ubuntu 24.04 HWE, for instance) an enrollment
   with a socket allowlist warns once per command and leaves sockets as
   upstream left them; `runtime.landlock.socketFallback = "closed"` makes
-  it refuse instead.
+  it refuse instead. Upstream leaves every socket reachable in that
+  case, trusted-executable sockets included, so on such a kernel any
+  checkout with a socket grant can call every trusted executable. On
+  hosts with trusted executables and an older kernel, we recommend the
+  closed fallback.
 
   Execve confinement was considered and deliberately not shipped: it
   could not be a real boundary while the checkout and scratch dirs are
@@ -335,6 +441,7 @@ From this repository's root:
 nix build '.#claude-code-sandbox'
 nix build '.#claude-code-sandbox-plugin'
 nix build '.#landlock-shim'
+nix build '.#trusted-exec'
 nix build '.#checks.x86_64-linux.claude-code-sandbox-compose'
 ```
 

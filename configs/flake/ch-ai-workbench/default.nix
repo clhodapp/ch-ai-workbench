@@ -50,6 +50,10 @@
       {
         imports = [ inputs.treefmt-nix.flakeModule ];
         perSystem.treefmt.programs.nixfmt.enable = true;
+        perSystem.treefmt.programs.rustfmt = {
+          enable = true;
+          edition = "2021";
+        };
       };
   };
 
@@ -143,8 +147,22 @@
                   allowNix = true;
                   toolset = [ pkgs.hello ];
                 };
+                forge.trustedExecutables = [ "greet" ];
               };
               baseModules = [ "agent" ];
+              # A program whose ExecStart words carry a $ (systemd
+              # expands it unless doubled) and a passed variable.
+              trustedExecutables.greet = {
+                description = "greets";
+                program = "${pkgs.bash}/bin/sh";
+                args = [
+                  "-c"
+                  ''echo "$GREETING" "$@"''
+                  "sh"
+                ];
+                passEnv = [ "GREETING" ];
+                serviceConfig.PrivateTmp = true;
+              };
             };
 
             sandboxHomeFiles =
@@ -189,6 +207,8 @@
               claude-code-sandbox = self.packages.${system}.claude-code-sandbox;
               claude-code-sandbox-plugin = self.packages.${system}.claude-code-sandbox-plugin;
               landlock-shim = self.packages.${system}.landlock-shim;
+              # Building runs the integration tests of call against serve.
+              trusted-exec = self.packages.${system}.trusted-exec;
 
               # The CLI composing the parts the home-manager module
               # builds, end to end: the registry and parts come from a
@@ -199,8 +219,10 @@
                   {
                     nativeBuildInputs = [
                       self.packages.${system}.claude-code-sandbox
+                      self.packages.${system}.trusted-exec
                       pkgs.git
                       pkgs.jq
+                      pkgs.python3
                     ];
                   }
                   ''
@@ -270,7 +292,7 @@
                     } | CLAUDE_PROJECT_DIR="$PWD/repo" claude-code-sandbox mcp > mcp.jsonl
                     jq -s -e 'map(.id) == [1, 2, 3, 4]' mcp.jsonl
                     jq -s -e '.[1].result.content[0].text | fromjson | .modules | map({(.name): .status}) | add
-                      == {agent: "enabled (base)", git: "available", github: "available", nix: "declined", search: "enabled"}' mcp.jsonl
+                      == {agent: "enabled (base)", forge: "available", git: "available", github: "available", nix: "declined", search: "enabled"}' mcp.jsonl
                     jq -s -e '.[2].result.content[0].text | test("declined nix .*no store here")' mcp.jsonl
                     jq -s -e '.[3].result.content[0].text | fromjson | .commands == ["fd"]' mcp.jsonl
 
@@ -278,6 +300,46 @@
                     manifest=${self.packages.${system}.claude-code-sandbox-plugin}/.claude-plugin/plugin.json
                     test -x "$(jq -r .mcpServers.sandbox.command "$manifest")"
                     test -x "$(jq -r .mcpServers.sandbox.env.CLAUDE_CODE_SANDBOX_CONSENT "$manifest")"
+
+                    # A trusted executable: its socket and per-connection
+                    # service, the grant composed into a checkout, the
+                    # stub dialling the declared socket, and the service
+                    # command of the unit serving a call.
+                    sock=/home/tester/.local/state/claude-code-sandbox/trusted/greet.sock
+                    units=${sandboxHomeFiles}/.config/systemd/user
+                    grep -qx "ListenStream=$sock" "$units/ccs-trusted-greet.socket"
+                    grep -qx 'Accept=true' "$units/ccs-trusted-greet.socket"
+                    grep -qx 'SocketMode=0600' "$units/ccs-trusted-greet.socket"
+                    grep -qx 'StandardInput=socket' "$units/ccs-trusted-greet@.service"
+                    grep -qx 'NoNewPrivileges=true' "$units/ccs-trusted-greet@.service"
+                    grep -qx 'PrivateTmp=true' "$units/ccs-trusted-greet@.service"
+                    exec_start=$(sed -n 's/^ExecStart=//p' "$units/ccs-trusted-greet@.service")
+
+                    git init -q repo2
+                    claude-code-sandbox enroll forge -C repo2
+                    settings2=repo2/.claude/settings.local.json
+                    jq -e --arg s "$sock" '.sandbox.network.allowUnixSockets | index($s)' "$settings2"
+                    jq -e --arg s "$sock" '.env.CLAUDE_CODE_SANDBOX_UNIX_SOCKETS | split("\n") | index($s)' "$settings2"
+                    stub=$(PATH=$(jq -r .env.PATH "$settings2") command -v greet)
+                    rc=0
+                    "$stub" 2> stub.err || rc=$?
+                    test "$rc" = 255
+                    grep -qF "$sock" stub.err
+                    claude-code-sandbox show forge -C repo2 | grep -q '^Trusted executable greet: runs ${pkgs.bash}/bin/sh '
+
+                    python3 - "$TMPDIR/greet.sock" "$exec_start" <<'EOF' &
+                    import shlex, socket, subprocess, sys
+                    argv = [w.replace("$$", "$").replace("%%", "%") for w in shlex.split(sys.argv[2])]
+                    s = socket.socket(socket.AF_UNIX)
+                    s.bind(sys.argv[1])
+                    s.listen()
+                    c, _ = s.accept()
+                    subprocess.run(argv, stdin=c.fileno())
+                    EOF
+                    while [ ! -S "$TMPDIR/greet.sock" ]; do sleep 0.1; done
+                    greeting=$(GREETING=hello trusted-exec call --name greet --socket "$TMPDIR/greet.sock" --pass-env GREETING -- world)
+                    test "$greeting" = "hello world"
+                    wait
                     touch $out
                   '';
 
@@ -695,6 +757,10 @@
                   '';
             };
             treefmt.programs.nixfmt.enable = true;
+            treefmt.programs.rustfmt = {
+              enable = true;
+              edition = "2021";
+            };
           };
       };
   };
