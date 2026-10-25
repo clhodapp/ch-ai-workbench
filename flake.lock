@@ -187,11 +187,11 @@
         "pr-review": "pr-review"
       },
       "locked": {
-        "lastModified": 1792680019,
-        "narHash": "sha256-DAyVsMSIeI8GgMtPU8CGmEAAsPlWUoMzODhCX+bJZ2w=",
+        "lastModified": 1792957697,
+        "narHash": "sha256-3+Z9QPa+yW37tsdmA2GWnufc8b3VO/UMLw7yV1hmnZ0=",
         "owner": "clhodapp",
         "repo": "ch-emacs-config",
-        "rev": "7db5bd2ecbf8121a5a31f21c60eaac720d6c1eae",
+        "rev": "d462de2e9ce596425572d823cea36864ba8effe1",
         "type": "github"
       },
       "original": {
@@ -477,16 +477,16 @@
     "ghostel": {
       "flake": false,
       "locked": {
-        "lastModified": 1789834264,
-        "narHash": "sha256-NpfnlggAcThNw9uY7Uq4qFPEJ+md8aZ8i32CQSUKz+w=",
+        "lastModified": 1792405838,
+        "narHash": "sha256-1eIMfkPrczsirteuN3uM4axj8ZW3pt0TpPG+Lpos2uU=",
         "owner": "dakra",
         "repo": "ghostel",
-        "rev": "829ac98a3e3183249028f9f4e029e7e9c0869be3",
+        "rev": "b77eae6f58ed1fc9b36694807e84a4bb6dfbf9fd",
         "type": "github"
       },
       "original": {
         "owner": "dakra",
-        "ref": "v0.56.0",
+        "ref": "v0.59.0",
         "repo": "ghostel",
         "type": "github"
       }
