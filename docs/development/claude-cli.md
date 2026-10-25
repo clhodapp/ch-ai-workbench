@@ -548,9 +548,10 @@ output-style rule that needs judgment (seeded from
   message `[earlier message of this turn]`, and appends the final
   message headed `[final message]`. The final message is dropped from
   the transcript side when the CLI has already written it there, so it
-  appears once either way. The final message is kept whole, and the
-  earlier messages are kept newest first within `judge.maxChars`. The
-  regex table, the judge, and the stored verdict all work on that text.
+  appears once either way. A turn longer than `judge.maxChars` keeps
+  its trailing characters behind a `[start of the turn cut]` marker, so
+  the newest text is what gets judged. The regex table, the judge, and
+  the stored verdict all work on that text.
   The `final-message-recap` noul asks whether the final message leaves
   out key context from the turn, such as a finding, a change, a
   failure, or the next action. The rewrite step asks for the final

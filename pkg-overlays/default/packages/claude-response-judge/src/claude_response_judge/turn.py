@@ -9,9 +9,9 @@ EARLIER, then the final message headed FINAL. When the transcript already ends w
 message, that copy is dropped, so the final message appears once whether or not the CLI has
 written it to the transcript before the hook runs.
 
-The final message is always printed whole. Earlier messages are added newest first while the
-whole text stays within `--max-chars`, and a marker replaces the ones left out. A transcript
-that cannot be read prints the final message alone, unheaded.
+A turn longer than `--max-chars` is cut to its trailing `--max-chars` characters, behind a
+marker, so the newest text is the text judged. A transcript that cannot be read prints the
+final message alone, unheaded.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from .cli import transcript_entries, typed_prompt
 
 EARLIER = "[earlier message of this turn]"
 FINAL = "[final message]"
-LEFT_OUT = "[older messages of this turn left out]"
+CUT = "[start of the turn cut]"
 
 
 def earlier_messages(entries: list[dict[str, Any]]) -> list[str]:
@@ -60,19 +60,13 @@ def turn_text(final: str, entries: list[dict[str, Any]], max_chars: int) -> str:
     earlier = earlier_messages(entries)
     if earlier and earlier[-1] == final:
         earlier.pop()
-    if not earlier:
-        return f"{FINAL}\n{final}"
-    budget = max_chars - len(FINAL) - len(final) - 2
-    kept: list[str] = []
-    for message in reversed(earlier):
-        piece = f"{EARLIER}\n{message}"
-        if len(piece) + 2 > budget:
-            break
-        kept.insert(0, piece)
-        budget -= len(piece) + 2
-    if len(kept) < len(earlier):
-        kept.insert(0, LEFT_OUT)
-    return "\n\n".join([*kept, f"{FINAL}\n{final}"])
+    text = "\n\n".join([*(f"{EARLIER}\n{m}" for m in earlier), f"{FINAL}\n{final}"])
+    if len(text) > max_chars:
+        # The marker counts toward max_chars, so the client, which cuts a longer text at its
+        # end, receives the turn whole.
+        keep = max(0, max_chars - len(CUT) - 1)
+        text = f"{CUT}\n" + text[len(text) - keep :]
+    return text
 
 
 def main(argv: list[str] | None = None) -> int:

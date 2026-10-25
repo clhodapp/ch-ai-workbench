@@ -72,8 +72,9 @@ fi
 
 # The whole turn: the messages written between tool calls since the
 # user's last prompt, read from the transcript, then this final message
-# (claude-turn-text heads each, keeps the final message whole, and falls
-# back to the final message alone when the transcript cannot be read).
+# (claude-turn-text heads each, keeps the trailing judge.maxChars of a
+# long turn, and falls back to the final message alone when the
+# transcript cannot be read).
 turn=$(claude-turn-text --transcript "$(field '.transcript_path')" --max-chars "$(jq -r '.maxChars' "$judge" 2>/dev/null)" <<<"$message" 2>/dev/null) || turn=
 [ -n "$turn" ] || turn=$message
 

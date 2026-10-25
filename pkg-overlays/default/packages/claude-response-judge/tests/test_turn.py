@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 """claude-turn-text on transcripts: the turn starts after the last typed prompt, messages
 split at tool calls, the final message appears once whether or not the transcript holds it,
-the length budget keeps the newest messages, and an unreadable transcript gives the final
-message alone."""
+a long turn keeps its trailing text, and an unreadable transcript gives the final message
+alone."""
 
 from __future__ import annotations
 
@@ -67,12 +67,14 @@ class TurnTextTest(unittest.TestCase):
     def test_single_message_turn(self):
         self.assertEqual(turn_text("Hi.", [prompt("hello"), say("Hi.")], 10000), "[final message]\nHi.")
 
-    def test_budget_keeps_the_newest(self):
-        text = turn_text("The parser handles tabs now.", ENTRIES, 120)
-        self.assertTrue(text.startswith("[older messages of this turn left out]\n\n[earlier message of this turn]\nFound it."))
-        self.assertNotIn("Reading the parser.", text)
+    def test_a_long_turn_keeps_its_trailing_text(self):
+        marker = "[start of the turn cut]\n"
+        full = turn_text("The parser handles tabs now.", ENTRIES, 10000)
+        cut = turn_text("The parser handles tabs now.", ENTRIES, 80)
+        self.assertEqual(cut, marker + full[-(80 - len(marker)) :])
+        self.assertEqual(len(cut), 80)
         long_final = "x" * 500
-        self.assertEqual(turn_text(long_final, ENTRIES, 120), f"[older messages of this turn left out]\n\n[final message]\n{long_final}")
+        self.assertEqual(turn_text(long_final, ENTRIES, 120), marker + "x" * (120 - len(marker)))
 
     def test_cli(self):
         env = dict(os.environ, PYTHONPATH=str(SRC))
