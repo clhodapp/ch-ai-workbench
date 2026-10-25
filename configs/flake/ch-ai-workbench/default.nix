@@ -936,6 +936,18 @@
                     post | jq -r .hookSpecificOutput.additionalContext | grep -q '^tic-check: mid-turn verdicts'
                     tail -n 1 requests.log | jq -e '.state.text | contains("Now the docs.") and (contains("Build green") | not)'
 
+                    # Below the push-back level a write goes through, and
+                    # its verdict reaches the model after the call, once.
+                    answers '{"arguing-with-ghosts": 0.6}'
+                    call='{tool_name: "Edit", tool_input: {file_path: "home.nix", old_string: "a = 1;", new_string: "# a is not set here anymore."}}'
+                    [ -z "$(jq -cn --arg s "$session" "$call + {session_id: \$s}" | "$edit")" ]
+                    after() { jq -cn --arg s "$session" --arg t "$PWD/progress.jsonl" "$call + {session_id: \$s, transcript_path: \$t, tool_response: {}}" | "$turnhook"; }
+                    ctx=$(after | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q 'not from the Edit call' <<<"$ctx"
+                    grep -q 'The text this Edit call wrote, judged as code before it ran' <<<"$ctx"
+                    grep -q -- '- arguing-with-ghosts 0.6: ' <<<"$ctx"
+                    [ -z "$(after)" ]
+
                     # Commit messages, pull request texts, and reviews
                     # written through Bash.
                     msg=${lib.getExe judgeHooks.tic-check-message.package}

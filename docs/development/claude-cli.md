@@ -573,6 +573,18 @@ output-style rule that needs judgment (seeded from
   problems at or above `judge.reportAbove`, and the scores at or above
   `judge.turnScoresAbove` (1, a level up from the first). It never
   blocks, and the Stop hook still checks the whole turn at its end.
+- **Confident blocks, less confident informs.** A write is judged once,
+  before it runs, by the edit or message hook. A finding at or above
+  `judge.pushBackAbove` denies the call. Otherwise the hook keeps its
+  verdict under `$XDG_RUNTIME_DIR/claude-tic-check/writes/`, keyed by a
+  digest of the payload's `{tool_name, tool_input}` with sorted keys,
+  which the PreToolUse and PostToolUse payloads share. After the call,
+  `tic-check-turn` reads and deletes the verdict for the same call and
+  adds its noul problems at or above `judge.reportAbove` to the
+  mid-turn note, in a section that names the call. That is how a
+  comment or a commit message that argues with ghosts below the
+  push-back level reaches the model, which can still correct it with
+  another edit.
 - **Push-back.** On the first stop the Stop hook asks the judge, then
   builds its findings from both checkers. A dimension with `pushBack`
   set at or above `judge.pushBackAbove` (0.9) is a finding. A regex hit

@@ -41,7 +41,15 @@ seen="$runtime/claude-tic-check/seen/${session:0:8}-$key"
 verdict=$(tic_verdict message "$text" "" "$(field '.transcript_path')")
 
 findings=$(tic_findings "$text" "$verdict")
-[ -n "$findings" ] || exit 0
+if [ -z "$findings" ]; then
+  # The command runs: keep the verdict for claude-tic-check-turn-hook,
+  # which reports what it found below the push-back level after the call.
+  if [ -n "$verdict" ] && written=$(tic_write_path "$session" "$payload"); then
+    { mkdir -p "$(dirname "$written")" &&
+      jq -cn --argjson v "$verdict" '{kind: "message", verdict: $v}' > "$written"; } 2>/dev/null || true
+  fi
+  exit 0
+fi
 
 mkdir -p "$(dirname "$seen")" 2>/dev/null && : > "$seen" 2>/dev/null || exit 0
 

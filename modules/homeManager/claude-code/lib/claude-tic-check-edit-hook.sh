@@ -49,7 +49,15 @@ fi
 verdict=$(tic_verdict "$kind" "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
 
 findings=$(tic_findings "$text" "$verdict")
-[ -n "$findings" ] || exit 0
+if [ -z "$findings" ]; then
+  # The write goes through: keep the verdict for claude-tic-check-turn-hook,
+  # which reports what it found below the push-back level after the call.
+  if [ -n "$verdict" ] && written=$(tic_write_path "$session" "$payload"); then
+    { mkdir -p "$(dirname "$written")" &&
+      jq -cn --arg k "$kind" --argjson v "$verdict" '{kind: $k, verdict: $v}' > "$written"; } 2>/dev/null || true
+  fi
+  exit 0
+fi
 
 mkdir -p "$(dirname "$seen")" 2>/dev/null && : > "$seen" 2>/dev/null || exit 0
 
