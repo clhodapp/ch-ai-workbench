@@ -63,11 +63,16 @@ in
     rule = "report what changed and what it means, not tallies of the work (edits, lines, files, sections, checks); give a number only when the number is the finding";
   };
   # Clipped verdicts delivered as a sentence of their own for effect.
+  # The line between this and fragments is whether the clipped text
+  # carries a fact: a pronouncement grades or punctuates and carries
+  # none, so the fix is to drop it or say the fact it grades; a fragment
+  # carries facts in compressed form, so the fix is to write the
+  # sentence out.
   staccato-pronouncements = {
-    instructions = "Does the text make staccato pronouncements: clipped verdicts set off as sentences or lines of their own for effect, such as \"Fair.\", \"Recorded.\", \"Confirmed at the source.\", \"Decisive and favorable:\", or \"That settles it.\", where a full sentence would say what was found or decided? A plain one-word answer to a yes/no question does not count.";
-    criteria.true = "At least one short fragment stands alone to grade, announce, or punctuate instead of saying something about the subject in a full sentence.";
-    criteria.false = "Every sentence says something about the subject in full, or a short answer directly answers a yes/no question.";
-    rule = "no staccato pronouncements; say what was found or decided in a full sentence instead of grading it in a clipped line";
+    instructions = "Does the text make staccato pronouncements: short lines or sentences, set off on their own for effect, that grade, approve, announce, or punctuate and carry no fact about the subject, such as \"Fair.\", \"Recorded.\", \"Confirmed at the source.\", \"Decisive and favorable:\", or \"That settles it.\"? A clipped sentence that carries facts (\"Build green, pushed.\") is a different problem and does not count here, and neither does a plain one-word answer to a yes/no question.";
+    criteria.true = "At least one short line or sentence carries no fact about the subject and only grades, approves, announces, or punctuates.";
+    criteria.false = "Every short line carries a fact about the subject, or answers a yes/no question.";
+    rule = "no staccato pronouncements; drop the clipped verdict, or say in a full sentence the fact it grades";
   };
   # Phrases that tell the reader a point matters or is interesting
   # instead of showing why.
@@ -90,9 +95,9 @@ in
     rule = "no throat-clearing or meta-commentary; start with the point";
   };
   fragments = {
-    instructions = "Does the prose rely on elliptical fragments instead of full sentences: dropped subjects, verbs, or articles (\"Build green, pushed, PR open\"), colon-fragment parallelism (\"What it covers: X. What it doesn't: Y.\"), or arrows and slashes standing in for a sentence? Headings, table cells, short labels in a list, and code do not count.";
-    criteria.true = "At least one passage of running prose is written as fragments the reader has to reconstruct into sentences.";
-    criteria.false = "The running prose is written in full sentences with a subject and a verb.";
+    instructions = "Does the prose carry its facts in elliptical fragments instead of full sentences: dropped subjects, verbs, or articles (\"Build green, pushed, PR open\"), colon-fragment parallelism (\"What it covers: X. What it doesn't: Y.\"), or arrows and slashes standing in for a sentence? Only compressed text that states facts counts. A short line that carries no fact and only grades or punctuates (\"Fair.\", \"Recorded.\") is a different problem and does not count here, and neither do headings, table cells, short labels in a list, or code.";
+    criteria.true = "At least one passage that states facts is written as fragments the reader has to reconstruct into sentences.";
+    criteria.false = "Every passage that states facts is written in full sentences with a subject and a verb.";
     rule = "write full declarative sentences with a subject and a verb; no colon-fragment parallelism, dropped words, or arrow shorthand";
   };
   process-narration = {
