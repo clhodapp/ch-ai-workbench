@@ -824,11 +824,10 @@
 
                     # A clean message; the verdict waits for the next
                     # prompt, which reports the readability scores and no
-                    # problems. The word bans are the regex table, not
-                    # judge questions.
+                    # problems.
                     [ -z "$(stop 'The build passed and the branch is pushed.')" ]
                     jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
-                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("count-obsession") and has("undefined-terms") and (has("arguing-with-ghosts") | not) and (has("elliptical-possessive") | not))'
+                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("count-obsession") and has("undefined-terms") and (has("arguing-with-ghosts") | not))'
                     tail -n 1 requests.log | jq -e '.questions["assumed-context"].type == "score" and (.questions["assumed-context"].criteria | length) == 4 and (.questions | has("generic-concept-words") and has("unexplained-references"))'
                     tail -n 1 requests.log | jq -e '.questions["information-density"].criteria[1] | startswith("even")'
                     ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)

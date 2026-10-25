@@ -5,9 +5,7 @@
 # case-insensitively against the finished message with code fences
 # and backtick spans removed; the rule is the one-line reminder the
 # model gets back.  A hit is a trigger, not a verdict: the model
-# answers the check with clean when the match is legitimate.  Left out
-# on purpose: "never", whose ordinary uses would make most messages
-# match.
+# answers the check with clean when the match is legitimate.
 {
   # The ownership handoff: a possessive left dangling at the end of a
   # clause ("two steps are yours", "the merge is the owner's", "the

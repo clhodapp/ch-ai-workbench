@@ -5,11 +5,9 @@
 # (code blocks replaced by a marker) and answers each question with
 # the probability that its `true` criterion holds.  `rule` is the
 # reminder the model writing the message gets back when the judge
-# pushes back or reports.  Bans on a word or a character (the
-# possessive handoff, "load-bearing", the em-dash, ...) are left to the
-# regex table, which finds them exactly; a run of elephant-1 over
-# recent sessions found it answering such questions from the tone of
-# the text rather than the presence of the word.
+# pushes back or reports.  Bans on a word or a character are entries of
+# the regex table (tic-checks.nix), which finds them exactly; this table
+# holds the rules a pattern cannot decide.
 let
   exempt = "Quoted text, text inside backticks, code, and the names of things do not count.";
 in

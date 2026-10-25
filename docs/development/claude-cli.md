@@ -590,10 +590,7 @@ output-style rule that needs judgment (seeded from
   set at or above `judge.pushBackAbove` (0.9) is a finding, and every
   regex hit is one. The two checkers split the rules: a ban on a word
   or a character is a regex entry, and the judge asks only what a
-  pattern cannot decide. A run of elephant-1 over recent sessions found
-  it answering word questions from the tone of a text rather than the
-  presence of the word, and its dismissals of regex hits dropped half of
-  the real ones. The findings go out under
+  pattern cannot decide. The findings go out under
   `tic-check: check`, and the verdict and rewrite steps are unchanged:
   the model writing the message still has the last word.
 - **Context.** When the Stop hook lets a message stand, it writes the
@@ -610,11 +607,9 @@ output-style rule that needs judgment (seeded from
   holds two scores and two nouls about how much work a reply makes for
   a developer who has not seen the work. `assumed-context` asks how
   much the reply assumes beyond what its subject requires, from nothing
-  to a note only someone who took part could follow. It is relative to
-  the subject because an absolute ladder of who could follow a reply
-  measured the subject instead: in a run over recent sessions only
-  general-knowledge answers scored low, and every cause asked about
-  moved with the overall score. `information-density` asks how much
+  to a note only someone who took part could follow. It leaves aside
+  what the subject requires, so an answer about this codebase is not
+  marked up for using its names. `information-density` asks how much
   each sentence carries, from sparse (filler, restatement) through even
   (one point per sentence) to packed. The nouls `generic-concept-words`
   ("the fold" standing for a mechanism the reply never names) and

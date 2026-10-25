@@ -4,14 +4,8 @@
 # Scores never push back: the context hook hands each one to the model
 # with the next prompt, as the expected position on the scale and the
 # most likely level, beside `rule`, the peer-programmer style's aim.
-#
-# An absolute ladder of who could follow a reply (an average
-# developer, the ecosystem, this codebase, the chat) measured the
-# subject rather than the writing: in a run over recent sessions only
-# general-knowledge answers scored low, and every cause asked about
-# (length, nuance, references, ...) moved with the overall score.  So
-# assumed-context asks about what the reply assumes beyond its subject,
-# and the two causes that name a fix are yes/no questions.
+# assumed-context leaves aside what the subject requires, so a reply
+# about this codebase is not marked up for using its names.
 let
   replies = [
     "reply"
