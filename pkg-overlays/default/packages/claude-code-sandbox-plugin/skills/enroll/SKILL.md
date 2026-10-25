@@ -27,12 +27,14 @@ the current directory, or the checkout containing DIR with `-C DIR`.
   these modules (plus the ones every enrollment gets and everything
   they require). With no modules, only the base toolset.
 - `claude-code-sandbox add MODULE...` and `drop MODULE...`: change the
-  set of an enrolled checkout.
+  set of an enrolled checkout. `add --for day` or `add --for week`
+  chooses the modules until that deadline; a systemd user timer drops
+  them when it passes. `add` without `--for` makes a choice permanent.
 - `claude-code-sandbox abandon`: remove the sandbox fragment while the
   checkout stays managed (deliberate opt-out that survives syncs; not
   a deletion).
-- `claude-code-sandbox sync`: re-apply the chosen modules after a
-  module edit.
+- `claude-code-sandbox sync`: drop expired modules and re-apply the
+  chosen ones after a module edit.
 - `claude-code-sandbox scan DIR`: report every checkout under the given
   directory (the invoker supplies the scope; nothing is assumed).
 - `claude-code-sandbox show MODULE...`: what each module allows and its
@@ -55,9 +57,10 @@ Facts that prevent wrong conclusions:
   language toolchain, forge), not from what would be convenient. A
   module with `allowNix` unmasks the store for the whole checkout, which
   `list` marks.
-- Settings live-reload: rule changes reach the running session on file
-  save. Exception: *removing* an `env` var takes effect next launch, so
-  a just-abandoned checkout keeps the old PATH until relaunch.
+- A session reads its sandbox rules at launch. A change to the
+  checkout's modules, including a module expiring, reaches a running
+  session only after the user stops it with `/stop` and starts it
+  again.
 - Hand-*additions* inside tool-owned arrays persist across syncs and are
   reported by `status`/`scan` as local additions. Hand-*removals* do not
   persist; narrower wants mean a different set of modules, not an edit.

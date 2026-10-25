@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -42,8 +43,13 @@ class CliTest(unittest.TestCase):
 
         self.config = tmp / "config"
         self.parts = write_registry(self.config, {"work": WORK, "tools": TOOLS})
+        self.state = tmp / "state"
         patcher = mock.patch.dict(
-            os.environ, {"CLAUDE_CODE_SANDBOX_CONFIG": str(self.config)}
+            os.environ,
+            {
+                "CLAUDE_CODE_SANDBOX_CONFIG": str(self.config),
+                "CLAUDE_CODE_SANDBOX_STATE": str(self.state),
+            },
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -77,6 +83,93 @@ class CliTest(unittest.TestCase):
             self.settings()["env"]["CLAUDE_CODE_SANDBOX_ROOT"], str(self.repo)
         )
         self.assertEqual(self.sidecar(), {"modules": ["work"], "applied": expected})
+
+    def expiring(self):
+        path = self.state / "expiring.json"
+        return json.loads(path.read_text())["checkouts"] if path.exists() else None
+
+    def later(self, days):
+        return mock.patch.object(
+            cli, "_now", return_value=datetime.now(UTC) + timedelta(days=days)
+        )
+
+    def test_add_for_a_day_records_the_deadline_and_indexes_the_checkout(self):
+        self.enroll("work")
+        rc, out = self.output_of("add", "tools", "--for", "day", "-C", str(self.repo))
+        self.assertEqual(rc, 0)
+        self.assertIn("[tools] chosen until ", out)
+        at = datetime.fromisoformat(self.sidecar()["expires"]["tools"])
+        self.assertAlmostEqual(
+            (at - datetime.now(UTC)).total_seconds(), 86400, delta=60
+        )
+        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        self.assertIn("example.org", self.settings()["sandbox"]["network"]["allowedDomains"])
+        self.assertEqual(self.expiring(), [str(self.repo)])
+        rc, out = self.output_of("status", "-C", str(self.repo))
+        self.assertEqual(rc, 0)
+        self.assertIn("temporary [tools until ", out)
+
+    def test_expire_drops_due_modules_and_leaves_the_index(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        self.assertEqual(self.output_of("expire")[1], "")
+        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        with self.later(2):
+            rc, out = self.output_of("expire")
+        self.assertEqual(rc, 0)
+        self.assertIn("dropped expired [tools]", out)
+        self.assertEqual(self.sidecar(), {"modules": ["work"], "applied": with_root(WORK_FRAGMENT, self.repo)})
+        self.assertEqual(self.settings(), with_root(WORK_FRAGMENT, self.repo))
+        self.assertEqual(self.expiring(), [])
+
+    def test_a_week_outlasts_a_day(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "week", "-C", str(self.repo), "--quiet")
+        with self.later(2):
+            self.output_of("expire")
+        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        with self.later(8):
+            self.output_of("expire")
+        self.assertEqual(self.sidecar()["modules"], ["work"])
+
+    def test_status_reports_an_expired_module(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        with self.later(2):
+            rc, out = self.output_of("status", "-C", str(self.repo))
+        self.assertEqual(rc, 2)
+        self.assertIn("EXPIRED [tools] (sync drops)", out)
+
+    def test_sync_drops_expired_modules(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        with self.later(2):
+            self.run_cli("sync", "-C", str(self.repo), "--quiet")
+        self.assertEqual(self.sidecar()["modules"], ["work"])
+
+    def test_plain_add_makes_a_temporary_module_lasting(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        self.run_cli("add", "tools", "-C", str(self.repo), "--quiet")
+        self.assertNotIn("expires", self.sidecar())
+        self.assertEqual(self.expiring(), [])
+
+    def test_drop_and_enroll_forget_deadlines(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        self.run_cli("drop", "tools", "-C", str(self.repo), "--quiet")
+        self.assertNotIn("expires", self.sidecar())
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        self.enroll("work", "tools")
+        self.assertNotIn("expires", self.sidecar())
+        self.assertEqual(self.expiring(), [])
+
+    def test_expire_prunes_checkouts_that_are_gone(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        shutil.rmtree(self.repo / ".claude")
+        self.assertEqual(self.run_cli("expire"), 0)
+        self.assertEqual(self.expiring(), [])
 
     def test_enroll_composes_several_modules(self):
         self.assertEqual(self.enroll("work", "tools"), 0)
@@ -341,6 +434,21 @@ class CliTest(unittest.TestCase):
         finally:
             os.chdir(cwd)
         self.assertFalse((self.repo / ".claude" / "claude-code-sandbox").exists())
+
+    def test_hook_drops_expired_modules(self):
+        self.enroll("work")
+        self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with self.later(2):
+                rc, out = self.output_of("hook-session-start")
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(rc, 0)
+        self.assertIn("dropped expired [tools]", out)
+        self.assertNotIn("hook error", out)
+        self.assertEqual(self.sidecar()["modules"], ["work"])
 
     def test_hook_syncs_stale_checkout(self):
         self.enroll("work")

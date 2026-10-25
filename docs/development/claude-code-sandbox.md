@@ -97,12 +97,13 @@ directory, or the one containing `DIR` with `-C DIR`.
 | Verb | Effect |
 |---|---|
 | `enroll [MODULE...]` | Bind this checkout to exactly these modules (none: the base alone) |
-| `add MODULE...` | Add modules to this checkout's set |
+| `add MODULE... [--for day\|week]` | Add modules to this checkout's set, for a day or a week, or until dropped |
 | `drop MODULE...` | Remove modules from this checkout's set |
 | `abandon` | Remove the sandbox fragment; the checkout stays managed |
-| `status` | This checkout's modules, staleness, local additions |
+| `status` | This checkout's modules, deadlines, staleness, local additions |
 | `scan DIR` | Same, for every checkout under the given directory |
-| `sync` | Re-apply this checkout's modules after a module change |
+| `sync` | Drop this checkout's expired modules and re-apply the rest |
+| `expire` | Drop expired modules in every checkout of the expiring index (the timer runs it) |
 | `list` | The declared modules, with descriptions and requirements |
 | `show MODULE...` | What each module allows, and its status in this checkout |
 | `decline MODULE... [--reason TEXT]` | Record that this checkout should not get these modules |
@@ -125,9 +126,37 @@ the session it fires in, and an unhealed checkout keeps running its
 previous closure consistently. The sidecar records the chosen names,
 not their expansion, so a checkout tracks what its modules, their
 `requires` and `baseModules` become. No enumeration of enrollments
-exists anywhere, so nothing breaks when folders move. Claude Code
-live-reloads settings files, so synced rules generally reach running
-sessions.
+exists anywhere, so nothing breaks when folders move. A session reads
+its sandbox rules when it launches: synced rules reach a running
+session only after the user stops it with `/stop` and starts it again.
+
+### Modules for a day or a week
+
+`add --for day` or `add --for week` chooses a module until a deadline,
+and the user picks the same durations when answering `request-module`.
+The sidecar records the deadline under `expires`, keyed by module name.
+Running `add` again for a module replaces its deadline, and `add`
+without `--for` makes the choice last until someone drops the module.
+`enroll` and `drop` clear the deadlines of the modules they bind or
+remove.
+
+A session reads its sandbox rules at launch, before its SessionStart
+hook runs. If only the hook dropped expired modules, the first session
+launched after a deadline would run with the expired module until it
+restarted. The CLI therefore keeps a per-user index of the checkouts
+that have a deadline, `$XDG_STATE_HOME/claude-code-sandbox/expiring.json`,
+and a systemd user timer runs `claude-code-sandbox expire` every ten
+minutes. The index lists checkouts only; the deadlines stay in each
+checkout's sidecar. `expire` drops due modules, re-applies the rest,
+and removes checkouts with no deadline left from the index, including
+checkouts whose sidecar is gone. `sync`, `request-module` and the
+SessionStart hook also drop due modules in their checkout. The baseline
+write-guards the index like the sidecar, so an agent cannot remove its
+checkout from the index to keep a module past its deadline.
+
+A session that is already running when a deadline passes keeps the
+module's rules until it is stopped and started again, as with any other
+change to its rules.
 
 A checkout enrolled before sandbox modules existed has a sidecar naming
 a profile. A profile named `none` reads as abandoned. Any other profile
@@ -162,8 +191,8 @@ enrolling is the user's act. Otherwise it prompts the user and waits:
 
 1. Through `claude-consent ask`, the workbench's prompt API. An
    answerer attached to the spool (Emacs, `claude-consent watch`) shows
-   the prompt with three options: enable, decline with an optional
-   reason, and not now.
+   the prompt with five options: enable for a day, enable for a week,
+   enable permanently, decline with an optional reason, and not now.
 2. With no answerer attached, through an MCP elicitation: a dialog in
    the Claude Code terminal UI.
 3. When the client cannot show a dialog, or the dialog is cancelled
@@ -172,7 +201,10 @@ enrolling is the user's act. Otherwise it prompts the user and waits:
    answer ID`; the next `request-module` call for that module in the
    same session applies the answer.
 
-On "enable" the server runs the equivalent of `add`. The running
+On an enable answer the server runs the equivalent of `add`, with
+`--for day` or `--for week` for the time-limited answers. A module
+whose deadline has passed is dropped before the request is considered,
+so the agent can ask for it again. The running
 session keeps its old sandbox rules until the user stops it with
 `/stop` and starts it again, so the tool result tells the agent to
 relay that restart to the user.

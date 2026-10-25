@@ -8,9 +8,9 @@ the set of modules its work needs. Enrollment composes them into one
 fragment, writes it into the checkout's co-owned
 ``.claude/settings.local.json`` (three-way merge; Claude Code's own keys
 are never touched), and records the chosen set and what was applied in
-the sidecar ``.claude/claude-code-sandbox.json``. Claude Code live-reloads
-settings files, so changes generally apply to running sessions; removing
-an ``env`` variable is the documented exception (next launch).
+the sidecar ``.claude/claude-code-sandbox.json``. A session reads its
+sandbox rules at launch, so a change reaches a running session only
+after it is stopped and started again.
 """
 
 from __future__ import annotations
@@ -20,14 +20,17 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .compose import check_known, compose, module_names
 from .files import (
+    DURATIONS,
     ToolError,
+    expiring_checkouts,
     find_repo_root,
+    index_expiring,
     read_json,
     read_sidecar,
     settings_path,
@@ -75,16 +78,26 @@ def _describe(modules: list[str] | None) -> str:
     return f"modules [{', '.join(modules)}]" if modules else "modules [] (base only)"
 
 
-def _apply(root: Path, modules: list[str] | None, base: dict[str, Any], quiet: bool) -> None:
+def _apply(
+    root: Path,
+    modules: list[str] | None,
+    base: dict[str, Any],
+    quiet: bool,
+    expires: dict[str, datetime] | None = None,
+) -> None:
     """Write the fragment for ``modules`` into the checkout's settings and
     record the binding. A module the checkout now chooses loses any
-    recorded refusal, because choosing it is the user's newer answer."""
+    recorded refusal, because choosing it is the user's newer answer.
+    ``expires`` replaces the recorded deadlines; when it is None, each
+    module still chosen keeps the deadline it had."""
     sidecar = read_sidecar(root)
     declined = {
         name: refusal
         for name, refusal in (sidecar["declined"] if sidecar else {}).items()
         if name not in (modules or [])
     }
+    if expires is None:
+        expires = sidecar["expires"] if sidecar else {}
     fragment = _fragment_for(root, modules)
     reports = []
 
@@ -94,7 +107,7 @@ def _apply(root: Path, modules: list[str] | None, base: dict[str, Any], quiet: b
         return merged
 
     changed = update_json(settings_path(root), transform)
-    write_sidecar(root, modules, fragment, declined)
+    write_sidecar(root, modules, fragment, declined, expires)
     if quiet:
         return
     state = "updated" if changed else "already current"
@@ -107,6 +120,36 @@ def _apply(root: Path, modules: list[str] | None, base: dict[str, Any], quiet: b
             print(f"  preserved local value at dropped key {path}: {value!r}")
         for path, extras in r.adhoc_entries:
             print(f"  kept {len(extras)} ad-hoc entr{'y' if len(extras) == 1 else 'ies'} in {path}")
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _when(at: datetime) -> str:
+    return at.astimezone().isoformat(timespec="minutes")
+
+
+def due_modules(sidecar: dict[str, Any], now: datetime | None = None) -> list[str]:
+    """The chosen modules whose deadline has passed."""
+    now = now or _now()
+    return sorted(name for name, at in sidecar["expires"].items() if at <= now)
+
+
+def expire_due(root: Path, now: datetime | None = None) -> list[str]:
+    """Drop the chosen modules of ``root`` whose deadline has passed and
+    apply the rest. Returns the dropped names. A checkout with nothing
+    expiring leaves the user's index."""
+    sidecar = read_sidecar(root)
+    if sidecar is None or sidecar["modules"] is None or sidecar["legacy_profile"] is not None:
+        index_expiring(root, False)
+        return []
+    due = due_modules(sidecar, now)
+    if not due:
+        index_expiring(root, bool(sidecar["expires"]))
+        return []
+    _apply(root, [m for m in sidecar["modules"] if m not in due], sidecar["applied"], quiet=True)
+    return due
 
 
 def _legacy_message(root: Path, profile: str) -> str:
@@ -150,6 +193,14 @@ def _status_line(root: Path) -> tuple[str, bool]:
     clobbered = replayed != settings
     adhoc = adhoc_additions(settings, applied)
     bits = [_describe(modules)]
+    due = due_modules(sidecar)
+    if due:
+        bits.append(f"EXPIRED [{', '.join(due)}] (sync drops)")
+    lasting = {name: at for name, at in sidecar["expires"].items() if name not in due}
+    if lasting:
+        bits.append(
+            "temporary [" + ", ".join(f"{name} until {_when(at)}" for name, at in sorted(lasting.items())) + "]"
+        )
     if clobbered:
         bits.append("CLOBBERED: applied keys missing from settings (sync restores)")
     elif stale is None:
@@ -162,7 +213,7 @@ def _status_line(root: Path) -> tuple[str, bool]:
         bits.append(f"{entries} local addition(s) in {paths}")
     if sidecar["declined"]:
         bits.append(f"declined [{', '.join(sorted(sidecar['declined']))}]")
-    return (f"{root}: " + ", ".join(bits), bool(stale) or clobbered)
+    return (f"{root}: " + ", ".join(bits), bool(stale) or clobbered or bool(due))
 
 
 def _iter_enrolled(roots: list[Path]) -> list[Path]:
@@ -200,15 +251,34 @@ def cmd_enroll(args: argparse.Namespace) -> int:
     check_known(load_registry(), modules)
     sidecar = read_sidecar(root)
     base = sidecar["applied"] if sidecar else {}
-    _apply(root, modules, base, args.quiet)
+    _apply(root, modules, base, args.quiet, expires={})
     return 0
+
+
+def _choose(
+    root: Path, sidecar: dict[str, Any], current: list[str], names: list[str], duration: str | None, quiet: bool
+) -> dict[str, datetime]:
+    """Add ``names`` to the chosen set, for ``duration`` (a key of
+    DURATIONS) or until dropped, and apply it. Choosing a module again
+    replaces its deadline. Returns the recorded deadlines."""
+    expires = dict(sidecar["expires"])
+    for name in names:
+        if duration is None:
+            expires.pop(name, None)
+        else:
+            expires[name] = _now() + DURATIONS[duration]
+    _apply(root, sorted(set(current) | set(names)), sidecar["applied"], quiet, expires=expires)
+    return expires
 
 
 def cmd_add(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
     sidecar, current = _chosen_modules(root)
     check_known(load_registry(), args.modules)
-    _apply(root, sorted(set(current) | set(args.modules)), sidecar["applied"], args.quiet)
+    expires = _choose(root, sidecar, current, args.modules, args.duration, args.quiet)
+    if args.duration and not args.quiet:
+        at = _when(expires[args.modules[0]])
+        print(f"  [{', '.join(sorted(set(args.modules)))}] chosen until {at}")
     return 0
 
 
@@ -242,8 +312,30 @@ def cmd_sync(args: argparse.Namespace) -> int:
         raise ToolError(f"{root} is not enrolled (use enroll)")
     if sidecar["legacy_profile"] is not None:
         raise ToolError(_legacy_message(root, sidecar["legacy_profile"]))
+    due = expire_due(root)
+    if due and not args.quiet:
+        print(f"{root}: dropped expired [{', '.join(due)}]")
+    sidecar = read_sidecar(root)
+    assert sidecar is not None
     _apply(root, sidecar["modules"], sidecar["applied"], args.quiet)
     return 0
+
+
+def cmd_expire(args: argparse.Namespace) -> int:
+    """Drop expired modules in every checkout of the user's index. The
+    Home Manager timer runs this, because a session reads its sandbox
+    rules at launch, before its SessionStart hook could drop them."""
+    failed = False
+    for root in expiring_checkouts():
+        try:
+            due = expire_due(root)
+        except ToolError as e:
+            print(f"{root}: expiry failed: {e}", file=sys.stderr)
+            failed = True
+            continue
+        if due and not args.quiet:
+            print(f"{root}: dropped expired [{', '.join(due)}]")
+    return 1 if failed else 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -290,14 +382,14 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
-def enable_modules(root: Path, names: list[str]) -> list[str]:
-    """Add ``names`` to the checkout's chosen set and apply it; returns
-    the new chosen set."""
+def enable_modules(root: Path, names: list[str], duration: str | None = None) -> datetime | None:
+    """Add ``names`` to the checkout's chosen set, for ``duration`` (a
+    key of DURATIONS) or until dropped, and apply it; returns the
+    deadline, or None for a lasting choice."""
     sidecar, current = _chosen_modules(root)
     check_known(load_registry(), names)
-    chosen = sorted(set(current) | set(names))
-    _apply(root, chosen, sidecar["applied"], quiet=True)
-    return chosen
+    expires = _choose(root, sidecar, current, names, duration, quiet=True)
+    return expires[names[0]] if duration else None
 
 
 def decline_modules(root: Path, names: list[str], reason: str | None) -> None:
@@ -312,7 +404,7 @@ def decline_modules(root: Path, names: list[str], reason: str | None) -> None:
         raise ToolError(f"{', '.join(on)} enabled in {root}; drop before declining")
     sidecar = read_sidecar(root)
     assert sidecar is not None
-    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    at = datetime.now(UTC).isoformat(timespec="seconds")
     declined = dict(sidecar["declined"])
     for name in names:
         declined[name] = {"at": at, **({"reason": reason} if reason else {})}
@@ -521,6 +613,14 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
                 "claude-code-sandbox: provisioned owned credential copies "
                 f"({', '.join(sorted(creds))}) so sandboxed tools can read them"
             )
+        due = expire_due(root)
+        if due:
+            print(
+                f"claude-code-sandbox: dropped expired [{', '.join(due)}]; this session "
+                "keeps their rules until it is stopped and started again"
+            )
+            sidecar = read_sidecar(root)
+            assert sidecar is not None
         line, attention = _status_line(root)
         if attention and sidecar["legacy_profile"] is not None:
             # The checkout keeps the fragment it last applied; choosing
@@ -530,8 +630,8 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
             try:
                 _apply(root, sidecar["modules"], sidecar["applied"], quiet=True)
                 print(
-                    f"claude-code-sandbox: {line}; synced now, and settings "
-                    "live-reload, so the current session should pick this up"
+                    f"claude-code-sandbox: {line}; synced now. This session keeps "
+                    "its old rules until it is stopped and started again"
                 )
             except ToolError as e:
                 print(f"claude-code-sandbox: {line}; sync failed: {e}")
@@ -566,6 +666,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("add", cmd_add, help="add modules to this checkout's set")
     p.add_argument("modules", nargs="+", metavar="MODULE")
+    p.add_argument(
+        "--for",
+        dest="duration",
+        choices=sorted(DURATIONS),
+        help="choose the modules for a day or a week only (default: until dropped)",
+    )
     p.add_argument("--quiet", action="store_true")
 
     p = add("drop", cmd_drop, help="remove modules from this checkout's set")
@@ -575,7 +681,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("abandon", cmd_abandon, help="remove the sandbox fragment and keep the checkout managed")
     p.add_argument("--quiet", action="store_true")
 
-    p = add("sync", cmd_sync, help="re-apply this checkout's modules")
+    p = add("sync", cmd_sync, help="drop this checkout's expired modules and re-apply the rest")
+    p.add_argument("--quiet", action="store_true")
+
+    p = add(
+        "expire",
+        cmd_expire,
+        checkout=False,
+        help="drop expired modules in every checkout that chose a module for a limited time",
+    )
     p.add_argument("--quiet", action="store_true")
 
     add("status", cmd_status, help="report this checkout's binding")

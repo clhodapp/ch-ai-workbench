@@ -45,8 +45,9 @@ def enabled_by(registry: dict[str, Any], chosen: list[str]) -> dict[str, str]:
 def checkout_state(root: Path, registry: dict[str, Any] | None) -> dict[str, Any]:
     """The checkout's binding: ``enrollment`` is one of ``not enrolled``,
     ``abandoned``, ``legacy profile`` or ``enrolled``. An enrolled
-    checkout also reports ``chosen`` and, given the registry, ``enabled``
-    (name to reason)."""
+    checkout also reports ``chosen``, ``expires`` (each module chosen for
+    a limited time, to its deadline) and, given the registry,
+    ``enabled`` (name to reason)."""
     sidecar = read_sidecar(root)
     state: dict[str, Any] = {"checkout": str(root)}
     if sidecar is None:
@@ -63,6 +64,9 @@ def checkout_state(root: Path, registry: dict[str, Any] | None) -> dict[str, Any
         return state
     state["enrollment"] = "enrolled"
     state["chosen"] = sidecar["modules"]
+    state["expires"] = {
+        name: at.astimezone().isoformat(timespec="minutes") for name, at in sorted(sidecar["expires"].items())
+    }
     if registry is not None:
         state["enabled"] = enabled_by(registry, sidecar["modules"])
     return state
@@ -114,7 +118,10 @@ def module_status(name: str, state: dict[str, Any]) -> str:
     enabled = state.get("enabled") or {}
     if name in enabled:
         why = enabled[name]
-        return "enabled" if why == "chosen" else f"enabled ({why})"
+        if why != "chosen":
+            return f"enabled ({why})"
+        until = state.get("expires", {}).get(name)
+        return f"enabled until {until}" if until else "enabled"
     if name in state.get("declined", {}):
         return "declined"
     return "available"
