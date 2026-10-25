@@ -313,6 +313,16 @@ The prompt goes to standard input, so nothing variadic can swallow it."
                  (alist-get 'pattern input) "")
              90 nil nil "…"))))
 
+(defun gh-review-claude--chat-text (text)
+  "TEXT as the chat shows it: fenced json blocks folded to one line.
+The verdict and drafts those blocks carry are shown where they apply,
+so the chat names them instead of repeating the JSON."
+  (replace-regexp-in-string
+   "```json[ \t]*\n\\(?:.\\|\n\\)*?\n```"
+   (propertize "[structured answer: shown in the diff and the conversation]"
+               'face 'shadow)
+   text t t))
+
 (defun gh-review-claude--handle-event (pr state turn event)
   "Apply the stream EVENT of the running TURN of PR's conversation."
   (pcase (alist-get 'type event)
@@ -326,7 +336,8 @@ The prompt goes to standard input, so nothing variadic can swallow it."
          ("text"
           (let ((text (alist-get 'text block)))
             (plist-put turn :text (concat (plist-get turn :text) text "\n"))
-            (gh-review-claude--append pr (concat text "\n"))))
+            (gh-review-claude--append pr (concat (gh-review-claude--chat-text text)
+                                                 "\n"))))
          ("tool_use"
           (gh-review-claude--append pr (gh-review-claude--tool-summary block)
                                     'shadow)))))
@@ -736,8 +747,11 @@ PR's head branch, and nil when it only mentions the pull request."
             :title title :transcript file :strength strength))))
 
 (defun gh-review-claude--first-prompt (file)
-  "The first prompt of the transcript FILE, shortened, or nil."
-  (when (file-readable-p file)
+  "The first prompt of the transcript FILE, shortened, or nil.
+FILE may be empty or name no file, as in a record without a
+transcript path."
+  (when (and (stringp file) (not (string-empty-p file))
+             (file-regular-p file) (file-readable-p file))
     (with-temp-buffer
       (insert-file-contents file nil 0 200000)
       (goto-char (point-min))

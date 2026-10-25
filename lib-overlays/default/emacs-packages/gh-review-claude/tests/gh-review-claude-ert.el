@@ -235,6 +235,25 @@
                        '("newer" "older")))
         (should (equal (plist-get (car origins) :cwd) "/b"))))))
 
+(ert-deftest gh-review-claude-origin-record-without-transcript ()
+  "A record with an empty transcript path still names its conversation."
+  (gh-review-claude-test--with-scratch
+    (let ((pr (gh-review-claude-test--pr))
+          (default-directory gh-review-claude-test--root))
+      (gh-review-claude-test--write
+       gh-review-claude-origins-file
+       (list '(:url "https://github.com/o/r/pull/7" :session_id "abcdef12-0000"
+               :cwd "/a" :transcript_path "" :time "2026-10-01T00:00:00Z")))
+      (let ((origin (gh-review-claude-origin pr)))
+        (should (equal (plist-get origin :session-id) "abcdef12-0000"))
+        (should-not (plist-get origin :title))))))
+
+(ert-deftest gh-review-claude-chat-text-folds-json ()
+  (let ((shown (gh-review-claude--chat-text gh-review-claude-test--answer)))
+    (should (string-prefix-p "Looks fine overall." shown))
+    (should-not (string-search "\"verdict\"" shown))
+    (should (string-search "[structured answer" shown))))
+
 (ert-deftest gh-review-claude-origin-none-is-kept ()
   (gh-review-claude-test--with-scratch
     (let ((pr (gh-review-claude-test--pr)))
