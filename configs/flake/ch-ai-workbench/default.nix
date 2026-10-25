@@ -52,7 +52,7 @@
         perSystem.treefmt.programs.nixfmt.enable = true;
         perSystem.treefmt.programs.rustfmt = {
           enable = true;
-          edition = "2021";
+          edition = "2024";
         };
       };
   };
@@ -759,7 +759,7 @@
             treefmt.programs.nixfmt.enable = true;
             treefmt.programs.rustfmt = {
               enable = true;
-              edition = "2021";
+              edition = "2024";
             };
           };
       };

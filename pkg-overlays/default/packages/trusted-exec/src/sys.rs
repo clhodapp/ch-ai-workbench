@@ -22,7 +22,7 @@ struct Ucred {
     gid: u32,
 }
 
-extern "C" {
+unsafe extern "C" {
     fn kill(pid: i32, sig: c_int) -> c_int;
     fn getuid() -> u32;
     fn getsockopt(fd: c_int, level: c_int, name: c_int, val: *mut c_void, len: *mut u32) -> c_int;

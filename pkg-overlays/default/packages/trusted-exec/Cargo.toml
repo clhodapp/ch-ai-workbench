@@ -2,7 +2,7 @@
 [package]
 name = "trusted-exec"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 description = "Run a trusted executable outside Claude Code's sandbox through a unix socket, streaming its IO"
 
