@@ -500,7 +500,7 @@ let
       };
       program = lib.mkOption {
         type = lib.types.str;
-        example = lib.literalExpression "lib.getExe pkgs.gh";
+        example = lib.literalExpression ''lib.getExe' pkgs.libnotify "notify-send"'';
         description = "Absolute path of the program the service runs.";
       };
       args = lib.mkOption {
@@ -550,14 +550,17 @@ let
           {
             PrivateUsers = true;
             ProtectSystem = "strict";
-            ProtectHome = "read-only";
-            ReadWritePaths = [ "%h/.config/gh" ];
+            ProtectHome = true;
             PrivateTmp = true;
+            PrivateNetwork = true;
           }
         '';
         description = ''
-          The sandbox the program runs in: systemd `[Service]` settings
-          for the per-connection service, merged over
+          What the program may not do. The service runs as the user
+          under the systemd user manager, so by default the program has
+          everything the user has, which includes everything Claude Code's
+          sandbox allows. These systemd `[Service]` settings of the
+          per-connection service take access away, merged over
           `NoNewPrivileges = true`. In a user service the settings that
           need file-system namespacing (ProtectSystem, ProtectHome,
           ReadWritePaths, PrivateTmp and the like) only take effect with
@@ -676,9 +679,8 @@ let
           Names from `trustedExecutables` that a checkout choosing this
           module may run. Each puts a stub of that name on PATH and the
           executable's socket in the unix-socket allowlist. The program
-          runs outside Claude Code's sandbox, in the sandbox its systemd
-          service declares, so each entry is a hole of exactly the shape
-          that service allows.
+          runs outside Claude Code's sandbox with the access of the user,
+          less what its `serviceConfig` takes away.
         '';
       };
       allowAllUnixSockets = lib.mkOption {
@@ -865,10 +867,16 @@ in
       default = { };
       example = lib.literalExpression ''
         {
-          gh = {
-            description = "gh with the user's GitHub token";
-            program = lib.getExe pkgs.gh;
-            passEnv = [ "GH_REPO" ];
+          notify-send = {
+            description = "desktop notifications through the session bus";
+            program = lib.getExe' pkgs.libnotify "notify-send";
+            workingDirectory = "/";
+            serviceConfig = {
+              PrivateUsers = true;
+              ProtectSystem = "strict";
+              ProtectHome = true;
+              PrivateNetwork = true;
+            };
           };
         }
       '';
@@ -878,9 +886,10 @@ in
         a socket at
         `$XDG_STATE_HOME/claude-code-sandbox/trusted/<name>.sock`
         (mode 0600) and one service instance per connection, which runs
-        the program in the sandbox `serviceConfig` declares and streams
-        its stdin, stdout and stderr, forwarded signals and exit status
-        over the connection. A sandbox module grants the executable by
+        the program and streams its stdin, stdout and stderr, forwarded
+        signals and exit status over the connection. The program starts
+        with the access of the user, a superset of what Claude Code's
+        sandbox allows, and `serviceConfig` locks it down. A sandbox module grants the executable by
         listing its name in its own `trustedExecutables`. A checkout
         choosing that module then gets a stub named `<name>` on PATH
         and the socket in its unix-socket allowlist.
@@ -888,7 +897,11 @@ in
         The caller supplies the arguments after `args`, stdin, the
         working directory when `workingDirectory` is null, and the
         variables in `passEnv`. Everything else comes from the service.
-        A trusted program must treat all of those as untrusted input.
+        A trusted program must treat all of those as untrusted input. A
+        program whose arguments can name commands to run (subcommands
+        that execute, aliases, extensions, `--exec`-style options) gives
+        the caller arbitrary code execution with the access the service
+        has left.
       '';
     };
 

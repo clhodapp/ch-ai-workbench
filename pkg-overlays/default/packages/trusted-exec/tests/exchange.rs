@@ -151,12 +151,28 @@ fn a_missing_program_is_127() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot run /nonexistent/program"));
 }
 
-fn spawn_ready(svc: &Service) -> (Child, BufReader<std::process::ChildStdout>) {
+/// A caller whose program has printed `ready`. With `input`, the caller
+/// is fed that stdin from a thread that ignores write errors.
+fn spawn_ready(
+    svc: &Service,
+    input: Option<Vec<u8>>,
+) -> (Child, BufReader<std::process::ChildStdout>) {
+    let stdin = if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
     let mut child = caller(&svc.socket, &[], &[])
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
+    if let Some(input) = input {
+        let mut pipe = child.stdin.take().unwrap();
+        thread::spawn(move || {
+            let _ = pipe.write_all(&input);
+        });
+    }
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     stdout.read_line(&mut line).unwrap();
@@ -168,16 +184,54 @@ fn spawn_ready(svc: &Service) -> (Child, BufReader<std::process::ChildStdout>) {
 fn forwards_signals_to_the_program() {
     let script = r#"trap 'exit 42' TERM; echo ready; while :; do sleep 0.05; done"#;
     let svc = service(&sh(script));
-    let (mut child, _) = spawn_ready(&svc);
+    let (mut child, _) = spawn_ready(&svc, None);
     unsafe { kill(child.id() as i32, 15) };
     assert_eq!(child.wait().unwrap().code(), Some(42));
+}
+
+#[test]
+fn signals_reach_a_program_that_does_not_read_stdin() {
+    let script = r#"trap 'exit 42' TERM; echo ready; while :; do sleep 0.05; done"#;
+    let svc = service(&sh(script));
+    let (mut child, _) = spawn_ready(&svc, Some(vec![0u8; 16 * 1024 * 1024]));
+    // Long enough for the window and the pipe of the program to fill.
+    thread::sleep(Duration::from_millis(500));
+    unsafe { kill(child.id() as i32, 15) };
+    assert_eq!(child.wait().unwrap().code(), Some(42));
+}
+
+#[test]
+fn a_signal_after_the_program_exits_ends_the_call() {
+    // The background sleep keeps the stdout of the program open.
+    let svc = service(&sh("sleep 30 & echo ready; exit 5"));
+    let (mut child, _) = spawn_ready(&svc, None);
+    thread::sleep(Duration::from_millis(200));
+    let start = Instant::now();
+    unsafe { kill(child.id() as i32, 2) };
+    assert_eq!(child.wait().unwrap().code(), Some(5));
+    assert!(start.elapsed() < Duration::from_secs(10));
+}
+
+#[test]
+fn a_vanished_caller_ends_the_call_after_the_program_exits() {
+    let svc = service(&sh("sleep 30 & echo ready; exit 0"));
+    let (mut child, _) = spawn_ready(&svc, None);
+    thread::sleep(Duration::from_millis(200));
+    let start = Instant::now();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(svc.done.join().unwrap().success());
+    assert!(
+        start.elapsed() < Duration::from_secs(10),
+        "the service waited for a process the program left behind"
+    );
 }
 
 #[test]
 fn a_vanished_caller_hangs_up_the_program() {
     let script = "echo ready; exec sleep 30";
     let svc = service(&sh(script));
-    let (mut child, _) = spawn_ready(&svc);
+    let (mut child, _) = spawn_ready(&svc, None);
     let start = Instant::now();
     child.kill().unwrap();
     child.wait().unwrap();
@@ -206,6 +260,50 @@ fn refuses_a_frame_before_the_request() {
     assert_eq!(reply[0], b'E');
     assert_eq!(reply[5], 126);
     assert!(String::from_utf8_lossy(&reply[6..]).contains("before the request was complete"));
+}
+
+/// The reply to a hand-written request: the status byte and message of
+/// the ERROR frame the service answers with.
+fn refusal(request: &[u8]) -> (u8, String) {
+    let svc = service(&sh("echo ran"));
+    let mut conn = UnixStream::connect(&svc.socket).unwrap();
+    // The service stops reading once it refuses, so the rest of an
+    // oversized request may not be taken.
+    let _ = conn.write_all(request);
+    let mut reply = Vec::new();
+    conn.read_to_end(&mut reply).unwrap();
+    assert_eq!(reply[0], b'E');
+    (reply[5], String::from_utf8_lossy(&reply[6..]).into_owned())
+}
+
+fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = vec![kind];
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+#[test]
+fn refuses_a_request_over_the_size_limit() {
+    let mut request = Vec::new();
+    for _ in 0..5 {
+        request.extend(frame(b'A', &vec![b'x'; 1 << 20]));
+    }
+    let (status, message) = refusal(&request);
+    assert_eq!(status, 126);
+    assert!(message.contains("over the"), "{message}");
+}
+
+#[test]
+fn refuses_a_nul_byte_in_an_argument() {
+    let mut request = frame(b'A', b"a\0b");
+    request.extend(frame(b'R', b""));
+    let (status, message) = refusal(&request);
+    assert_eq!(status, 126);
+    assert!(
+        message.contains("an argument contains a NUL byte"),
+        "{message}"
+    );
 }
 
 #[test]

@@ -4,8 +4,16 @@
 //! A frame is one kind byte, a four-byte big-endian payload length, and
 //! the payload. The caller sends the request first: any number of ARG,
 //! CWD and ENV frames, then RUN. After RUN the caller sends STDIN and
-//! SIGNAL frames. The service sends STDOUT and STDERR frames, and then
-//! one EXIT or ERROR frame as its last frame.
+//! SIGNAL frames. The service sends STDOUT, STDERR and CREDIT frames, and
+//! then one EXIT or ERROR frame as its last frame.
+//!
+//! Stdin is flow-controlled by credit. The caller may have at most
+//! WINDOW bytes of stdin sent and not yet credited. The service credits
+//! each chunk once the program has taken it, or once it has dropped the
+//! chunk because the program closed its stdin. The service therefore
+//! never has to stop reading the connection to hold back stdin, and a
+//! SIGNAL frame or a closed connection reaches it even while the program
+//! is not reading.
 
 use std::io::{self, Read, Write};
 
@@ -19,6 +27,10 @@ pub const CHUNK: usize = 64 * 1024;
 /// The largest payload either side accepts. A request frame holds one
 /// argument or one variable, so this bounds a single argument too.
 pub const MAX_PAYLOAD: usize = 1 << 20;
+
+/// The stdin bytes a caller may have in flight: sent, and not yet
+/// credited by the service.
+pub const WINDOW: usize = 1 << 20;
 
 /// Caller to service: one argument after the declared ones.
 pub const ARG: u8 = b'A';
@@ -38,6 +50,9 @@ pub const SIGNAL: u8 = b'S';
 pub const STDOUT: u8 = b'1';
 /// Service to caller: bytes the program wrote to stderr.
 pub const STDERR: u8 = b'2';
+/// Service to caller: a four-byte big-endian count of stdin bytes the
+/// caller may send again.
+pub const CREDIT: u8 = b'K';
 /// Service to caller: `c` and the exit code, or `s` and the signal that
 /// ended the program, as a four-byte big-endian integer.
 pub const EXIT: u8 = b'X';
@@ -93,8 +108,10 @@ impl Chunk {
     }
 }
 
-/// Read one frame into `payload`. Returns the kind, or `None` when the
-/// peer closed the connection between frames.
+/// Read one frame into `payload`, replacing its contents. Returns the
+/// kind, or `None` when the peer closed the connection between frames.
+/// The payload is read into the spare capacity of `payload`, so a reused
+/// buffer is not zero-filled first.
 pub fn read_frame(r: &mut impl Read, payload: &mut Vec<u8>) -> io::Result<Option<u8>> {
     let mut header = [0u8; HEADER];
     let mut got = 0;
@@ -115,7 +132,15 @@ pub fn read_frame(r: &mut impl Read, payload: &mut Vec<u8>) -> io::Result<Option
         ));
     }
     payload.clear();
-    payload.resize(len, 0);
-    r.read_exact(payload)?;
+    payload.reserve(len);
+    if r.by_ref().take(len as u64).read_to_end(payload)? != len {
+        return Err(io::ErrorKind::UnexpectedEof.into());
+    }
     Ok(Some(header[0]))
+}
+
+/// A four-byte big-endian count, the payload of a CREDIT frame.
+pub fn count(payload: &[u8]) -> Option<usize> {
+    let bytes: [u8; 4] = payload.try_into().ok()?;
+    Some(u32::from_be_bytes(bytes) as usize)
 }
