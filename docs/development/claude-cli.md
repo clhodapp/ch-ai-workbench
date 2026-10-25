@@ -556,6 +556,24 @@ output-style rule that needs judgment (seeded from
   been exercised by the flake check against the hook's output shape
   only. It has not been probed live in a CLI session the way the Stop
   facts above were.
+- **Readability.** The score dimensions in
+  `modules/homeManager/claude-code/lib/judge-readability.nix` share one
+  ladder of what a developer needs to know already to know what a reply
+  is talking about. The four levels, low to high, are an average
+  developer, a developer familiar with the ecosystem, a developer
+  familiar with this codebase, and someone who took part in the chat or
+  task that produced the reply, because the reply leans on references
+  that seem to come from it. One dimension places the reply as a whole.
+  Each of the others asks how far up the ladder one cause puts it:
+  length, density, sentence complexity, nuance, references to things
+  outside the message, non-standard jargon, and generic concept words
+  such as "the fold". A long reply that an average developer can follow
+  therefore scores low on length.
+  qev answers a score with a probability per level and their expected
+  level index. The client reports that index, the most likely level,
+  and its probability. The context hook lists every score, highest
+  effort first, with the style's aim for that cause. Scores never push
+  back.
 - **Edits.** The edit hook asks the judge about every write. The
   target (`file_path`, `notebook_path`, or the emacs verbs' `file` and
   `buffer`) decides the kind: prose when its extension is in
@@ -572,7 +590,9 @@ output-style rule that needs judgment (seeded from
 - **Latency.** On an R9700, decision-server answers a request of two or
   three questions over a few hundred tokens in 0.15 to 0.26 s, and ten
   questions over 5k tokens in 1.2 s (ch-local-llms README). The judge
-  asks ten. The hooks that run it are registered with a timeout of 10
+  asks a reply eighteen (ten nouls and the eight scores), a prose
+  write the ten prose nouls plus arguing-with-ghosts, and a code write
+  one. The hooks that run it are registered with a timeout of 10
   s plus the sum of the enabled endpoints' timeouts (30 s each by
   default), because a hung endpoint costs its whole timeout before the
   next is tried.

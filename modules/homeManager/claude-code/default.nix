@@ -101,6 +101,16 @@ let
   # read the thresholds from the same file.
   enabledDimensions = lib.filterAttrs (_name: dimension: dimension.enable) cfg.judge.dimensions;
 
+  malformedDimensions = lib.attrNames (
+    lib.filterAttrs (
+      _name: dimension:
+      if dimension.type == "score" then
+        lib.length dimension.levels < 2 || lib.length dimension.levels > 10
+      else
+        dimension.criteria.true == null || dimension.criteria.false == null
+    ) enabledDimensions
+  );
+
   unknownTicCheckDimensions = lib.mapAttrsToList (name: check: "${name} (${check.dimension})") (
     lib.filterAttrs (
       _name: check: check.dimension != null && !(cfg.judge.dimensions ? ${check.dimension})
@@ -125,8 +135,10 @@ let
     }) enabledEndpoints;
     dimensions = lib.mapAttrs (_name: dimension: {
       inherit (dimension)
+        type
         instructions
         criteria
+        levels
         rule
         targets
         pushBack
@@ -759,24 +771,52 @@ in
                 description = "Whether the judge asks this question.";
               };
 
+              type = lib.mkOption {
+                type = lib.types.enum [
+                  "noul"
+                  "score"
+                ];
+                default = "noul";
+                description = ''
+                  noul: a yes/no question (criteria.true and criteria.false)
+                  whose answer is the probability that the problem is
+                  present; it can push back. score: an ordered scale
+                  (levels) whose answer is a probability for each level; it
+                  is reported to the model as context and never pushes back.
+                '';
+              };
+
               instructions = lib.mkOption {
                 type = lib.types.str;
-                description = "The yes/no question the decision model answers about the text.";
+                description = "The question the decision model answers about the text.";
               };
 
               criteria.true = lib.mkOption {
-                type = lib.types.str;
-                description = "What the text looks like when the answer is yes (the problem is present).";
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "For a noul: what the text looks like when the answer is yes (the problem is present).";
               };
 
               criteria.false = lib.mkOption {
-                type = lib.types.str;
-                description = "What the text looks like when the answer is no.";
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "For a noul: what the text looks like when the answer is no.";
+              };
+
+              levels = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+                description = "For a score: the levels of the scale, low to high, 2 to 10 of them.";
               };
 
               rule = lib.mkOption {
                 type = lib.types.str;
-                description = "One-line reminder returned to the model when the judge pushes back or reports on this dimension.";
+                description = ''
+                  One-line reminder returned to the model with this
+                  dimension: for a noul when the judge pushes back or
+                  reports it, for a score as the style's aim beside the
+                  level the judge found.
+                '';
               };
 
               targets = lib.mkOption {
@@ -818,14 +858,22 @@ in
         default = { };
         description = ''
           The questions the judge asks about finished messages and
-          writes to files (see targets), each a yes/no (noul) question of
-          the System One API whose answer is the probability that the
-          problem is present. A dimension at or above pushBackAbove is a
+          writes to files (see targets). A noul dimension is a yes/no
+          question of the System One API whose answer is the probability
+          that the problem is present; at or above pushBackAbove it is a
           finding of the tic-check cycle ("tic-check: check", then the
-          model's clean or tic verdict). When nothing pushes back, the
-          dimensions at or above reportAbove reach the model with the
-          next prompt as context (hooks.tic-check-context). Merged across
-          all modules that set it. This module seeds the peer-programmer
+          model's clean or tic verdict). A score dimension is an ordered
+          scale whose answer is a probability per level; it never pushes
+          back. When nothing pushes back, the noul dimensions at or above
+          reportAbove and every score reach the model with the next prompt
+          as context (hooks.tic-check-context). Merged across all modules
+          that set it. This module seeds lib/judge-readability.nix, eight
+          scores of what a developer needs to know already to know what a
+          reply is talking about, from an average developer through the
+          ecosystem and this codebase up to the chat that produced it (the
+          reply as a whole, and by its length, density, complexity,
+          nuance, references, non-standard jargon, and generic concept
+          words), and the peer-programmer
           style's rules that need judgment (lib/judge-dimensions.nix):
           arguing-with-ghosts (asked of prose and code writes only),
           elliptical-possessive,
@@ -898,6 +946,10 @@ in
         message = "ch-ai-workbench.lspServers names not in the language-server table: ${lib.concatStringsSep ", " unknownServerNames}";
       }
       {
+        assertion = malformedDimensions == [ ];
+        message = "ch-ai-workbench.claude-code.judge.dimensions: a noul needs criteria.true and criteria.false, a score 2 to 10 levels: ${lib.concatStringsSep ", " malformedDimensions}";
+      }
+      {
         assertion = unknownTicCheckDimensions == [ ];
         message = "ch-ai-workbench.claude-code.ticChecks entries name dimensions not in judge.dimensions: ${lib.concatStringsSep ", " unknownTicCheckDimensions}";
       }
@@ -938,7 +990,8 @@ in
 
     ch-ai-workbench.claude-code.ticChecks = import ./lib/tic-checks.nix;
 
-    ch-ai-workbench.claude-code.judge.dimensions = import ./lib/judge-dimensions.nix;
+    ch-ai-workbench.claude-code.judge.dimensions =
+      import ./lib/judge-dimensions.nix // import ./lib/judge-readability.nix;
 
     # The local GPU first, the cloud when it is not running. The fields
     # are defaults so a consumer can move either endpoint (another port,

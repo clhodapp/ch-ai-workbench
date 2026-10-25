@@ -8,8 +8,9 @@ whether the text is a reply, prose for a file, or code, and only the dimensions 
 replaces, and `--transcript` the session transcript, whose last few user messages are sent
 as context; both go beside the new text. Each dimension is one yes/no question of the System
 One API (`POST /v1/systemone`, the API of Base Labs'
-decision models elephant-1 and mammoth-1), and the model's answer to it is the probability
-that the problem is present in the text.
+decision models elephant-1 and mammoth-1). A noul dimension is a yes/no question, and the
+model's answer is the probability that the problem is present in the text. A score dimension
+lists ordered levels, and the model's answer is a probability for each level.
 
 Endpoints are tried in the config's order, and the first one that answers wins. A local
 decision-server that is not running refuses the connection at once, so the next endpoint
@@ -19,7 +20,10 @@ file cannot be read is skipped. When no endpoint answers, the program prints the
 stderr and exits with status 1, and the hooks fall back to the regex table alone.
 
 On success stdout holds one JSON object:
-  {"endpoint": NAME, "model": MODEL, "answers": {DIMENSION: PROBABILITY, ...}}
+  {"endpoint": NAME, "model": MODEL,
+   "answers": {NOUL_DIMENSION: PROBABILITY, ...},
+   "scores": {SCORE_DIMENSION: {"score": EXPECTED_LEVEL_INDEX, "levels": COUNT,
+                                "level": MOST_LIKELY_LEVEL, "p": ITS_PROBABILITY}, ...}}
 """
 
 from __future__ import annotations
@@ -129,18 +133,29 @@ def request_body(
     return {
         "model": endpoint["model"],
         "state": state,
-        "questions": {
-            name: {
-                "type": "noul",
-                "instructions": dim["instructions"],
-                "criteria": {"true": dim["criteria"]["true"], "false": dim["criteria"]["false"]},
-            }
-            for name, dim in dimensions_for(config, kind).items()
-        },
+        "questions": {name: question(dim) for name, dim in dimensions_for(config, kind).items()},
     }
 
 
-def ask(endpoint: dict[str, Any], body: dict[str, Any]) -> dict[str, float]:
+def question(dim: dict[str, Any]) -> dict[str, Any]:
+    if dim["type"] == "score":
+        return {"type": "score", "instructions": dim["instructions"], "criteria": dim["levels"]}
+    return {
+        "type": "noul",
+        "instructions": dim["instructions"],
+        "criteria": {"true": dim["criteria"]["true"], "false": dim["criteria"]["false"]},
+    }
+
+
+def read_score(answer: dict[str, Any], levels: list[str]) -> dict[str, Any]:
+    """A score answer as the hooks report it: the expected level index (0 for the first
+    level), the number of levels, and the most likely level with its probability."""
+    probs = [float(answer["probabilities"][str(i)]) for i in range(len(levels))]
+    best = max(range(len(levels)), key=probs.__getitem__)
+    return {"score": round(float(answer["score"]), 3), "levels": len(levels), "level": levels[best], "p": probs[best]}
+
+
+def ask(endpoint: dict[str, Any], body: dict[str, Any], dims: dict[str, Any]) -> dict[str, Any]:
     headers = {"Content-Type": "application/json"}
     if endpoint.get("apiKeyFile"):
         key = Path(endpoint["apiKeyFile"]).read_text().strip()
@@ -155,7 +170,13 @@ def ask(endpoint: dict[str, Any], body: dict[str, Any]) -> dict[str, float]:
     )
     with urllib.request.urlopen(req, timeout=endpoint["timeout"]) as resp:
         answers = json.load(resp)["answers"]
-    return {name: float(answers[name]["noul"]) for name in body["questions"]}
+    verdict: dict[str, Any] = {"answers": {}, "scores": {}}
+    for name in body["questions"]:
+        if dims[name]["type"] == "score":
+            verdict["scores"][name] = read_score(answers[name], dims[name]["levels"])
+        else:
+            verdict["answers"][name] = float(answers[name]["noul"])
+    return verdict
 
 
 def judge(
@@ -169,16 +190,17 @@ def judge(
     if replaced is not None:
         replaced = prepare(replaced, kind, config["maxChars"])
     failures = []
+    dims = dimensions_for(config, kind)
     for endpoint in config["endpoints"]:
         try:
-            answers = ask(endpoint, request_body(config, endpoint, text, kind, replaced, list(conversation)))
+            verdict = ask(endpoint, request_body(config, endpoint, text, kind, replaced, list(conversation)), dims)
         except (OSError, ValueError, KeyError, TypeError) as err:
             # OSError covers a refused connection, a timeout, an unreadable key file, and an
             # HTTP error status (urllib's HTTPError), such as the 422 a local decision-server
             # returns for a text over the model's prompt limit.
             failures.append(f"{endpoint['name']}: {err}")
             continue
-        return {"endpoint": endpoint["name"], "model": endpoint["model"], "answers": answers}, failures
+        return {"endpoint": endpoint["name"], "model": endpoint["model"], **verdict}, failures
     return None, failures
 
 

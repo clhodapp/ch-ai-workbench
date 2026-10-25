@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 """A System One server for the tic-check checks: POST /v1/systemone answers every noul
-question with the probability ANSWERS (a JSON file of {dimension: probability}, re-read on
-each request) gives it, 0.05 when it gives none, and appends each request body as one JSON
-line to LOG.
+question with the probability ANSWERS (a JSON file of {dimension: value}, re-read on each
+request) gives it, 0.05 when it gives none, and every score question with the level
+probabilities ANSWERS gives it as a list, all on the first level when it gives none. Each
+request body is appended as one JSON line to LOG.
 
 usage: stub-systemone.py PORT ANSWERS LOG
 """
@@ -12,6 +13,20 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 port, answers_path, log_path = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+
+
+def answer(question, value):
+    if question["type"] == "score":
+        n = len(question["criteria"])
+        probs = value or [1.0] + [0.0] * (n - 1)
+        return {
+            "type": "score",
+            "score": sum(i * p for i, p in enumerate(probs)),
+            "legend": {str(i): level for i, level in enumerate(question["criteria"])},
+            "probabilities": {str(i): p for i, p in enumerate(probs)},
+            "confidence": max(probs),
+        }
+    return {"type": "noul", "noul": 0.05 if value is None else value}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -24,7 +39,7 @@ class Handler(BaseHTTPRequestHandler):
         out = json.dumps(
             {
                 "model": body["model"],
-                "answers": {name: {"type": "noul", "noul": probs.get(name, 0.05)} for name in body["questions"]},
+                "answers": {name: answer(q, probs.get(name)) for name, q in body["questions"].items()},
                 "usage": {"input_tokens": 1, "output_tokens": 0},
             }
         ).encode()

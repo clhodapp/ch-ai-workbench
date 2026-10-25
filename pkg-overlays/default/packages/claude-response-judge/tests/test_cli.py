@@ -20,27 +20,53 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 DIMENSIONS = {
     "fragments": {
+        "type": "noul",
         "instructions": "Does the prose drop subjects or verbs?",
         "criteria": {"true": "it does", "false": "it does not"},
         "targets": ["reply", "prose"],
     },
     "never": {
+        "type": "noul",
         "instructions": "Is never used as emphasis?",
         "criteria": {"true": "it is", "false": "it is not"},
         "targets": ["reply", "prose"],
     },
     "ghosts": {
+        "type": "noul",
         "instructions": "Does a comment explain what is absent?",
         "criteria": {"true": "one does", "false": "none does"},
         "targets": ["reply", "prose", "code"],
     },
+    "density": {
+        "type": "score",
+        "instructions": "How much does each sentence carry?",
+        "levels": ["sparse", "even", "dense"],
+        "targets": ["reply"],
+    },
 }
+
+
+def stub_answer(question: dict, value) -> dict:
+    """A System One answer to one question: a noul with probability VALUE (0.5 when None),
+    or a score whose level probabilities are VALUE (uniform when None), shaped as qev
+    answers it."""
+    if question["type"] == "score":
+        n = len(question["criteria"])
+        probs = value or [1 / n] * n
+        return {
+            "type": "score",
+            "score": sum(i * p for i, p in enumerate(probs)),
+            "legend": {str(i): level for i, level in enumerate(question["criteria"])},
+            "probabilities": {str(i): p for i, p in enumerate(probs)},
+            "confidence": max(probs),
+        }
+    return {"type": "noul", "noul": 0.5 if value is None else value}
 
 
 class Stub:
     """A System One server that records each request and answers with a fixed status."""
 
-    def __init__(self, status: int = 200, answers: dict[str, float] | None = None):
+    def __init__(self, status: int = 200, answers: dict | None = None):
         self.requests: list[dict] = []
         stub = self
 
@@ -52,11 +78,11 @@ class Stub:
                     self.send_response(status)
                     self.end_headers()
                     return
-                probs = answers or {name: 0.5 for name in body["questions"]}
+                given = answers or {}
                 out = json.dumps(
                     {
                         "model": body["model"],
-                        "answers": {name: {"type": "noul", "noul": probs[name]} for name in body["questions"]},
+                        "answers": {name: stub_answer(q, given.get(name)) for name, q in body["questions"].items()},
                         "usage": {"input_tokens": 1, "output_tokens": 0},
                     }
                 ).encode()
@@ -121,12 +147,17 @@ class JudgeTest(unittest.TestCase):
         )
 
     def test_request_shape_and_verdict(self):
-        stub = self.stub(answers={"fragments": 0.93, "never": 0.04, "ghosts": 0.5})
+        stub = self.stub(answers={"fragments": 0.93, "never": 0.04, "ghosts": 0.5, "density": [0.1, 0.25, 0.65]})
         res = self.run_cli([endpoint("local", stub.url)], "Build green, pushed.\n```\nnever = 1\n```\nDone `x`.")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(
             json.loads(res.stdout),
-            {"endpoint": "local", "model": "local-model", "answers": {"fragments": 0.93, "never": 0.04, "ghosts": 0.5}},
+            {
+                "endpoint": "local",
+                "model": "local-model",
+                "answers": {"fragments": 0.93, "never": 0.04, "ghosts": 0.5},
+                "scores": {"density": {"score": 1.55, "levels": 3, "level": "dense", "p": 0.65}},
+            },
         )
         [req] = stub.requests
         self.assertEqual(req["path"], "/v1/systemone")
@@ -140,6 +171,10 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(
             body["questions"]["never"],
             {"type": "noul", "instructions": "Is never used as emphasis?", "criteria": {"true": "it is", "false": "it is not"}},
+        )
+        self.assertEqual(
+            body["questions"]["density"],
+            {"type": "score", "instructions": "How much does each sentence carry?", "criteria": ["sparse", "even", "dense"]},
         )
 
     def test_transcript_gives_the_latest_typed_messages(self):
@@ -186,6 +221,7 @@ class JudgeTest(unittest.TestCase):
         res = self.run_cli([endpoint("local", stub.url)], text, "--kind", "code", "--replaced", str(old))
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(json.loads(res.stdout)["answers"], {"ghosts": 0.5})
+        self.assertEqual(json.loads(res.stdout)["scores"], {})
         body = stub.requests[0]["body"]
         self.assertEqual(list(body["questions"]), ["ghosts"])
         # Code is the text in a code file, fences included.

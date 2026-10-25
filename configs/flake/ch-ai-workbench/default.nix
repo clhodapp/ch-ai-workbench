@@ -779,7 +779,8 @@
               # hit it does not clear without listing it twice; a literal
               # character fires whatever the judge says; a verdict below
               # pushBackAbove (and a report-only dimension above it) does
-              # not block and reaches the next prompt once as context;
+              # not block and reaches the next prompt once as context,
+              # beside every readability score, highest first;
               # the rewrite step is unchanged; the edit hook asks a code
               # write only the dimensions that target code, sends an
               # Edit's replaced text beside the new text, asks a prose
@@ -824,10 +825,15 @@
                     done
 
                     # A regex hit the judge clears; the verdict waits for
-                    # the next prompt, which has nothing to report.
+                    # the next prompt, which reports the readability
+                    # scores and no problems.
                     [ -z "$(stop 'The merge step is yours.')" ]
                     jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
                     tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("undefined-terms") and (has("arguing-with-ghosts") | not))'
+                    tail -n 1 requests.log | jq -e '.questions.density.type == "score" and (.questions.density.criteria | length) == 4'
+                    ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q -- '- readability 0 of 3, most likely an average developer can follow it ' <<<"$ctx"
+                    lacks 'These problems' <<<"$ctx"
                     [ -z "$(prompt)" ]
                     [ ! -e "$stored" ]
 
@@ -850,12 +856,15 @@
                     reason <<<"$(stop 'One — two.')" | grep -q -- '- em-dash (1): '
 
                     # Below pushBackAbove, and report-only: context, once.
-                    answers '{"fragments": 0.6, "undefined-terms": 0.99}'
+                    # A score never blocks and is reported highest first.
+                    answers '{"fragments": 0.6, "undefined-terms": 0.99, "density": [0, 0.2, 0.6, 0.2]}'
                     [ -z "$(stop 'The build passed.')" ]
                     ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
                     grep -q '^tic-check: verdicts' <<<"$ctx"
                     grep -q -- '- undefined-terms 0.99: ' <<<"$ctx"
                     grep -q -- '- fragments 0.6: ' <<<"$ctx"
+                    grep -q -- '- density 2 of 3, most likely it needs a developer familiar with this codebase (0.6); aim: ' <<<"$ctx"
+                    [ "$(grep -n -- '- density ' <<<"$ctx" | cut -d: -f1)" -lt "$(grep -n -- '- readability ' <<<"$ctx" | cut -d: -f1)" ]
                     [ -z "$(prompt)" ]
 
                     # The rewrite step.
