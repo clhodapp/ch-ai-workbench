@@ -269,6 +269,29 @@
                 // extra;
               };
 
+            # A home of `tester` whose judge has one endpoint, the stub
+            # System One server the tic-check check starts on a fixed
+            # port of the build sandbox's own loopback. Its hooks are the
+            # packages the module builds from the real tables.
+            judgeHooks =
+              (inputs.home-manager.lib.homeManagerConfiguration {
+                inherit pkgs;
+                modules = [
+                  self.modules.homeManager.claude-code
+                  self.modules.homeManager.claude-code-sandbox
+                  {
+                    home.username = "tester";
+                    home.homeDirectory = "/home/tester";
+                    home.stateVersion = "25.05";
+                    ch-ai-workbench.claude-code.enable = true;
+                    ch-ai-workbench.claude-code.judge.endpoints = {
+                      local.url = "http://127.0.0.1:18731";
+                      baseten.enable = false;
+                    };
+                  }
+                ];
+              }).config.ch-ai-workbench.claude-code.hooks;
+
             # The hook packages from this layer's library, so the checks
             # below drive the same scripts a real configuration installs.
             claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
@@ -297,6 +320,9 @@
               claude-code-sandbox = self.packages.${system}.claude-code-sandbox;
               claude-code-sandbox-plugin = self.packages.${system}.claude-code-sandbox-plugin;
               landlock-shim = self.packages.${system}.landlock-shim;
+              # Building the judge client runs its unittest suite against
+              # stub System One servers.
+              claude-response-judge = self.packages.${system}.claude-response-judge;
               # Building runs the integration tests of call against serve.
               trusted-exec = self.packages.${system}.trusted-exec;
               # Building runs the unittest suite of the microvm program
@@ -742,6 +768,110 @@
                     quiet 'ls'
                     [ -z "$(call 'git push' | env -u XDG_RUNTIME_DIR "$hook")" ]
                     [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
+
+              # The tic-check hooks with the judge, against a stub System
+              # One server: with the judge down the regex table decides
+              # alone; the judge clears a regex hit it puts below
+              # dismissBelow, pushes back on a dimension at or above
+              # pushBackAbove that no regex catches, and annotates a regex
+              # hit it does not clear without listing it twice; a literal
+              # character fires whatever the judge says; a verdict below
+              # pushBackAbove (and a report-only dimension above it) does
+              # not block and reaches the next prompt once as context;
+              # the rewrite step is unchanged; the edit hook asks the
+              # judge for a prose file only and still lets an identical
+              # re-issue through.
+              claude-tic-check-judge =
+                pkgs.runCommand "claude-tic-check-judge"
+                  {
+                    nativeBuildInputs = [
+                      pkgs.jq
+                      pkgs.python3
+                    ];
+                  }
+                  ''
+                    hook=${lib.getExe judgeHooks.tic-check.package}
+                    context=${lib.getExe judgeHooks.tic-check-context.package}
+                    edit=${lib.getExe judgeHooks.tic-check-edit.package}
+                    export XDG_RUNTIME_DIR="$TMPDIR/run"
+                    mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    session=0123456789abcdef-0000-4000-8000-000000000000
+                    stored="$XDG_RUNTIME_DIR/claude-tic-check/verdicts/$session.json"
+                    stop() { jq -cn --arg m "$1" --arg s "$session" '{session_id: $s, stop_hook_active: false, last_assistant_message: $m}' | "$hook"; }
+                    prompt() { jq -cn --arg s "$session" '{session_id: $s, prompt: "next"}' | "$context"; }
+                    write() { jq -cn --arg f "$1" --arg c "$2" --arg s "$session" '{session_id: $s, tool_name: "Write", tool_input: {file_path: $f, content: $c}}' | "$edit"; }
+                    reason() { jq -r .reason; }
+                    lacks() { ! grep -q -- "$1"; }
+                    answers() { printf '%s' "$1" > answers.json; }
+
+                    # The judge is down: the regex table alone.
+                    res=$(stop 'The merge step is yours.')
+                    reason <<<"$res" | grep -q '^tic-check: check'
+                    reason <<<"$res" | grep -q -- '- elliptical-possessive (1): '
+                    reason <<<"$res" | lacks judge
+                    [ -z "$(stop 'The build passed and the branch is pushed.')" ]
+                    [ ! -e "$stored" ]
+
+                    answers '{}'
+                    python3 ${self}/tests/tic-check/stub-systemone.py 18731 answers.json requests.log &
+                    for _ in $(seq 100); do
+                      (: <>/dev/tcp/127.0.0.1/18731) 2>/dev/null && break
+                      sleep 0.1
+                    done
+
+                    # A regex hit the judge clears; the verdict waits for
+                    # the next prompt, which has nothing to report.
+                    [ -z "$(stop 'The merge step is yours.')" ]
+                    jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
+                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("undefined-terms"))'
+                    [ -z "$(prompt)" ]
+                    [ ! -e "$stored" ]
+
+                    # A confident dimension the regex cannot see.
+                    answers '{"fragments": 0.95}'
+                    res=$(stop 'Build green, pushed, PR open.')
+                    reason <<<"$res" | grep -q '^tic-check: check'
+                    reason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
+                    reason <<<"$res" | grep -q 'elephant-1 at local'
+                    [ ! -e "$stored" ]
+
+                    # A regex hit the judge does not clear, listed once.
+                    answers '{"elliptical-possessive": 0.95}'
+                    res=$(stop 'The merge step is yours.')
+                    reason <<<"$res" | grep -q -- '- elliptical-possessive (1, judge 0.95): '
+                    [ "$(reason <<<"$res" | grep -c -- '- elliptical-possessive')" = 1 ]
+
+                    # A literal character.
+                    answers '{}'
+                    reason <<<"$(stop 'One — two.')" | grep -q -- '- em-dash (1): '
+
+                    # Below pushBackAbove, and report-only: context, once.
+                    answers '{"fragments": 0.6, "undefined-terms": 0.99}'
+                    [ -z "$(stop 'The build passed.')" ]
+                    ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q '^tic-check: verdicts' <<<"$ctx"
+                    grep -q -- '- undefined-terms 0.99: ' <<<"$ctx"
+                    grep -q -- '- fragments 0.6: ' <<<"$ctx"
+                    [ -z "$(prompt)" ]
+
+                    # The rewrite step.
+                    res=$(jq -cn '{session_id: "s", stop_hook_active: true, last_assistant_message: "tic-check: tic"}' | "$hook")
+                    reason <<<"$res" | grep -q '^tic-check: rewrite'
+
+                    # The edit side: the judge for a prose file only.
+                    answers '{"fragments": 0.95}'
+                    before=$(wc -l < requests.log)
+                    [ -z "$(write src/main.nix 'Build green, pushed.')" ]
+                    [ "$(wc -l < requests.log)" = "$before" ]
+                    res=$(write docs/notes.md 'Build green, pushed.')
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '.state.kind | contains("prose file")'
+                    [ -z "$(write docs/notes.md 'Build green, pushed.')" ]
+
+                    kill %1
                     touch $out
                   '';
 

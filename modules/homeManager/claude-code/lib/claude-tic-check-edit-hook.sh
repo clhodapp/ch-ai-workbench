@@ -2,8 +2,9 @@
 # NotebookEdit, and the emacs server's edit-file / edit-buffer): the
 # edit-side twin of claude-tic-check-hook.sh.  The text a call writes
 # (new_string, content, new_source, or new-string) is matched against
-# the same table (tic_findings from tic-check-match.sh, prepended by
-# the package wrapper with $table); on a hit the call is denied once
+# the same table, and for a prose file also scored by the judge
+# (tic_verdict and tic_findings from tic-check-match.sh, prepended by
+# the package wrapper with $table and $judge); on a finding the call is denied once
 # with the matching lines and rules, and the reason comes back to the
 # model as the tool result, so it re-reads and re-issues the edit.
 #
@@ -33,14 +34,24 @@ key=$(jq -c '{tool_name, tool_input}' <<<"$payload" 2>/dev/null | sha256sum | cu
 seen="$runtime/claude-tic-check/seen/${session:0:8}-$key"
 [ -e "$seen" ] && exit 0
 
-findings=$(tic_findings "$text")
+# The judge reads prose only: a write to a file (or a buffer named
+# like one) whose extension is in judge.proseExtensions.  Code and
+# its comments get the regex table alone.
+target=$(field '.tool_input.file_path // .tool_input.notebook_path // .tool_input.file // .tool_input.buffer')
+verdict=
+if [[ $target == *.* ]] &&
+  jq -en --arg ext "${target##*.}" --slurpfile c "$judge" '$c[0].proseExtensions | index($ext)' >/dev/null 2>&1; then
+  verdict=$(tic_verdict edit "$text")
+fi
+
+findings=$(tic_findings "$text" "$verdict")
 [ -n "$findings" ] || exit 0
 
 mkdir -p "$(dirname "$seen")" 2>/dev/null && : > "$seen" 2>/dev/null || exit 0
 
 reason="tic-check: check
-The text this call writes contains phrasing the output style bans:$findings
-Re-read each occurrence against its rule. If any is the tic, re-issue the call with that phrasing rewritten. If every occurrence is legitimate (quoted text, a real possessive, a literal symbol in code or quoted output), re-issue the same call unchanged; an identical re-issue is not checked again."
+The text this call writes may break the output style's rules:$findings
+Re-read the text against each finding's rule. If any finding is real, re-issue the call with that phrasing rewritten. If every finding is a false alarm (quoted text, a real possessive, a literal symbol in code or quoted output), re-issue the same call unchanged; an identical re-issue is not checked again."
 
 jq -cn --arg r "$reason" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse",

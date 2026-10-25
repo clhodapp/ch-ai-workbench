@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-response-judge"
+version = "0.1.0"
+description = "Ask a System One decision model how likely each listed problem is in a text"
+requires-python = ">=3.11"
+license = "MIT"
+
+[project.scripts]
+claude-response-judge = "claude_response_judge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

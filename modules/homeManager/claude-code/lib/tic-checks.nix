@@ -5,7 +5,12 @@
 # case-insensitively against the finished message with code fences
 # and backtick spans removed; the rule is the one-line reminder the
 # model gets back.  Left out on purpose: "never", "grows", "seam",
-# and "rides", which have too many ordinary uses for a pattern.
+# and "rides", which have too many ordinary uses for a pattern; the
+# judge's dimensions (judge-dimensions.nix) ask about them instead.
+# An entry's `dimension` names the judge question that covers the same
+# rule: when the judge answers and puts that dimension below
+# judge.dismissBelow, a hit of the entry is dropped as a false
+# positive.  The literal-character entries have no dimension.
 {
   # The ownership handoff: a possessive left dangling at the end of a
   # clause ("two steps are yours", "the merge is the owner's", "the
@@ -18,6 +23,7 @@
   # possessive pronouns (yours, mine, ours, theirs) are elliptical
   # wherever they stand ("yours governs"), so they match anywhere.
   elliptical-possessive = {
+    dimension = "elliptical-possessive";
     pattern = "(^|[^'’[:alnum:]])([[:alnum:]][[:alnum:]_-]*('s|’s|s'|s’)|my own)[[:space:]]*([[:punct:]]|”|$)|\\b(yours|mine|ours|theirs)\\b";
     rule = "no elliptical possessive (\"X is yours\", \"X is the owner's\", \"is mine\", \"is my own\"); a handoff names the next action and who does it in a plain sentence, not the owner";
   };
@@ -34,10 +40,12 @@
     rule = "write the sentence; no \"X → Y\" shorthand";
   };
   relationship-words = {
+    dimension = "relationship-words";
     pattern = "\\b(load-bearing|substrate|travels)\\b";
     rule = "say the actual relationship or what breaks, not \"load-bearing\", \"substrate\", or \"travels\"";
   };
   performed-enthusiasm = {
+    dimension = "performed-enthusiasm";
     pattern = "\\b(happy|glad) to\\b";
     rule = "no performed enthusiasm; make offers as plain conditionals";
   };

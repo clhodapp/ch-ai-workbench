@@ -1,10 +1,17 @@
-# Stop hook: a two-step double-check for the phrasings the
-# peer-programmer output style bans and a regex can catch (the
-# possessive handoff "X is yours", em-dashes, "click", arrows, ...).
-# Matching lives in tic-check-match.sh (tic_findings), prepended by
-# the package wrapper together with $table, the JSON table rendered
-# from ch-ai-workbench.claude-code.ticChecks; the edit-side twin is
+# Stop hook: a two-step double-check of the finished message against
+# the peer-programmer output style.  Two checkers feed it: the regex
+# table (ch-ai-workbench.claude-code.ticChecks: the possessive handoff
+# "X is yours", em-dashes, "click", arrows, ...) and the judge, a
+# System One decision model that scores the message on each of
+# judge.dimensions.  Matching and judging live in tic-check-match.sh
+# (tic_verdict, tic_findings), prepended by the package wrapper
+# together with $table and $judge; the edit-side twin is
 # claude-tic-check-edit-hook.sh.
+#
+# When nothing pushes back, the verdict is kept under the runtime dir
+# and claude-tic-check-context-hook hands it to the model with the
+# next prompt, so the dimensions the judge found likely but not
+# certain still reach the model, without a block.
 #
 # The CLI gives Stop hooks the finished message as
 # last_assistant_message and flags a stop that follows a block with
@@ -15,8 +22,8 @@
 #
 #   1. First stop (stop_hook_active false): match the message and on
 #      a hit block with a reason headed "tic-check: check" -- what the
-#      checker emits whenever it fires, however confident it is (the
-#      regex today, a classifier later) -- listing the matching lines
+#      checker emits whenever it fires, however confident it is (a
+#      regex entry or a confident judge dimension) -- listing the findings
 #      and rules and asking for a VERDICT ONLY: "tic-check: clean"
 #      (ends there) or "tic-check: tic".  The verdict is the
 #      full-power model's, and "clean" is how it overrules the check.
@@ -60,12 +67,33 @@ Post the message before your verdict again in full, with each flagged phrasing r
   exit 0
 fi
 
-findings=$(tic_findings "$message")
-[ -n "$findings" ] || exit 0
+verdict=$(tic_verdict reply "$message")
+findings=$(tic_findings "$message" "$verdict")
+store=$(tic_verdict_path "$(field '.session_id')") || store=
+
+if [ -z "$findings" ]; then
+  # No push-back: keep the verdict for claude-tic-check-context-hook,
+  # which hands it to the model with the next prompt.
+  if [ -n "$store" ] && [ -n "$verdict" ]; then
+    { mkdir -p "$(dirname "$store")" && printf '%s\n' "$verdict" > "$store"; } 2>/dev/null || true
+  fi
+  exit 0
+fi
+
+# The check below carries the findings itself, and the message it
+# leads to is a verdict or a rewrite, so an older verdict must not
+# reach the next prompt.
+[ -z "$store" ] || rm -f "$store" 2>/dev/null || true
+
+judged=
+if [ -n "$verdict" ]; then
+  judged="
+Entries marked judge carry the probability a decision model ($(jq -r '"\(.model) at \(.endpoint)"' <<<"$verdict" 2>/dev/null)) put on the problem; it scores the whole message and cannot point at lines."
+fi
 
 emit "tic-check: check
-The message you just finished contains phrasing the output style bans:$findings
-Re-read each occurrence against its rule, then reply with exactly one of the next two lines and nothing else, no explanation:
+The message you just finished may break the output style's rules:$findings$judged
+Re-read the message against each finding's rule, then reply with exactly one of the next two lines and nothing else, no explanation:
 tic-check: clean
 tic-check: tic
-(clean: every occurrence is legitimate, such as a quotation, a real possessive, or a literal symbol in quoted output; the message stands. tic: at least one occurrence is the banned phrasing; you will then be asked to post the message again without it.)"
+(clean: every finding is a false alarm, such as a quotation, a real possessive, or a literal symbol in quoted output; the message stands. tic: at least one finding is real; you will then be asked to post the message again without it.)"

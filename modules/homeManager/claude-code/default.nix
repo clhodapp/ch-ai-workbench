@@ -89,21 +89,95 @@ let
   ticCheckTable = lib.mapAttrsToList (name: check: {
     inherit name;
     inherit (check) pattern rule;
+    # A regex entry is dismissed by the judge only through a dimension
+    # the judge is asked about.
+    dimension =
+      if check.dimension != null && enabledDimensions ? ${check.dimension} then check.dimension else null;
   }) (lib.filterAttrs (_name: check: check.enable) cfg.ticChecks);
+
+  # The judge: a System One decision model that scores every finished
+  # message (and every write to a prose file) on judge.dimensions.
+  # The config below is what claude-response-judge reads; the hooks
+  # read the thresholds from the same file.
+  enabledDimensions = lib.filterAttrs (_name: dimension: dimension.enable) cfg.judge.dimensions;
+
+  unknownTicCheckDimensions = lib.mapAttrsToList (name: check: "${name} (${check.dimension})") (
+    lib.filterAttrs (
+      _name: check: check.dimension != null && !(cfg.judge.dimensions ? ${check.dimension})
+    ) cfg.ticChecks
+  );
+
+  enabledEndpoints = lib.sort (a: b: a.order < b.order) (
+    lib.mapAttrsToList (name: endpoint: endpoint // { inherit name; }) (
+      lib.filterAttrs (_name: endpoint: endpoint.enable) cfg.judge.endpoints
+    )
+  );
+
+  judgeConfig = {
+    endpoints = map (endpoint: {
+      inherit (endpoint)
+        name
+        url
+        model
+        apiKeyFile
+        timeout
+        ;
+    }) enabledEndpoints;
+    dimensions = lib.mapAttrs (_name: dimension: {
+      inherit (dimension)
+        instructions
+        criteria
+        rule
+        pushBack
+        ;
+    }) enabledDimensions;
+    inherit (cfg.judge)
+      pushBackAbove
+      dismissBelow
+      reportAbove
+      maxChars
+      proseExtensions
+      ;
+  };
+
+  # The judge tries the endpoints one after another, so a hook that
+  # asks it may wait for every endpoint's timeout in turn.
+  judgeHookTimeout = 10 + lib.foldl' (sum: endpoint: sum + endpoint.timeout) 0 enabledEndpoints;
 
   claudeTicCheckHook = import ./lib/claude-tic-check-hook.nix {
     inherit pkgs;
     checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
   };
 
   # Edit-side twin (PreToolUse on the disk and buffer writers): the
-  # text a call writes is matched against the same table and the
-  # call is denied once with the findings; an identical re-issue
-  # passes (script: lib/claude-tic-check-edit-hook.sh).
+  # text a call writes is matched against the same table, and judged
+  # when it goes to a prose file, and the call is denied once with the
+  # findings; an identical re-issue passes (script:
+  # lib/claude-tic-check-edit-hook.sh).
   claudeTicCheckEditHook = import ./lib/claude-tic-check-edit-hook.nix {
     inherit pkgs;
     checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
   };
+
+  # UserPromptSubmit: the judge's verdict on a message the Stop hook
+  # let stand reaches the model with the next prompt, as context
+  # (script: lib/claude-tic-check-context-hook.sh).
+  claudeTicCheckContextHook = import ./lib/claude-tic-check-context-hook.nix {
+    inherit pkgs;
+    judge = judgeConfig;
+  };
+
+  claudeResponseJudge =
+    pkgs.ch-ai-workbench.claude-response-judge or (throw ''
+      ch-ai-workbench.claude-code needs `pkgs.ch-ai-workbench.claude-response-judge`:
+      apply this flake's package overlay (`overlays.default`; a caisson
+      consumer lists the flake in `projects`) to the nixpkgs instance
+      home-manager uses.
+    '');
 
   # Companion MessageDisplay hook: the tic-check reminder asks for a
   # verdict in a fixed line ("tic-check: clean" / "tic-check: tic"),
@@ -439,7 +513,10 @@ in
         (an entry is identified by its command). The same manifest
         carries permissions.deny. Merged across all modules that set
         it. This module seeds
-        tic-check, the Stop hook driven by ticChecks, and
+        tic-check, the Stop hook driven by ticChecks and the judge,
+        tic-check-context, the UserPromptSubmit hook that hands the
+        judge's verdict on a message the Stop hook let stand to the
+        model with the next prompt, and
         tic-check-display, the MessageDisplay hook that renders that
         check's verdict lines ("tic-check: clean" / "tic-check: tic")
         as status lines on screen, tic-check-edit, the PreToolUse
@@ -521,6 +598,21 @@ in
               example = "a handoff names the next action, not the owner";
               description = "One-line reminder returned to the model beside the matching lines.";
             };
+
+            dimension = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "elliptical-possessive";
+              description = ''
+                The judge dimension (an entry of judge.dimensions) that
+                asks about the same rule. When the judge answers and puts
+                that dimension below judge.dismissBelow, a match of this
+                entry is dropped as a false positive; when no endpoint
+                answers, the match stands as it would without the judge.
+                Null for an entry a regex decides exactly, such as a
+                literal character.
+              '';
+            };
           };
         }
       );
@@ -552,12 +644,224 @@ in
         cannot be withdrawn, since a hook's only channel back is the
         reason string. The same table drives hooks.tic-check-edit,
         which denies an edit or write once with the findings and lets
-        an identical re-issue through. Merged across all
+        an identical re-issue through. The judge (judge.*) feeds the
+        same cycle, and an entry that names a dimension is dismissed
+        when the judge puts that dimension below judge.dismissBelow.
+        Merged across all
         modules that set it. This module seeds the peer-programmer
         style's regex-catchable bans (lib/tic-checks.nix):
         elliptical-possessive, em-dash, click, arrow,
         relationship-words, performed-enthusiasm.
       '';
+    };
+
+    judge = {
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = claudeResponseJudge;
+        defaultText = lib.literalExpression "pkgs.ch-ai-workbench.claude-response-judge";
+        description = ''
+          The claude-response-judge client the tic-check hooks run: it
+          sends a text and the enabled dimensions to the System One API
+          (`POST /v1/systemone`) of the first endpoint that answers and
+          prints the probability the model put on each dimension.
+          Override to substitute a build.
+        '';
+      };
+
+      endpoints = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = "Whether the judge tries this endpoint.";
+              };
+
+              order = lib.mkOption {
+                type = lib.types.int;
+                default = 1000;
+                description = "Endpoints are tried in ascending order; the first that answers gives the verdict.";
+              };
+
+              url = lib.mkOption {
+                type = lib.types.str;
+                example = "http://127.0.0.1:8000";
+                description = "Base URL; the judge posts to <url>/v1/systemone.";
+              };
+
+              model = lib.mkOption {
+                type = lib.types.str;
+                example = "decision-models/baseten-elephant-9b-latest";
+                description = "The request's model field. A local decision-server serves one model and ignores it.";
+              };
+
+              apiKeyFile = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "/run/user/1000/secrets/baseten-api-key";
+                description = ''
+                  File holding the API key, read at each request and sent
+                  as `Authorization: Api-Key <key>` (Baseten's scheme).
+                  The judge skips the endpoint while the file is missing,
+                  unreadable, or empty. A path string rather than a Nix
+                  path, so the key stays out of the store.
+                '';
+              };
+
+              timeout = lib.mkOption {
+                type = lib.types.int;
+                default = 30;
+                description = ''
+                  Seconds the judge waits for this endpoint before trying
+                  the next. A server that is not running refuses the
+                  connection at once and costs no wait. The hooks that run
+                  the judge are registered with a timeout of 10 seconds
+                  plus the sum over the enabled endpoints.
+                '';
+              };
+            };
+          }
+        );
+        default = { };
+        example = lib.literalExpression ''
+          {
+            # A decision-server on another port.
+            local.url = "http://127.0.0.1:8010";
+            # The cloud's smaller model.
+            baseten.model = "decision-models/baseten-elephant-9b-latest";
+          }
+        '';
+        description = ''
+          System One endpoints the judge tries, in ascending order. This
+          module seeds two. local is a decision-server from ch-local-llms
+          (elephant-1, 9B) on this machine's GPU at its default port
+          (http://127.0.0.1:8000); while none is running the connection is
+          refused and the judge moves on at once. baseten is Base Labs'
+          hosted API at https://inference.baseten.co with mammoth-1 (27B),
+          the larger of the two decision models; its key is read from
+          $XDG_CONFIG_HOME/baseten/api-key, and while that file does not
+          exist the endpoint is skipped. With no endpoint answering, the
+          hooks run on the regex table alone. Merged across all modules
+          that set it.
+        '';
+      };
+
+      dimensions = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = "Whether the judge asks this question.";
+              };
+
+              instructions = lib.mkOption {
+                type = lib.types.str;
+                description = "The yes/no question the decision model answers about the text.";
+              };
+
+              criteria.true = lib.mkOption {
+                type = lib.types.str;
+                description = "What the text looks like when the answer is yes (the problem is present).";
+              };
+
+              criteria.false = lib.mkOption {
+                type = lib.types.str;
+                description = "What the text looks like when the answer is no.";
+              };
+
+              rule = lib.mkOption {
+                type = lib.types.str;
+                description = "One-line reminder returned to the model when the judge pushes back or reports on this dimension.";
+              };
+
+              pushBack = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = ''
+                  Whether a probability at or above judge.pushBackAbove
+                  blocks the stop (or denies the edit) through the
+                  tic-check cycle. False keeps the dimension to the
+                  context report, for a question the model cannot answer
+                  reliably from the message alone.
+                '';
+              };
+            };
+          }
+        );
+        default = { };
+        description = ''
+          The questions the judge asks about every finished message and
+          every write to a prose file, each a yes/no (noul) question of
+          the System One API whose answer is the probability that the
+          problem is present. A dimension at or above pushBackAbove is a
+          finding of the tic-check cycle ("tic-check: check", then the
+          model's clean or tic verdict). When nothing pushes back, the
+          dimensions at or above reportAbove reach the model with the
+          next prompt as context (hooks.tic-check-context). Merged across
+          all modules that set it. This module seeds the peer-programmer
+          style's rules that need judgment (lib/judge-dimensions.nix):
+          elliptical-possessive, relationship-words, grows,
+          emphatic-never, performed-enthusiasm, selling, throat-clearing,
+          fragments, process-narration, and undefined-terms (report
+          only).
+        '';
+      };
+
+      pushBackAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 0.9;
+        description = "Probability at or above which a dimension with pushBack set is a finding of the tic-check cycle.";
+      };
+
+      dismissBelow = lib.mkOption {
+        type = lib.types.float;
+        default = 0.2;
+        description = ''
+          Probability below which the judge's answer on a dimension
+          drops a match of a ticChecks entry that names that dimension.
+        '';
+      };
+
+      reportAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 0.5;
+        description = ''
+          Probability at or above which a dimension is listed in the
+          context the model gets with the next prompt, when the Stop hook
+          let the message stand. Set to 0 to report every dimension.
+        '';
+      };
+
+      maxChars = lib.mkOption {
+        type = lib.types.int;
+        default = 40000;
+        description = ''
+          Longest text, after code blocks are replaced by a marker, the
+          judge sends; a longer text is cut. elephant-1 was trained on
+          prompts of at most 16,384 tokens, and a local decision-server
+          refuses a longer one (the judge then tries the next endpoint).
+        '';
+      };
+
+      proseExtensions = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [
+          "md"
+          "markdown"
+          "org"
+          "txt"
+          "rst"
+          "adoc"
+        ];
+        description = ''
+          File extensions whose writes the edit hook sends to the judge.
+          Writes to other files get the regex table alone.
+        '';
+      };
     };
   };
 
@@ -566,6 +870,10 @@ in
       {
         assertion = unknownServerNames == [ ];
         message = "ch-ai-workbench.lspServers names not in the language-server table: ${lib.concatStringsSep ", " unknownServerNames}";
+      }
+      {
+        assertion = unknownTicCheckDimensions == [ ];
+        message = "ch-ai-workbench.claude-code.ticChecks entries name dimensions not in judge.dimensions: ${lib.concatStringsSep ", " unknownTicCheckDimensions}";
       }
       {
         assertion = duplicateClaims == { };
@@ -604,11 +912,36 @@ in
 
     ch-ai-workbench.claude-code.ticChecks = import ./lib/tic-checks.nix;
 
+    ch-ai-workbench.claude-code.judge.dimensions = import ./lib/judge-dimensions.nix;
+
+    # The local GPU first, the cloud when it is not running. The fields
+    # are defaults so a consumer can move either endpoint (another port,
+    # the cloud's elephant-1) by setting the field.
+    ch-ai-workbench.claude-code.judge.endpoints = {
+      local = {
+        order = lib.mkDefault 100;
+        url = lib.mkDefault "http://127.0.0.1:8000";
+        model = lib.mkDefault "elephant-1";
+      };
+      baseten = {
+        order = lib.mkDefault 200;
+        url = lib.mkDefault "https://inference.baseten.co";
+        model = lib.mkDefault "decision-models/baseten-mammoth-27b-latest";
+        apiKeyFile = lib.mkDefault "${config.xdg.configHome}/baseten/api-key";
+      };
+    };
+
     ch-ai-workbench.claude-code.hooks = {
       tic-check = {
         event = "Stop";
         command = "claude-tic-check-hook";
         package = claudeTicCheckHook;
+        timeout = judgeHookTimeout;
+      };
+      tic-check-context = {
+        event = "UserPromptSubmit";
+        command = "claude-tic-check-context-hook";
+        package = claudeTicCheckContextHook;
       };
       tic-check-display = {
         event = "MessageDisplay";
@@ -620,6 +953,7 @@ in
         matcher = "Edit|Write|NotebookEdit|mcp__emacs__edit-file|mcp__emacs__edit-buffer";
         command = "claude-tic-check-edit-hook";
         package = claudeTicCheckEditHook;
+        timeout = judgeHookTimeout;
       };
       redact = {
         event = "PostToolUse";

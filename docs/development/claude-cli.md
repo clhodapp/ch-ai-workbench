@@ -495,7 +495,7 @@ hook).
   message on screen, so every step of the tic-check cycle is headed
   by a fixed line. The checker's block reason starts with
   `tic-check: check` (emitted whenever it fires, however confident it
-  is: a regex today, a classifier later) and asks the model for a
+  is: a regex entry or a judge dimension, below) and asks the model for a
   verdict only, `tic-check: clean` (the message stands) or
   `tic-check: tic`; the MessageDisplay hook below renders those two
   as status lines. On `tic` the hook (seeing `stop_hook_active` plus
@@ -509,6 +509,68 @@ hook).
   renders user events shows it; MessageDisplay cannot touch that,
   which is why those reasons carry the `tic-check: check` /
   `tic-check: rewrite` headers for the consumer to match on.
+
+### The judge (decision-model verdicts)
+
+The regex table catches only phrasings a pattern can find, and it
+cannot tell a real possessive from a dangling one when the noun sits in
+backticks or on the next line. The judge adds a System One decision
+model to the same cycle. A decision model reads a text (the `state`)
+and named yes/no questions and returns, for each question, the
+probability that the answer is yes, without generating text. The
+claude-code module's `judge.dimensions` are those questions, one per
+output-style rule that needs judgment (seeded from
+`modules/homeManager/claude-code/lib/judge-dimensions.nix`).
+
+- **Client.** `claude-response-judge`
+  (`pkg-overlays/default/packages/claude-response-judge`) posts the
+  text, with code blocks replaced by a marker, to `<url>/v1/systemone`
+  of each `judge.endpoints` entry in ascending `order` and prints the
+  first answer as `{endpoint, model, answers}`. The seeded `local`
+  entry is ch-local-llms' `decision-server` (elephant-1, 9B) at
+  `http://127.0.0.1:8000`. While no server runs there, the connection
+  is refused at once and costs no wait. The seeded `baseten` entry is
+  `https://inference.baseten.co` with
+  `decision-models/baseten-mammoth-27b-latest` (mammoth-1, 27B). Its key
+  is read at each request from `apiKeyFile` (default
+  `$XDG_CONFIG_HOME/baseten/api-key`) and sent as `Authorization:
+  Api-Key <key>`. While that file is missing, the entry is skipped. When
+  no endpoint answers, every hook behaves as it did with the regex
+  table alone.
+- **Push-back.** On the first stop the Stop hook asks the judge, then
+  builds its findings from both checkers. A dimension with `pushBack`
+  set at or above `judge.pushBackAbove` (0.9) is a finding. A regex hit
+  whose entry names a `dimension` is dropped when the judge put that
+  dimension below `judge.dismissBelow` (0.2), and otherwise carries the
+  judge's probability. Literal-character entries (em-dash, the arrow)
+  name no dimension and always fire. The findings go out under
+  `tic-check: check`, and the verdict and rewrite steps are unchanged:
+  the model writing the message still has the last word.
+- **Context.** When the Stop hook lets a message stand, it writes the
+  verdict to `$XDG_RUNTIME_DIR/claude-tic-check/verdicts/<session>.json`.
+  The `tic-check-context` hook (UserPromptSubmit) reads and deletes it
+  with the next prompt. It returns the dimensions at or above
+  `judge.reportAbove` (0.5) as `hookSpecificOutput.additionalContext`,
+  headed `tic-check: verdicts`, which the CLI adds to the model's
+  context beside the prompt. The user does not see it. This path has
+  been exercised by the flake check against the hook's output shape
+  only. It has not been probed live in a CLI session the way the Stop
+  facts above were.
+- **Edits.** The edit hook asks the judge only for a write whose
+  target (`file_path`, `notebook_path`, or the emacs verbs' `file` and
+  `buffer`) has an extension in `judge.proseExtensions`. Writes to code
+  get the regex table alone.
+- **Latency.** On an R9700, decision-server answers a request of two or
+  three questions over a few hundred tokens in 0.15 to 0.26 s, and ten
+  questions over 5k tokens in 1.2 s (ch-local-llms README). The judge
+  asks ten. The hooks that run it are registered with a timeout of 10
+  s plus the sum of the enabled endpoints' timeouts (30 s each by
+  default), because a hung endpoint costs its whole timeout before the
+  next is tried.
+- **Calibration.** The thresholds are starting values, chosen before
+  any run against the real models. The flake check
+  `claude-tic-check-judge` drives the hooks against a stub server with
+  fixed answers, so it tests the plumbing, not the questions.
 
 ### MessageDisplay hooks (display-only rewriting)
 

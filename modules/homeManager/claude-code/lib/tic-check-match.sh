@@ -1,25 +1,67 @@
 # Shared by the tic-check hooks (prepended to each script by its
 # package wrapper, after `table=` is set to the JSON array of
-# {name, pattern, rule} rendered from ticChecks).
+# {name, pattern, rule, dimension} rendered from ticChecks and
+# `judge=` to the judge config rendered from judge.*; the
+# claude-response-judge program is on PATH).
 #
-# tic_findings TEXT prints one block per matching entry -- the entry
-# name, the occurrence count, the rule, and up to three matching
-# lines -- or nothing when TEXT is clean.  Code fences and backtick
-# spans are removed first: quoted paths, commands, and output are not
-# the model's prose.  Patterns are GNU grep EREs, matched
-# case-insensitively.
+# tic_verdict KIND TEXT asks the judge (a System One decision model,
+# local or in the cloud, whichever answers first) how likely each of
+# judge.dimensions is in TEXT, and prints its verdict:
+#   {"endpoint": NAME, "model": MODEL, "answers": {DIMENSION: P, ...}}
+# or nothing when no endpoint answered or none is configured, in
+# which case every hook behaves as it did with the regex table alone.
+# KIND is reply or edit.
+#
+# tic_findings TEXT [VERDICT] prints one block per finding, or
+# nothing when TEXT is clean.  A finding is either a regex entry that
+# matched or a dimension the judge is confident about:
+#   - A regex entry prints its name, the occurrence count, the rule,
+#     and up to three matching lines.  Code fences and backtick spans
+#     are removed before matching: quoted paths, commands, and output
+#     are not the model's prose.  Patterns are GNU grep EREs, matched
+#     case-insensitively.  When the entry names a dimension and the
+#     judge put that dimension below judge.dismissBelow, the hit is
+#     dropped as a false positive; otherwise the judge's probability
+#     is printed beside the count.
+#   - A dimension with pushBack set that the judge put at or above
+#     judge.pushBackAbove prints its name, the probability, its rule,
+#     and its `true` criterion, unless a regex entry for the same
+#     dimension already printed.
+
+tic_verdict() {
+  claude-response-judge --config "$judge" --kind "$1" <<<"$2" 2>/dev/null || true
+}
 
 tic_findings() {
-  local text=$1 prose name pattern rule hits count lines
+  local text=$1 verdict=${2:-} prose name pattern rule dimension hits count lines p note
+  local covered=()
   # The backticks are literal markdown fence and span markers.
   # shellcheck disable=SC2016
   prose=$(sed -e '/^[[:space:]]*```/,/^[[:space:]]*```/d' -e 's/`[^`]*`//g' <<<"$text")
-  while IFS= read -r name && IFS= read -r pattern && IFS= read -r rule; do
+  while IFS= read -r name && IFS= read -r pattern && IFS= read -r rule && IFS= read -r dimension; do
     hits=$(grep -n -i -E -- "$pattern" <<<"$prose" 2>/dev/null) || continue
+    note=
+    if [ -n "$verdict" ] && [ -n "$dimension" ]; then
+      p=$(jq -r --arg d "$dimension" '.answers[$d] // empty' <<<"$verdict" 2>/dev/null) || p=
+      if [ -n "$p" ]; then
+        jq -en --argjson p "$p" --slurpfile c "$judge" '$p < $c[0].dismissBelow' >/dev/null 2>&1 && continue
+        note=", judge $(jq -rn --argjson p "$p" '($p * 100 | round) / 100')"
+        covered+=("$dimension")
+      fi
+    fi
     count=$(grep -o -i -E -- "$pattern" <<<"$prose" | wc -l)
     # The lines that matched, so the model can find them without
     # re-reading the whole text; each cut to keep the reason short.
     lines=$(head -n 3 <<<"$hits" | cut -c1-160 | sed 's/^\([0-9]*\):/    line \1: /')
-    printf '\n- %s (%s): %s\n%s' "$name" "$count" "$rule" "$lines"
-  done < <(jq -r '.[] | .name, .pattern, .rule' "$table" 2>/dev/null)
+    printf '\n- %s (%s%s): %s\n%s' "$name" "$count" "$note" "$rule" "$lines"
+  done < <(jq -r '.[] | .name, .pattern, .rule, (.dimension // "")' "$table" 2>/dev/null)
+  [ -n "$verdict" ] || return 0
+  jq -j --slurpfile c "$judge" --argjson covered "$(jq -cn '$ARGS.positional' --args "${covered[@]}")" '
+    $c[0] as $c
+    | .answers | to_entries[]
+    | select(.key as $k | $covered | index($k) | not)
+    | $c.dimensions[.key] as $d
+    | select($d != null and $d.pushBack and .value >= $c.pushBackAbove)
+    | "\n- \(.key) (judge \((.value * 100 | round) / 100)): \($d.rule)\n    the judge read the text as: \($d.criteria.true)"
+  ' <<<"$verdict" 2>/dev/null || true
 }
