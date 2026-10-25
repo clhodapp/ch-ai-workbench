@@ -49,7 +49,13 @@
 # - env.PATH must carry the bubblewrap and socat directories or the
 #   sandbox runtime cannot construct sandboxes at all.
 #
-# This layer's packages (the CLI, its plugin, the Landlock shim) reach
+# Trusted executables run outside the sandbox as socket-activated
+# systemd user services; a granting module puts a stub on PATH and the
+# socket in the allowlist (docs/development/claude-code-sandbox.md,
+# "Trusted executables").
+#
+# This layer's packages (the CLI, its plugin, the Landlock shim, the
+# trusted-exec stub and service) reach
 # the module through its package overlay, which puts them under
 # `pkgs.ch-ai-workbench` in the evaluation: a caisson consumer that
 # lists this flake in `projects` applies it by default
@@ -228,11 +234,17 @@ let
   modulePart =
     name: module:
     let
+      # A granted trusted executable puts its stub on PATH and its socket
+      # in the allowlist. The socket is what the grant consists of: any
+      # program inside the sandbox that can connect to it can speak the
+      # protocol, with or without the stub.
+      trusted = lib.genAttrs module.trustedExecutables (te: cfg.trustedExecutables.${te});
+      stubs = lib.mapAttrsToList trustedStub trusted;
       farm = pkgs.buildEnv {
         name = "ccs-module-${name}";
-        paths = module.toolset;
+        paths = module.toolset ++ stubs;
       };
-      hasFarm = module.toolset != [ ];
+      hasFarm = module.toolset != [ ] || stubs != [ ];
       # allowNix grants the daemon socket and the client-side fetcher
       # cache: nix (the client, inside the sandbox) writes
       # $XDG_CACHE_HOME/nix even though the daemon builds outside it, and
@@ -264,7 +276,23 @@ let
         );
         allowUnixSockets = withAuto module.allowUnixSockets (
           lib.optional module.allowNix "/nix/var/nix/daemon-socket/socket"
+          ++ map trustedSocket module.trustedExecutables
         );
+        trustedExecutables =
+          if trusted == { } then
+            null
+          else
+            lib.mapAttrsToList (te: executable: {
+              name = te;
+              inherit (executable)
+                description
+                program
+                args
+                workingDirectory
+                passEnv
+                ;
+              socket = trustedSocket te;
+            }) trusted;
         env = module.extraEnv;
         settings = module.extraSettings;
       };
@@ -341,6 +369,94 @@ let
         EOF
       '';
 
+  trustedExec = workbenchPackage "trusted-exec";
+
+  # The socket of each trusted executable. Composition writes socket
+  # paths into a checkout's settings at enroll time, so the path must be
+  # known at evaluation. $XDG_RUNTIME_DIR holds the uid, which a home
+  # evaluation does not know, so the sockets live under the state
+  # directory instead.
+  trustedSocketDir = "${config.xdg.stateHome}/claude-code-sandbox/trusted";
+  trustedSocket = name: "${trustedSocketDir}/${name}.sock";
+  trustedUnit = name: "ccs-trusted-${name}";
+
+  # The stub a sandboxed command runs as `name`: a compiled wrapper, so
+  # a call starts no shell, that runs `trusted-exec call` against the
+  # socket with the caller's arguments.
+  trustedStub =
+    name: executable:
+    pkgs.runCommand "ccs-trusted-stub-${name}"
+      {
+        nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
+      }
+      ''
+        makeWrapper ${lib.getExe trustedExec} "$out/bin/${name}" ${
+          lib.escapeShellArgs (
+            lib.concatMap
+              (flag: [
+                "--add-flag"
+                flag
+              ])
+              (
+                [
+                  "call"
+                  "--name"
+                  name
+                  "--socket"
+                  (trustedSocket name)
+                ]
+                ++ lib.concatMap (var: [
+                  "--pass-env"
+                  var
+                ]) executable.passEnv
+                ++ [ "--" ]
+              )
+          )
+        }
+      '';
+
+  # One word of a systemd ExecStart line. Single quotes keep the word
+  # whole. systemd expands % specifiers and $ variables even inside
+  # quotes, so both are doubled. An assertion below rejects words that
+  # carry quotes, backslashes or newlines.
+  systemdWord = word: "'${lib.replaceStrings [ "%" "$" ] [ "%%" "$$" ] word}'";
+  systemdUnsafe =
+    word:
+    lib.any (c: lib.hasInfix c word) [
+      "'"
+      "\\"
+      "\n"
+    ];
+
+  trustedServeCommand =
+    executable:
+    [
+      (lib.getExe trustedExec)
+      "serve"
+    ]
+    ++ lib.optionals (executable.workingDirectory != null) [
+      "--cwd"
+      executable.workingDirectory
+    ]
+    ++ lib.concatMap (var: [
+      "--pass-env"
+      var
+    ]) executable.passEnv
+    ++ [
+      "--"
+      executable.program
+    ]
+    ++ executable.args;
+
+  # The service keys that connect the service to its socket and its
+  # program. serviceConfig may not set them.
+  trustedOwnedServiceKeys = [
+    "ExecStart"
+    "StandardInput"
+    "StandardOutput"
+    "StandardError"
+  ];
+
   partXdgPath = name: "claude-code-sandbox/parts/${name}.json";
   partAbsPath = name: "${config.xdg.configHome}/${partXdgPath name}";
   moduleXdgName = name: "module-${name}";
@@ -373,6 +489,89 @@ let
       "Edit(.claude/settings.local.json)"
       "Edit(.claude/claude-code-sandbox.json)"
     ];
+  };
+
+  trustedExecutable = lib.types.submodule {
+    options = {
+      description = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "What the executable does; `claude-code-sandbox show` shows it.";
+      };
+      program = lib.mkOption {
+        type = lib.types.str;
+        example = lib.literalExpression ''lib.getExe' pkgs.libnotify "notify-send"'';
+        description = "Absolute path of the program the service runs.";
+      };
+      args = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Arguments every run starts with. The caller's arguments follow
+          them, so `args = [ "status" ]` on git still lets a caller add
+          options to `git status`.
+        '';
+      };
+      workingDirectory = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          The directory every run starts in. null runs the program in the
+          caller's working directory, which is almost always inside a
+          checkout the sandboxed agent can write. A program that reads
+          configuration from its working directory (git reads
+          `.git/config` and runs hooks) then runs code the agent wrote,
+          outside Claude Code's sandbox.
+        '';
+      };
+      passEnv = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Variables the caller may set for the program. The service drops
+          every other variable the caller sends, and the stub sends no
+          others. A name in both `passEnv` and `environment` takes the
+          caller's value when the caller sets it.
+        '';
+      };
+      environment = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = ''
+          Variables the service sets for every run (systemd
+          `Environment=`). Every other variable comes from the
+          environment of the systemd user manager.
+        '';
+      };
+      serviceConfig = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = { };
+        example = lib.literalExpression ''
+          {
+            PrivateUsers = true;
+            ProtectSystem = "strict";
+            ProtectHome = true;
+            PrivateTmp = true;
+            PrivateNetwork = true;
+          }
+        '';
+        description = ''
+          What the program may not do. The service runs as the user
+          under the systemd user manager, so by default the program has
+          everything the user has, which includes everything Claude Code's
+          sandbox allows. These systemd `[Service]` settings of the
+          per-connection service take access away, merged over
+          `NoNewPrivileges = true`. In a user service the settings that
+          need file-system namespacing (ProtectSystem, ProtectHome,
+          ReadWritePaths, PrivateTmp and the like) only take effect with
+          `PrivateUsers = true`. Inside that user namespace, files owned
+          by root (store-symlinked dotfiles included) appear owned by
+          nobody, and tools that check config ownership, ssh for one,
+          reject them. The keys that connect the service to its socket
+          (ExecStart and the Standard* streams) may not be set here.
+        '';
+      };
+    };
   };
 
   # Every list grant below is unioned across the modules a checkout
@@ -471,6 +670,17 @@ let
           Landlock ABI 9+, i.e. 7.1+; runtime.landlock.socketFallback
           decides what older kernels do). Sockets a sandboxed command
           creates itself are always reachable.
+        '';
+      };
+      trustedExecutables = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Names from `trustedExecutables` that a checkout choosing this
+          module may run. Each puts a stub of that name on PATH and the
+          executable's socket in the unix-socket allowlist. The program
+          runs outside Claude Code's sandbox with the access of the user,
+          less what its `serviceConfig` takes away.
         '';
       };
       allowAllUnixSockets = lib.mkOption {
@@ -652,6 +862,49 @@ in
       '';
     };
 
+    trustedExecutables = lib.mkOption {
+      type = lib.types.attrsOf trustedExecutable;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          notify-send = {
+            description = "desktop notifications through the session bus";
+            program = lib.getExe' pkgs.libnotify "notify-send";
+            workingDirectory = "/";
+            serviceConfig = {
+              PrivateUsers = true;
+              ProtectSystem = "strict";
+              ProtectHome = true;
+              PrivateNetwork = true;
+            };
+          };
+        }
+      '';
+      description = ''
+        Programs a sandboxed command can run outside Claude Code's
+        sandbox. Each becomes a socket-activated systemd user service:
+        a socket at
+        `$XDG_STATE_HOME/claude-code-sandbox/trusted/<name>.sock`
+        (mode 0600) and one service instance per connection, which runs
+        the program and streams its stdin, stdout and stderr, forwarded
+        signals and exit status over the connection. The program starts
+        with the access of the user, a superset of what Claude Code's
+        sandbox allows, and `serviceConfig` locks it down. A sandbox module grants the executable by
+        listing its name in its own `trustedExecutables`. A checkout
+        choosing that module then gets a stub named `<name>` on PATH
+        and the socket in its unix-socket allowlist.
+
+        The caller supplies the arguments after `args`, stdin, the
+        working directory when `workingDirectory` is null, and the
+        variables in `passEnv`. Everything else comes from the service.
+        A trusted program must treat all of those as untrusted input. A
+        program whose arguments can name commands to run (subcommands
+        that execute, aliases, extensions, `--exec`-style options) gives
+        the caller arbitrary code execution with the access the service
+        has left.
+      '';
+    };
+
     baseModules = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -756,7 +1009,108 @@ in
           claude-code-sandbox: module ${name} requires undeclared modules:
           ${lib.concatStringsSep ", " (unknownIn module.requires)}
         '';
-      }) cfg.modules;
+      }) cfg.modules
+      ++ lib.mapAttrsToList (
+        name: module:
+        let
+          unknown = lib.filter (te: !(cfg.trustedExecutables ? ${te})) module.trustedExecutables;
+        in
+        {
+          assertion = unknown == [ ];
+          message = ''
+            claude-code-sandbox: module ${name} grants undeclared trusted executables:
+            ${lib.concatStringsSep ", " unknown}
+          '';
+        }
+      ) cfg.modules
+      ++ lib.concatLists (
+        lib.mapAttrsToList (name: executable: [
+          {
+            # The name becomes a unit name, a command name and a file name.
+            assertion = builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" name != null;
+            message = ''
+              claude-code-sandbox: trusted executable name ${builtins.toJSON name}
+              must be letters, digits, dots, underscores and dashes.
+            '';
+          }
+          {
+            # sun_path holds 108 bytes, terminator included.
+            assertion = lib.stringLength (trustedSocket name) < 108;
+            message = ''
+              claude-code-sandbox: the socket path ${trustedSocket name} of trusted
+              executable ${name} is too long for a unix socket (107 bytes at most).
+            '';
+          }
+          {
+            assertion = lib.hasPrefix "/" executable.program;
+            message = ''
+              claude-code-sandbox: trusted executable ${name} needs an absolute
+              program path, not ${builtins.toJSON executable.program}.
+            '';
+          }
+          {
+            assertion = !(lib.any systemdUnsafe (trustedServeCommand executable));
+            message = ''
+              claude-code-sandbox: trusted executable ${name} has a program, argument,
+              directory or variable name containing a quote, a backslash or a
+              newline, which its systemd ExecStart line cannot carry.
+            '';
+          }
+          {
+            assertion =
+              lib.intersectLists trustedOwnedServiceKeys (lib.attrNames executable.serviceConfig) == [ ];
+            message = ''
+              claude-code-sandbox: trusted executable ${name} sets
+              ${lib.concatStringsSep ", " (
+                lib.intersectLists trustedOwnedServiceKeys (lib.attrNames executable.serviceConfig)
+              )}
+              in serviceConfig; those keys connect the service to its socket.
+            '';
+          }
+        ]) cfg.trustedExecutables
+      );
+
+    # One socket per trusted executable, and a service template whose
+    # instances each serve one connection (Accept=yes), with the
+    # connection as stdin.
+    systemd.user.sockets = lib.mapAttrs' (
+      name: executable:
+      lib.nameValuePair (trustedUnit name) {
+        Unit.Description = "claude-code-sandbox trusted executable ${name}";
+        Socket = {
+          ListenStream = trustedSocket name;
+          Accept = true;
+          SocketMode = "0600";
+          DirectoryMode = "0700";
+        };
+        Install.WantedBy = [ "sockets.target" ];
+      }
+    ) cfg.trustedExecutables;
+
+    systemd.user.services = lib.mapAttrs' (
+      name: executable:
+      lib.nameValuePair "${trustedUnit name}@" {
+        Unit = {
+          Description = "claude-code-sandbox trusted executable ${name} (one call)";
+          CollectMode = "inactive-or-failed";
+        };
+        Service = {
+          NoNewPrivileges = true;
+        }
+        // executable.serviceConfig
+        // {
+          ExecStart = lib.concatMapStringsSep " " systemdWord (trustedServeCommand executable);
+          StandardInput = "socket";
+          StandardOutput = "journal";
+          StandardError = "journal";
+        }
+        // lib.optionalAttrs (executable.environment != { }) {
+          Environment = lib.mapAttrsToList (
+            var: value: "\"${lib.replaceStrings [ "\\" "\"" "%" ] [ "\\\\" "\\\"" "%%" ] "${var}=${value}"}\""
+          ) executable.environment;
+        };
+      }
+    ) cfg.trustedExecutables;
 
     # Built-in: an owned copy of ~/.ssh/config, so sandboxed git-over-ssh
     # works (the store-symlinked original is rejected by ssh's config

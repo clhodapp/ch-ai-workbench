@@ -199,6 +199,40 @@ class ToolsTest(unittest.TestCase):
         self.assertIn("Declined for this checkout at", out)
         self.assertIn("too wide", out)
 
+    def test_show_and_describe_name_trusted_executables(self):
+        socket = "/home/u/.local/state/claude-code-sandbox/trusted/gh.sock"
+        forge = {
+            "description": "gh with the user's token",
+            "masked": True,
+            "closure": ["/nix/store/sss-stub"],
+            "path": ["/nix/store/forge-farm/bin"],
+            "packages": [],
+            "commands": ["gh"],
+            "allowUnixSockets": [socket],
+            "trustedExecutables": [
+                {
+                    "name": "gh",
+                    "description": "the GitHub CLI",
+                    "program": "/nix/store/hhh-gh/bin/gh",
+                    "args": ["--"],
+                    "workingDirectory": None,
+                    "passEnv": ["GH_REPO"],
+                    "socket": socket,
+                }
+            ],
+        }
+        write_registry(self.config, {"work": WORK, "forge": forge})
+        _, out = self.cli("show", "forge")
+        self.assertIn(
+            "Trusted executable gh: runs /nix/store/hhh-gh/bin/gh -- OUTSIDE the sandbox, "
+            "in the working directory of the caller, with the arguments and stdin of the "
+            "caller and the variables GH_REPO (the GitHub CLI)",
+            out,
+        )
+        self.assertIn(f"Unix sockets reachable: {socket}", out)
+        value, _ = self.call(self.server(), "describe-module", module="forge")
+        self.assertEqual(value["trustedExecutables"][0]["program"], "/nix/store/hhh-gh/bin/gh")
+
     # --- MCP: protocol and read tools --------------------------------------
 
     def test_tools_list(self):

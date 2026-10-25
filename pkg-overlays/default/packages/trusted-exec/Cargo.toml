@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "trusted-exec"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Run a trusted executable outside Claude Code's sandbox through a unix socket, streaming its IO"
+
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1

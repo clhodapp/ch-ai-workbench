@@ -76,6 +76,7 @@ _GRANTS = (
     "allowWrite",
     "extraAllowRead",
     "excludedCommands",
+    "trustedExecutables",
     "env",
     "settings",
 )
@@ -165,6 +166,18 @@ def describe_text(info: dict[str, Any]) -> str:
         lines.append("Readable in addition: " + ", ".join(info["extraAllowRead"]))
     if info.get("excludedCommands"):
         lines.append("Runs OUTSIDE the sandbox: " + ", ".join(info["excludedCommands"]))
+    for trusted in info.get("trustedExecutables") or []:
+        where = trusted.get("workingDirectory") or "the working directory of the caller"
+        line = (
+            f"Trusted executable {trusted['name']}: runs "
+            + " ".join([trusted["program"], *trusted.get("args", [])])
+            + f" OUTSIDE the sandbox, in {where}, with the arguments and stdin of the caller"
+        )
+        if trusted.get("passEnv"):
+            line += " and the variables " + ", ".join(trusted["passEnv"])
+        if trusted.get("description"):
+            line += f" ({trusted['description']})"
+        lines.append(line)
     if info.get("env"):
         lines.append(
             "Environment: " + ", ".join(f"{key}={value}" for key, value in sorted(info["env"].items()))
