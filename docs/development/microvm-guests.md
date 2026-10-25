@@ -98,8 +98,11 @@ The verbs:
   process, starts its unit, waits until its vsock port accepts a
   connection, and prints the slot, its CID and port, and its share
   directories. A slot the caller already holds is used again. A newly
-  leased slot is restarted, so a guest left running by a holder that
-  is gone does not carry its state into the next session.
+  leased slot is stopped and then started, so a guest left running by
+  a holder that is gone does not carry its state into the next
+  session. A restart is not used because, with the pinned microvm.nix,
+  a restart of a cloud-hypervisor guest that has a vsock CID does not
+  complete.
 - `microvm status [--all]` shows the slots the caller holds, each with
   the state of its unit, whether it answers, and its uptime from the
   `ActiveEnterTimestamp` of the unit. With `--all` it shows every slot

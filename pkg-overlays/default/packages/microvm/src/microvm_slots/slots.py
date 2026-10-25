@@ -330,8 +330,13 @@ class Slots:
 
         try:
             # A newly claimed slot may still run for a holder that is
-            # gone, so it is restarted: the session gets a fresh guest.
-            self.control("restart" if claimed else "start", slot)
+            # gone, so it is stopped and then started: the session gets
+            # a fresh guest. A restart is not used because, with the
+            # pinned microvm.nix, a restart of a cloud-hypervisor guest
+            # that has a vsock CID does not complete.
+            if claimed:
+                self.control("stop", slot)
+            self.control("start", slot)
         except Refused:
             if claimed:
                 with self.locked():
