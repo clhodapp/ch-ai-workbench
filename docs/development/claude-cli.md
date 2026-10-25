@@ -456,6 +456,29 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   one difference: the identical re-issue consumes the marker instead
   of leaving it, so the same push later in the session is checked
   again (the PR may have been merged in between).
+- **A rewrite is also a command the model can call.** The model moves
+  its session's directory only with a Bash `cd` (which persists and
+  changes the primary working directory) or with
+  `EnterWorktree`/`ExitWorktree`; `/cd` is user-only, and the
+  permissions reference says the model cannot invoke it. The same
+  module's `claude-workspace-root-hook` (matcher `Bash`) gives the
+  model one fixed command back to the workspace root: the exact
+  command `cd-workspace-root` is rewritten through `updatedInput` to
+  `cd '<root>' && pwd`, where `<root>` is the outermost git
+  superproject above the payload's `cwd` (`--show-toplevel`, then
+  `--show-superproject-working-tree` until none). A linked worktree
+  has no superproject, so a session isolated in a workspace worktree
+  returns to that worktree. The path is spelled out because the
+  worktree isolation guard refuses a command whose arguments are
+  computed at runtime (`cd "$(…)"`, a `$W` variable). The
+  `cd-workspace-root` skill, which the module installs beside the
+  hook, is how the model learns the command exists. The hook cannot
+  help in one state, seen 2026-10-25 in a session isolated in a
+  worktree of a submodule: after a `cd` into that submodule's primary
+  checkout, the guard refused every Bash command before it ran,
+  `cd /abs/path && pwd` included, with "this command's working
+  directory resolved to the shared checkout (…). Refusing to run it
+  there". Only the user's `/cd <path>` moved that session.
 
 ### Stop hooks (the finished-message check)
 

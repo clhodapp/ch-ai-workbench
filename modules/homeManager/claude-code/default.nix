@@ -143,6 +143,46 @@ let
   # (script: claude-push-pr-check-hook.sh).
   claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
 
+  # PreToolUse hook on Bash: the command `cd-workspace-root` is
+  # rewritten to a cd with the workspace root spelled out (the
+  # outermost superproject above the session's directory), so a session
+  # that moved into a submodule has one fixed command back and the
+  # worktree isolation guard sees a literal target
+  # (script: claude-workspace-root-hook.sh).
+  claudeWorkspaceRootHook = workbench.mkClaudeWorkspaceRootHook { inherit pkgs; };
+
+  # The skill that tells the model the command exists: its description
+  # is listed in every session, and the hook alone is invisible to the
+  # model until it runs.
+  workspaceRootSkill = pkgs.writeTextDir "SKILL.md" ''
+    ---
+    name: cd-workspace-root
+    description: "Move the session back to the root of the git workspace (the outermost superproject) with the Bash command `cd-workspace-root`. Use after a cd into a submodule or subdirectory left the session there, before EnterWorktree, or whenever a command must run from the workspace root."
+    ---
+
+    # cd-workspace-root
+
+    Run the Bash command `cd-workspace-root` exactly as written, alone
+    in its call. A PreToolUse hook replaces it with
+    `cd '<root>' && pwd`, where `<root>` is the outermost git
+    superproject above the session's current directory, so the result
+    prints the directory the session moved to.
+
+    - In a worktree of the workspace, the root is that worktree, not the
+      primary checkout.
+    - In a repository that is not a submodule, the root is the
+      repository's own top level.
+    - Outside any git repository the call is denied with a reason.
+    - The command is not a program on PATH. Without the hook it fails
+      with "command not found" and the session stays where it is.
+
+    The command cannot help once the worktree isolation guard refuses
+    every Bash command because the session's directory resolved to the
+    shared checkout. Only the user can move the session then, by
+    running `/cd <path>`; ask for it with the absolute path of the
+    worktree.
+  '';
+
   enabledHooks = lib.filterAttrs (_name: hook: hook.enable) cfg.hooks;
 
   # The prompt API behind the consent spool (`pkgs.ch-ai-workbench.claude-consent`,
@@ -261,7 +301,9 @@ in
         Merged across all modules that set it, so a downstream config
         can add its own entries or switch an upstream one off with
         <name>.enable = false. This module seeds ch-lsp, the plugin
-        carrying the shared language-server table.
+        carrying the shared language-server table, and
+        cd-workspace-root, the skill that tells the model about the
+        command the workspace-root hook implements.
       '';
     };
 
@@ -454,7 +496,10 @@ in
         also seeds push-pr-check, the PreToolUse hook on Bash that
         denies a command that appears to run git push once with a reminder to
         confirm the branch's pull request is not already merged, and
-        lets the identical re-issue through.
+        lets the identical re-issue through, and workspace-root, the
+        PreToolUse hook on Bash that rewrites the command
+        `cd-workspace-root` to a cd to the outermost git superproject
+        above the session's directory, with the path spelled out.
       '';
     };
 
@@ -579,7 +624,10 @@ in
       }
     ];
 
-    ch-ai-workbench.claude-code.skills.ch-lsp.source = lspPlugin;
+    ch-ai-workbench.claude-code.skills = {
+      ch-lsp.source = lspPlugin;
+      cd-workspace-root.source = workspaceRootSkill;
+    };
 
     # Voice presets, selectable per session with /output-style. The
     # bodies are plain markdown files (no frontmatter; the module
@@ -640,6 +688,12 @@ in
         matcher = "Bash";
         command = "claude-push-pr-check-hook";
         package = claudePushPrCheckHook;
+      };
+      workspace-root = {
+        event = "PreToolUse";
+        matcher = "Bash";
+        command = "claude-workspace-root-hook";
+        package = claudeWorkspaceRootHook;
       };
     };
 

@@ -272,6 +272,7 @@
             # The hook packages from this layer's library, so the checks
             # below drive the same scripts a real configuration installs.
             claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
+            claudeWorkspaceRootHook = workbench.mkClaudeWorkspaceRootHook { inherit pkgs; };
             claudeRedactHook = workbench.mkClaudeRedactHook { inherit pkgs; };
             claudeRevealHook = workbench.mkClaudeRevealHook {
               inherit pkgs;
@@ -741,6 +742,71 @@
                     quiet 'git pushx'
                     quiet 'ls'
                     [ -z "$(call 'git push' | env -u XDG_RUNTIME_DIR "$hook")" ]
+                    [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
+
+              # The cd-workspace-root rewrite: from a submodule, a plain
+              # subdirectory, a submodule inside a linked worktree, a
+              # repository that is not a submodule, and a root whose
+              # path holds a single quote, the rewritten command run in
+              # bash prints the expected root (the worktree, not the
+              # primary checkout, for the worktree case) and the other
+              # arguments are kept; outside git the call is denied;
+              # other commands and non-JSON stdin get no output.
+              claude-workspace-root-hook =
+                pkgs.runCommand "claude-workspace-root-hook"
+                  {
+                    nativeBuildInputs = [
+                      pkgs.git
+                      pkgs.jq
+                    ];
+                  }
+                  ''
+                    hook=${lib.getExe claudeWorkspaceRootHook}
+                    export HOME="$TMPDIR"
+                    git config --global user.name test
+                    git config --global user.email test@example.invalid
+                    git config --global init.defaultBranch main
+                    git config --global protocol.file.allow always
+                    t=$(cd "$TMPDIR" && pwd -P)
+                    git init -q "$t/sub"
+                    git -C "$t/sub" commit -q --allow-empty -m sub
+                    mkdir "$t/it's"
+                    for ws in "$t/ws" "$t/it's/ws"; do
+                      git init -q "$ws"
+                      git -C "$ws" submodule add -q "$t/sub" projects/sub
+                      git -C "$ws" commit -q -m ws
+                      mkdir -p "$ws/docs/deep"
+                    done
+                    git -C "$t/ws" worktree add -q "$t/ws/.claude/worktrees/wt"
+                    git -C "$t/ws/.claude/worktrees/wt" submodule update -q --init
+                    mkdir "$t/nogit"
+                    call() {
+                      jq -cn --arg c "$1" --arg d "$2" \
+                        '{session_id: "0123456789abcdef", cwd: $d, tool_name: "Bash",
+                          tool_input: {command: $c, description: "Return to the root"}}'
+                    }
+                    lands() {
+                      res=$(call cd-workspace-root "$1" | "$hook")
+                      [ "$(jq -r .hookSpecificOutput.updatedInput.description <<<"$res")" = "Return to the root" ]
+                      [ "$(jq -r '.hookSpecificOutput.permissionDecision // "none"' <<<"$res")" = none ]
+                      [ "$(bash -c "$(jq -r .hookSpecificOutput.updatedInput.command <<<"$res")")" = "$2" ]
+                    }
+                    lands "$t/ws/projects/sub" "$t/ws"
+                    lands "$t/ws/docs/deep" "$t/ws"
+                    lands "$t/ws" "$t/ws"
+                    lands "$t/ws/.claude/worktrees/wt/projects/sub" "$t/ws/.claude/worktrees/wt"
+                    lands "$t/sub" "$t/sub"
+                    lands "$t/it's/ws/projects/sub" "$t/it's/ws"
+                    res=$(call '  cd-workspace-root ' "$t/ws/projects/sub" | "$hook")
+                    [ "$(bash -c "$(jq -r .hookSpecificOutput.updatedInput.command <<<"$res")")" = "$t/ws" ]
+                    res=$(call cd-workspace-root "$t/nogit" | "$hook")
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q '^workspace-root: '
+                    [ -z "$(call 'cd-workspace-root && ls' "$t/ws" | "$hook")" ]
+                    [ -z "$(call 'cd ..' "$t/ws/projects/sub" | "$hook")" ]
+                    [ -z "$(call 'ls' "$t/ws" | "$hook")" ]
                     [ -z "$(echo 'not json' | "$hook")" ]
                     touch $out
                   '';
