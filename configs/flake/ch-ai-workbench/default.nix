@@ -18,6 +18,7 @@
       claude-code
       claude-code-sandbox
       emacs-integration
+      microvm
       zsh
       ;
   };
@@ -189,6 +190,39 @@
                 ];
               }).config.home-files;
 
+            # A tree with two machines, each with a home of `tester`
+            # that selects the microvm module (tests/microvm/configs):
+            # `host` runs two slots of the kind `probe` that `tester`
+            # operates, and `bare` runs no guests. The tree is built
+            # with caisson's library and this flake as a project, as a
+            # consumer builds one.
+            microvmTop =
+              (inputs.caisson.lib.caisson.mkLib {
+                sources = {
+                  inherit (inputs)
+                    nixpkgs
+                    nixpkgs-lib
+                    home-manager
+                    microvm
+                    ;
+                  nixos = inputs.nixpkgs;
+                };
+                name = "microvm-fixture";
+                systems = [ system ];
+                projects = {
+                  inherit (inputs) caisson;
+                  ch-ai-workbench = self;
+                };
+                configs = lib: lib.caisson.mkModules ../../../tests/microvm/configs;
+                pkgSets = lib: lib.caisson.nixpkgs.mkConfigurations { };
+              }).caisson.structural.mkTopConfiguration
+                { };
+            microvmHome =
+              machine:
+              microvmTop.caisson.manifest.children.system.${system}.children.nixos.${machine}.children.system.${system}.children.home-manager.tester.value.config;
+            microvmHostHome = microvmHome "host";
+            microvmBareHome = microvmHome "bare";
+
             # The hook packages from this layer's library, so the checks
             # below drive the same scripts a real configuration installs.
             claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
@@ -219,6 +253,122 @@
               landlock-shim = self.packages.${system}.landlock-shim;
               # Building runs the integration tests of call against serve.
               trusted-exec = self.packages.${system}.trusted-exec;
+              # Building runs the unittest suite of the microvm program
+              # against a fake systemctl, /proc and vsock probe.
+              microvm = self.packages.${system}.microvm;
+
+              # The microvm module in the fixture tree. The home on
+              # `host` reads the two slots of its machine from the tree
+              # and gets the trusted executable and sandbox module
+              # `microvm`, the reap timer, the installed command with the
+              # slots baked in, and the plugin with the skill naming the
+              # kind and the SessionEnd hook. The home on `bare` gets
+              # none of it.
+              microvm-home-module =
+                assert
+                  builtins.mapAttrs (_: slot: {
+                    inherit (slot)
+                      kind
+                      index
+                      cid
+                      vsockPort
+                      ;
+                    sources = map (share: share.source) slot.shares;
+                  }) microvmHostHome.ch-ai-workbench.microvm.slots == {
+                    probe-1 = {
+                      kind = "probe";
+                      index = 1;
+                      cid = 101;
+                      vsockPort = 5000;
+                      sources = [
+                        "/var/lib/probe/probe-1/in"
+                        "/var/lib/probe/probe-1/out"
+                      ];
+                    };
+                    probe-2 = {
+                      kind = "probe";
+                      index = 2;
+                      cid = 102;
+                      vsockPort = 5000;
+                      sources = [
+                        "/var/lib/probe/probe-2/in"
+                        "/var/lib/probe/probe-2/out"
+                      ];
+                    };
+                  };
+                assert microvmBareHome.ch-ai-workbench.microvm.slots == { };
+                assert !(microvmBareHome.ch-ai-workbench.claude-code-sandbox.trustedExecutables ? microvm);
+                assert !(microvmBareHome.ch-ai-workbench.claude-code-sandbox.modules ? microvm);
+                assert !(microvmBareHome.ch-ai-workbench.claude-code.skills ? microvm);
+                assert !(microvmBareHome.systemd.user.timers ? ch-ai-workbench-microvm-reap);
+                assert
+                  !(builtins.elem microvmBareHome.ch-ai-workbench.microvm.package microvmBareHome.home.packages);
+                pkgs.runCommand "microvm-home-module"
+                  {
+                    nativeBuildInputs = [ pkgs.jq ];
+                    files = microvmHostHome.home-files;
+                    command = lib.getExe microvmHostHome.ch-ai-workbench.microvm.package;
+                    installed = builtins.elem microvmHostHome.ch-ai-workbench.microvm.package microvmHostHome.home.packages;
+                  }
+                  ''
+                    test "$installed" = 1
+                    units=$files/.config/systemd/user
+                    state=/home/tester/.local/state
+
+                    # The trusted executable: its socket, and a service
+                    # that passes the two session variables and runs with
+                    # the access the module leaves it.
+                    grep -qx "ListenStream=$state/claude-code-sandbox/trusted/microvm.sock" "$units/ccs-trusted-microvm.socket"
+                    service="$units/ccs-trusted-microvm@.service"
+                    grep -qF "'--pass-env' 'CLAUDE_CODE_SESSION_ID' '--pass-env' 'CLAUDE_PID'" "$service"
+                    grep -qF "'--cwd' '/'" "$service"
+                    for line in PrivateUsers=true ProtectSystem=strict ProtectHome=read-only \
+                      "ReadWritePaths=$state/ch-ai-workbench/microvm" \
+                      "RestrictAddressFamilies=AF_UNIX AF_VSOCK" NoNewPrivileges=true; do
+                      grep -qx "$line" "$service"
+                    done
+
+                    # The sandbox module grants it, and nothing else.
+                    part=$files/.config/claude-code-sandbox/parts/module-microvm.json
+                    jq -e '.commands == ["microvm"]' "$part"
+                    jq -e '.trustedExecutables | map(.name) == ["microvm"]' "$part"
+                    jq -e '.allowUnixSockets == ["/home/tester/.local/state/claude-code-sandbox/trusted/microvm.sock"]' "$part"
+
+                    # The program behind the socket accepts up, status and
+                    # down, and the configured kind and slot names.
+                    program=$(jq -r '.trustedExecutables[0].program' "$part")
+                    for argv in reap "connect probe" "up nope" "down probe-3" "status --json"; do
+                      rc=0
+                      # shellcheck disable=SC2086
+                      "$program" $argv 2> err.txt || rc=$?
+                      test "$rc" = 2
+                      grep -q '^microvm: unknown \(verb\|kind\|slot\)\|^microvm: status takes only --all' err.txt
+                    done
+
+                    # The installed command has the slots baked in. No
+                    # systemd runs here, so the unit state is unknown.
+                    CLAUDE_CODE_SESSION_ID=check CLAUDE_PID=$$ "$command" status --all > status.txt
+                    grep -qx 'probe-1  kind probe  free  unknown' status.txt
+                    grep -qx 'probe-2  kind probe  free  unknown' status.txt
+                    grep -qx '  probe: 2 slots, 2 free' status.txt
+
+                    # The reap timer and its service.
+                    grep -qx 'OnCalendar=minutely' "$units/ch-ai-workbench-microvm-reap.timer"
+                    grep -qx "ExecStart=$command reap" "$units/ch-ai-workbench-microvm-reap.service"
+
+                    # The plugin: its manifest, the skill naming the kind,
+                    # and a SessionEnd hook that stops the slots of the
+                    # ending session and never fails.
+                    plugin=$files/.claude/skills/microvm
+                    jq -e '.name == "microvm"' "$plugin/.claude-plugin/plugin.json"
+                    grep -qF -- '- `probe`: 2 slots (probe-1, probe-2), serving on vsock port 5000' "$plugin/skills/microvm/SKILL.md"
+                    hook=$(jq -r '.hooks.SessionEnd[0].hooks[0].command' "$plugin/hooks/hooks.json")
+                    echo '{"session_id": "check"}' | "$hook" 2> hook.txt
+                    grep -qx 'this session holds no slots' hook.txt
+                    echo 'not json' | "$hook"
+                    echo '{}' | "$hook"
+                    touch $out
+                  '';
 
               # The CLI composing the parts the home-manager module
               # builds, end to end: the registry and parts come from a
@@ -403,6 +553,10 @@
                     self.modules.homeManager.claude-code
                     self.modules.homeManager.claude-code-sandbox
                     self.modules.homeManager.emacs-integration
+                    # A home that caisson does not evaluate has no
+                    # machine to read slots from, so the microvm module
+                    # adds nothing to it.
+                    self.modules.homeManager.microvm
                     {
                       home.username = "tester";
                       home.homeDirectory = "/home/tester";

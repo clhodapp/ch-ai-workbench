@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "microvm"
+version = "0.1.0"
+description = "Lease, start and stop the microvm guest slots of a machine for Claude Code sessions"
+requires-python = ">=3.11"
+license = "MIT"
+
+[project.scripts]
+microvm = "microvm_slots.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

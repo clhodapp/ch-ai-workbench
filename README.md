@@ -44,6 +44,12 @@ CLI's native sandbox rules. Enforcement is Claude
 Code's own; Nix authors its configuration. Design and boundaries in
 [`docs/development/claude-code-sandbox.md`](docs/development/claude-code-sandbox.md).
 
+**Guests for sessions.** A home declared inside a caisson NixOS
+machine reads the microvm guest slots of that machine from the tree.
+A session leases a slot, starts it and stops it with the `microvm`
+command, through a trusted executable of the sandbox. Design in
+[`docs/development/microvm-guests.md`](docs/development/microvm-guests.md).
+
 **The two halves talking.** A session's working directory follows into
 Emacs; hooks ask the user questions through the `claude-consent` spool,
 where Emacs answers from a menu, a terminal can answer instead

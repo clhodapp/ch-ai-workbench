@@ -8,6 +8,9 @@
   inputs.home-manager.url = "github:nix-community/home-manager";
   inputs.home-manager.inputs.nixpkgs.follows = "nixpkgs";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  # The guests of the fixture machines the microvm checks evaluate.
+  inputs.microvm.url = "github:microvm-nix/microvm.nix";
+  inputs.microvm.inputs.nixpkgs.follows = "nixpkgs";
   inputs.treefmt-nix.url = "github:numtide/treefmt-nix";
   inputs.treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   outputs = { ... }: { };
