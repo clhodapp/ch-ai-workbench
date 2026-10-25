@@ -88,11 +88,32 @@ in
     criteria.false = "The text describes the mechanism and its limits plainly.";
     rule = "do not sell; say what the mechanism is, what it does, and what happens without it";
   };
-  throat-clearing = {
-    instructions = "Does the text contain throat-clearing or commentary about the text itself, such as \"To be clear about scope up front\", \"That's the strongest version of the argument\", or \"Let me be precise\"? ${exempt}";
-    criteria.true = "A sentence announces or rates the text instead of saying something about the subject.";
-    criteria.false = "Every sentence is about the subject.";
-    rule = "no throat-clearing or meta-commentary; start with the point";
+  # Grading the reader's point or the result before the substance.
+  grading-the-point = {
+    instructions = "Does the text grade the reader's point, a suggestion, or a result before or instead of answering, such as \"Fair.\", \"Agreed, and it simplifies more than it costs.\", \"Good catch.\", \"Some of that worry is earned.\", or \"Decisive and favorable:\"? ${exempt}";
+    criteria.true = "A sentence or clause grades, approves, or weighs the reader's point or the result instead of saying what follows from it.";
+    criteria.false = "The text answers directly, and any agreement is carried by what it goes on to say.";
+    rule = "do not grade the point or the result; answer it, and let what follows show whether it holds";
+  };
+  # The story of the assistant's own earlier mistake, told to the
+  # reader instead of the corrected content.
+  self-correction-narration = {
+    instructions = "Does the text narrate the author's own earlier mistake or framing, such as \"My earlier framing was muddled.\", \"I had it framed too broadly.\", \"You are right, and I should have said so when I presented it.\", or \"Neither is quite what I meant.\", instead of simply giving the corrected content?";
+    criteria.true = "A sentence tells the story of the author's earlier error, framing, or omission where stating the corrected content would serve the reader.";
+    criteria.false = "Corrections are given as the corrected content, and a mistake is mentioned only where the reader needs to know that something they relied on was wrong.";
+    rule = "give the corrected content, not the story of the earlier mistake; say only what the reader relied on that was wrong";
+  };
+  # More than a reader can take in at one sitting.
+  too-much-at-once = {
+    instructions = "Is the message more than a reader can take in at one sitting: more points, sections, options, caveats, or detail than the reader needs right now, so that what they need to know or do is buried or would be missed? Length alone does not count when every part is needed now.";
+    criteria.true = "Parts of the message could be cut or left for later without losing what the reader needs now, and the amount makes the important part hard to find.";
+    criteria.false = "The reader can take the message in at once, or every part of it is needed now.";
+    rule = "say less at once: lead with what the reader needs now, cut what they do not, and leave detail for when it is asked for";
+    targets = [
+      "reply"
+      "progress"
+      "message"
+    ];
   };
   fragments = {
     instructions = "Does the prose carry its facts in elliptical fragments instead of full sentences: dropped subjects, verbs, or articles (\"Build green, pushed, PR open\"), colon-fragment parallelism (\"What it covers: X. What it doesn't: Y.\"), or arrows and slashes standing in for a sentence? Only compressed text that states facts counts. A short line that carries no fact and only grades or punctuates (\"Fair.\", \"Recorded.\") is a different problem and does not count here, and neither do headings, table cells, short labels in a list, or code.";

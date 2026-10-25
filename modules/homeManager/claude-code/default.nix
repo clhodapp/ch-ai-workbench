@@ -881,8 +881,9 @@ in
           style's rules that need judgment (lib/judge-dimensions.nix):
           arguing-with-ghosts (asked of writes only), final-message-recap
           (asked of finished turns only), count-obsession,
-          staccato-pronouncements, rhetorical-hooks, selling,
-          throat-clearing, fragments, process-narration, and
+          staccato-pronouncements, rhetorical-hooks, grading-the-point,
+          self-correction-narration, too-much-at-once (not asked of prose
+          files), selling, fragments, process-narration, and
           undefined-terms (report only).
         '';
       };
