@@ -50,13 +50,20 @@ findings+=$(jq -r '.findings // ""' <<<"$wchecks" 2>/dev/null) || true
 coined=$(jq -c '.report.coinage // []' <<<"$wchecks" 2>/dev/null) || coined=
 [ -n "$coined" ] || coined='[]'
 
+# What the message leans on that only the conversation showed
+# (tic_write_familiarity); a reviewer reads it cold.
+fchecks=$(tic_write_familiarity message "$text" "" "$(field '.transcript_path')")
+findings+=$(jq -r '.findings // ""' <<<"$fchecks" 2>/dev/null) || true
+familiar=$(jq -c '.report // []' <<<"$fchecks" 2>/dev/null) || familiar=
+[ -n "$familiar" ] || familiar='[]'
+
 if [ -z "$findings" ]; then
   # The command runs: keep the verdict for claude-tic-check-turn-hook,
   # which reports what it found below the push-back level after the call.
-  if { [ -n "$verdict" ] || [ "$coined" != '[]' ]; } && written=$(tic_write_path "$session" "$payload"); then
+  if { [ -n "$verdict" ] || [ "$coined" != '[]' ] || [ "$familiar" != '[]' ]; } && written=$(tic_write_path "$session" "$payload"); then
     { mkdir -p "$(dirname "$written")" &&
-      jq -cn --argjson v "$(tic_json_or_null "$verdict")" --argjson c "$coined" \
-        '{kind: "message", verdict: ($v // {}), coinage: $c}' > "$written"; } 2>/dev/null || true
+      jq -cn --argjson v "$(tic_json_or_null "$verdict")" --argjson c "$coined" --argjson f "$familiar" \
+        '{kind: "message", verdict: ($v // {}), coinage: $c, familiarity: $f}' > "$written"; } 2>/dev/null || true
   fi
   exit 0
 fi

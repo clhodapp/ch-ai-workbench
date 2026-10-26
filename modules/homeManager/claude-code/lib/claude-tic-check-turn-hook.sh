@@ -74,6 +74,13 @@ if written=$(tic_write_path "$session" "$payload") && [ -f "$written" ]; then
       | [.ghosts // [] | .[] | "\n- arguing-with-ghosts sentence (judge \((.p * 100 | round) / 100)): \"\(.sentence)\"; \($c.ghosts.rule)"]
       | add // empty
     ' <<<"$stored" 2>/dev/null) || true
+    # What the write leans on that only the conversation showed, below
+    # the level that stops a write.
+    lines+=$(jq -j --slurpfile c "$judge" '
+      $c[0] as $c
+      | [.familiarity // [] | .[] | "\n- needs-the-conversation \"\(.candidate)\" (judge \((.chat * 100 | round) / 100)): \($c.familiarity.rule)"]
+      | add // empty
+    ' <<<"$stored" 2>/dev/null) || true
     if [ -n "$lines" ]; then
       sections+="
 The text this $tool call wrote, judged as $write_kind before it ran and let through because no problem reached the level that stops a write; probability and rule:$lines"

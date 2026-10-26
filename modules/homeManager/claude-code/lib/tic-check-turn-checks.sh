@@ -27,6 +27,13 @@
 # the judge about each sentence that may argue with ghosts (judge.ghosts),
 # a sentence at the push-back level is a finding, and one at the report
 # level goes in report.
+#
+# tic_write_familiarity KIND TEXT REPLACED TRANSCRIPT prints the same
+# shape for a prose file or a message (KIND prose or message):
+# claude-familiarity-check asks the judge about each phrase and name the
+# write leans on (judge.familiarity), and a candidate only the
+# conversation or the task showed, with no brief description, is a
+# finding at the push-back level and a report at the report level.
 
 tic_json_or_null() { # $1 = text; prints it when it is JSON, else null
   if [ -n "$1" ] && jq -e . >/dev/null 2>&1 <<<"$1"; then printf '%s' "$1"; else printf 'null'; fi
@@ -113,6 +120,27 @@ tic_write_ghosts() {
     | ($g.sentences // []) as $s
     | {findings: ([$s[] | select(.action == "block")
                    | "\n- arguing-with-ghosts (judge \((.p * 100 | round) / 100)): \($c.ghosts.rule)\n    sentence: \(.sentence)"]
+                  | add // ""),
+       report: [$s[] | select(.action == "report")]}
+  ' 2>/dev/null || printf '{"findings": "", "report": []}'
+}
+
+# shellcheck disable=SC2329
+tic_write_familiarity() {
+  local kind=$1 text=$2 replaced=$3 transcript=$4 file='' args=() checked=null
+  if tic_check_enabled familiarity; then
+    if [ -n "$replaced" ] && file=$(mktemp 2>/dev/null); then
+      printf '%s' "$replaced" > "$file" 2>/dev/null && args=(--replaced "$file")
+    fi
+    [ -z "$transcript" ] || args+=(--transcript "$transcript")
+    checked=$(tic_json_or_null "$(claude-familiarity-check --config "$judge" --kind "$kind" "${args[@]}" <<<"$text" 2>/dev/null)")
+    [ -z "$file" ] || rm -f "$file" 2>/dev/null || true
+  fi
+  jq -cn --slurpfile c "$judge" --argjson f "$checked" '
+    $c[0] as $c
+    | ($f.candidates // []) as $s
+    | {findings: ([$s[] | select(.action == "block")
+                   | "\n- needs-the-conversation \"\(.candidate)\" (judge \((.chat * 100 | round) / 100)): \($c.familiarity.rule)"]
                   | add // ""),
        report: [$s[] | select(.action == "report")]}
   ' 2>/dev/null || printf '{"findings": "", "report": []}'

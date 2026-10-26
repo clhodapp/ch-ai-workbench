@@ -1005,6 +1005,17 @@
                     res=$(run "gh pr review 59 --comment --body 'Nothing publishes into packages anymore.'")
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.95): '
 
+                    # A message that leans on what only the conversation
+                    # showed is denied once; a brief description in the
+                    # text exonerates it.
+                    answers '{"familiarity": [0.05, 0.05, 0.1, 0.8], "described": 0.2}'
+                    res=$(run "git commit -m 'docs: rewrite the passages a phrasing review flagged'")
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- needs-the-conversation "a phrasing review" (judge 0.8): '
+                    grep '"described"' requests.log | tail -n 1 | jq -e '.state.candidate == "a phrasing review" and (.questions | has("familiarity"))'
+                    answers '{"familiarity": [0.05, 0.05, 0.1, 0.8], "described": 0.9}'
+                    [ -z "$(run "git commit -m 'docs: rewrite the passages a phrasing review of the docs flagged'")" ]
+
                     kill %1
                     touch $out
                   '';

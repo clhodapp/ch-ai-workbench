@@ -685,6 +685,24 @@ output-style rule that needs judgment (seeded from
   ghosts. This check flags 13 writes, 10 of them correct, while the
   whole-write question at the write level of 0.7 flags 7, 4 of them
   correct.
+- **What only the conversation showed** (`judge.familiarity`). A file
+  may lean on the ecosystem and the codebase, and a pull request
+  description ideally only on the ecosystem. Neither may lean on what
+  only the chat or the work showed. Asked about a whole text, the judge
+  scores how hard the subject is, so `claude-familiarity-check`
+  (`familiarity.py`) asks about candidates. These are the phrases about
+  the work ("a phrasing review", "the next PR", "item 4", "29 of 29"),
+  then the names the reference check would find, minus those the
+  replaced text already holds, up to 8. Each gets a score on the ladder
+  general programming, the ecosystem, this codebase, this conversation
+  or task, and a noul asking whether the text says briefly what it is.
+  A brief description exonerates a candidate. One at the last level
+  with probability 0.7 or more denies the write once, and one at 0.4
+  or more is reported after the call. The edit hook runs it on prose
+  files and the message hook on commit messages, pull request texts and
+  reviews. On 100 commit and pull request messages from earlier
+  sessions, labeled by one rater, 7 lean on the conversation; at 0.7
+  the check flags 2, both correct.
 - **Commit messages, pull request texts, and reviews.** The model
   writes these through Bash, so `tic-check-message` (PreToolUse on
   `Bash`) checks them. `claude-vcs-message`, the second program of the

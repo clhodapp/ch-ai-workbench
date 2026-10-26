@@ -67,15 +67,21 @@ if [ "$kind" = prose ]; then
   findings+=$(jq -r '.findings // ""' <<<"$gchecks" 2>/dev/null) || true
   ghosts=$(jq -c '.report // []' <<<"$gchecks" 2>/dev/null) || ghosts=
   [ -n "$ghosts" ] || ghosts='[]'
+  # What the file leans on that only the conversation showed
+  # (tic_write_familiarity).
+  fchecks=$(tic_write_familiarity prose "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
+  findings+=$(jq -r '.findings // ""' <<<"$fchecks" 2>/dev/null) || true
+  familiar=$(jq -c '.report // []' <<<"$fchecks" 2>/dev/null) || familiar=
 fi
+[ -n "${familiar:-}" ] || familiar='[]'
 
 if [ -z "$findings" ]; then
   # The write goes through: keep the verdict for claude-tic-check-turn-hook,
   # which reports what it found below the push-back level after the call.
-  if { [ -n "$verdict" ] || [ "$coined" != '[]' ] || [ "$ghosts" != '[]' ]; } && written=$(tic_write_path "$session" "$payload"); then
+  if { [ -n "$verdict" ] || [ "$coined" != '[]' ] || [ "$ghosts" != '[]' ] || [ "$familiar" != '[]' ]; } && written=$(tic_write_path "$session" "$payload"); then
     { mkdir -p "$(dirname "$written")" &&
-      jq -cn --arg k "$kind" --argjson v "$(tic_json_or_null "$verdict")" --argjson c "$coined" --argjson g "$ghosts" \
-        '{kind: $k, verdict: ($v // {}), coinage: $c, ghosts: $g}' > "$written"; } 2>/dev/null || true
+      jq -cn --arg k "$kind" --argjson v "$(tic_json_or_null "$verdict")" --argjson c "$coined" --argjson g "$ghosts" --argjson f "$familiar" \
+        '{kind: $k, verdict: ($v // {}), coinage: $c, ghosts: $g, familiarity: $f}' > "$written"; } 2>/dev/null || true
   fi
   exit 0
 fi

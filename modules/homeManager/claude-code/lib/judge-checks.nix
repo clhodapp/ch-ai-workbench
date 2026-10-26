@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Seed questions for the judge's per-candidate checks: the candidates
-# come from claude-coinage-check, claude-ghost-check and
-# claude-reference-check, and the judge answers these questions about
-# one candidate at a time, on a state that holds the candidate, its
-# sentence, and what the reader saw.
+# come from claude-coinage-check, claude-ghost-check,
+# claude-familiarity-check and claude-reference-check, and the judge
+# answers these questions about one candidate at a time, on a state
+# that holds the candidate, its sentence, and what the reader saw.
 {
   coinage = {
     instructions = "How much does a programmer who did not follow the conversation have to guess to know what the phrase named in the state refers to?";
@@ -17,6 +17,24 @@
     instructions = "The assistant is writing a file. The state gives the text the write replaces, the new text, the user's latest messages, and one sentence of the new text. Would a writer who never saw the replaced text or the conversation, writing for a reader who sees only the result, write this sentence? Answer true when the sentence is there because of the old version or the conversation: it says what is not done, not set, not published, unchanged, or no longer true, in contrast to the replaced text or to something the user corrected; or it tells the story of the change or the correction itself.";
     criteria.true = "The sentence answers the replaced text or the conversation: a new reader would not miss it, and only someone who saw the earlier version would think to say it.";
     criteria.false = "The sentence tells a new reader what the thing is, what it does, or a limit they need to know, whatever the earlier version said.";
+  };
+  familiarity = {
+    familiarity = {
+      type = "score";
+      instructions = "The assistant wrote the text into a file or a pull request. What must a reader already know to tell what the candidate in the state refers to, if the text did not explain it?";
+      criteria = [
+        "Nothing beyond general programming."
+        "The ecosystem: the tools, languages and libraries it works with (Nix flakes, home-manager, GitHub), not this repository."
+        "This codebase: the repository's own modules, files, options and conventions."
+        "This conversation or task: only the chat or the work showed it, such as a name coined during the work, an earlier draft, tool output, a review, a plan, or a decision made in the chat."
+      ];
+    };
+    described = {
+      type = "noul";
+      instructions = "Does the text itself say briefly what the candidate is, so that a reader who never saw the conversation or the work can tell what it refers to?";
+      criteria.true = "The text says what it is, in a clause, a gloss, or the sentence around it.";
+      criteria.false = "The text uses it without saying what it is.";
+    };
   };
   references = {
     resolvable = {

@@ -146,6 +146,7 @@ let
       load
       coinage
       ghosts
+      familiarity
       references
       ;
   };
@@ -1056,6 +1057,56 @@ in
         };
       };
 
+      familiarity = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the edit hook (prose files) and the message hook
+            (commit messages, pull request texts, reviews) look for what a
+            write leans on that only the conversation or the task showed.
+            claude-familiarity-check takes the phrases about the work and
+            the names of the write that the replaced text does not already
+            hold, and asks the judge about each one: what a reader must know
+            to resolve it, and whether the text briefly says what it is.
+          '';
+        };
+
+        familiarity = lib.mkOption {
+          type = lib.types.attrsOf lib.types.anything;
+          description = "The score question, from general programming to this conversation or task.";
+        };
+
+        described = lib.mkOption {
+          type = lib.types.attrsOf lib.types.anything;
+          description = "The noul question whether the text briefly says what the candidate is.";
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.7;
+          description = "Probability of the conversation level at or above which an undescribed candidate denies the write once.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.4;
+          description = "Probability of the conversation level at or above which an undescribed candidate is reported after the write.";
+        };
+
+        describedBelow = lib.mkOption {
+          type = lib.types.float;
+          default = 0.8;
+          description = "A candidate counts as undescribed when the described question is below this probability.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "write for a reader who never saw the conversation: a file may lean on the codebase, and a pull request description ideally only on the ecosystem; give what only the chat or the work showed a brief description in the sentence that uses it, or leave it out, rather than making the text longer";
+          description = "Reminder returned with a finding or report.";
+        };
+      };
+
       references = {
         enable = lib.mkOption {
           type = lib.types.bool;
@@ -1201,6 +1252,11 @@ in
       instructions = lib.mkDefault judgeChecks.ghosts.instructions;
       criteria = lib.mkDefault judgeChecks.ghosts.criteria;
       rule = lib.mkDefault (import ./lib/judge-dimensions.nix).arguing-with-ghosts.rule;
+    };
+
+    ch-ai-workbench.claude-code.judge.familiarity = {
+      familiarity = lib.mkDefault judgeChecks.familiarity.familiarity;
+      described = lib.mkDefault judgeChecks.familiarity.described;
     };
 
     ch-ai-workbench.claude-code.judge.references = {

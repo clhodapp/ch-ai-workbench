@@ -19,6 +19,7 @@ claude-turn-load = "claude_response_judge.load:main"
 claude-coinage-check = "claude_response_judge.coinage:main"
 claude-reference-check = "claude_response_judge.references:main"
 claude-ghost-check = "claude_response_judge.ghosts:main"
+claude-familiarity-check = "claude_response_judge.familiarity:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
