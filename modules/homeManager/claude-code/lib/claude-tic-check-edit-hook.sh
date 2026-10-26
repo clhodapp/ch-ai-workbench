@@ -48,7 +48,7 @@ if [[ $target == *.* ]] &&
 fi
 verdict=$(tic_verdict "$kind" "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
 
-findings=$(tic_findings "$text" "$verdict")
+findings=$(tic_findings "$text" "$verdict" "$kind")
 
 # A prose file (a doc, a memory note) is where a coined phrase leaves
 # the session, so it gets the coinage check (tic_write_coinage from

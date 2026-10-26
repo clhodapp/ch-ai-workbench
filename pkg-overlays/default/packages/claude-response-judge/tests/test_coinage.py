@@ -23,7 +23,14 @@ sys.path.insert(0, str(SRC))
 from claude_response_judge import sessions  # noqa: E402
 from claude_response_judge.coinage import DEFAULT_INSTRUCTIONS, DEFAULT_LEVELS, occurrences  # noqa: E402
 
-COINAGE = {"instructions": DEFAULT_INSTRUCTIONS, "levels": DEFAULT_LEVELS, "pushBackAbove": 1.2, "reportAbove": 1.0}
+COINAGE = {
+    "instructions": DEFAULT_INSTRUCTIONS,
+    "levels": DEFAULT_LEVELS,
+    "pushBackAbove": 1.4,
+    "writePushBackAbove": 1.2,
+    "reportAbove": 1.0,
+}
+MIDDLING = {"name-opacity": [0.0, 0.7, 0.3]}  # expected level 1.3
 OPAQUE = {"name-opacity": [0.05, 0.15, 0.8]}  # expected level 1.75
 
 
@@ -206,6 +213,27 @@ class CoinageTest(unittest.TestCase):
         self.assertEqual([c["phrase"] for c in out["candidates"]], ["the ladder"])
         # A phrase the assistant never used in the session is not a coinage of this session.
         out = self.run_check(path, "Memory: the gauge measures it.", "--write", endpoints=[endpoint("local", stub.url)])
+        self.assertEqual(out["candidates"], [])
+
+    def test_a_write_blocks_at_the_lower_level(self):
+        stub = self.stub(answers=MIDDLING)
+        path = self.session("current", [prompt("go"), say("The ladder has four levels.")])
+        out = self.run_check(path, "Memory: the ladder measures familiarity.", "--write", endpoints=[endpoint("local", stub.url)], runtime=False)
+        self.assertEqual([(c["phrase"], c["action"]) for c in out["candidates"]], [("the ladder", "block")])
+        path = self.current()
+        out = self.run_check(path, "On the ladder.", endpoints=[endpoint("local", stub.url)], runtime=False)
+        self.assertEqual([(c["phrase"], c["action"]) for c in out["candidates"]], [("the ladder", "report")])
+
+    def test_a_write_blocks_a_phrase_a_reply_only_reported(self):
+        stub = self.stub(answers=MIDDLING)
+        path = self.current()
+        out = self.run_check(path, "On the ladder.", endpoints=[endpoint("local", stub.url)])
+        self.assertEqual([c["action"] for c in out["candidates"]], ["report"])
+        out = self.run_check(path, "Memory: the ladder measures familiarity.", "--write", endpoints=[endpoint("local", stub.url)])
+        self.assertEqual([(c["phrase"], c["action"], c["score"]) for c in out["candidates"]], [("the ladder", "block", 1.3)])
+        self.assertEqual(len(stub.requests), 1)
+        # The block is kept, so the next write with the phrase is not denied again.
+        out = self.run_check(path, "Memory: the ladder again.", "--write", endpoints=[endpoint("local", stub.url)])
         self.assertEqual(out["candidates"], [])
 
     def test_no_endpoint_reports_nothing_and_keeps_nothing(self):

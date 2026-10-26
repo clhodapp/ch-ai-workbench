@@ -37,14 +37,16 @@ tool=${tool:-tool}
 sections=
 scorer=
 
-# Noul problems at or above reportAbove in a verdict ($1), leaving out
-# those tic_findings lists as confident.
+# Noul problems at or above reportAbove in a verdict ($1) on text of
+# kind $2, leaving out those tic_findings lists as confident.
 problems_in() {
-  jq -j --slurpfile c "$judge" '
+  local at
+  at=$(tic_push_back_above "$2") || return 0
+  jq -j --slurpfile c "$judge" --argjson at "$at" '
     $c[0] as $c
     | [.answers // {} | to_entries[]
        | $c.dimensions[.key] as $d
-       | select($d != null and .value >= $c.reportAbove and ($d.pushBack and .value >= $c.pushBackAbove | not))]
+       | select($d != null and .value >= $c.reportAbove and ($d.pushBack and .value >= $at | not))]
     | sort_by(-.value)
     | map("\n- \(.key) \((.value * 100 | round) / 100): \($c.dimensions[.key].rule)")
     | add // empty
@@ -57,7 +59,7 @@ if written=$(tic_write_path "$session" "$payload") && [ -f "$written" ]; then
   if [ -n "$stored" ]; then
     write_verdict=$(jq -c '.verdict' <<<"$stored" 2>/dev/null) || write_verdict=
     write_kind=$(jq -r '.kind' <<<"$stored" 2>/dev/null) || write_kind=
-    lines=$(problems_in "$write_verdict")
+    lines=$(problems_in "$write_verdict" "$write_kind")
     # Coined phrases the write uses, which the coinage check scored
     # below the level that stops a write.
     lines+=$(jq -j --slurpfile c "$judge" '
@@ -84,7 +86,7 @@ if [ -n "$transcript" ] && state=$(tic_session_path progress "$session") &&
     problems=
     scores=
     if [ -n "$verdict" ]; then
-      problems=$(problems_in "$verdict")
+      problems=$(problems_in "$verdict" progress)
       scores=$(jq -j --slurpfile c "$judge" '
         $c[0] as $c
         | [.scores // {} | to_entries[] | select($c.dimensions[.key] != null and .value.score >= $c.turnScoresAbove)]

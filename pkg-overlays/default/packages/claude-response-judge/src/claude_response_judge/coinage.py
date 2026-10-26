@@ -19,10 +19,11 @@ The other sessions come from the claude-session-index cache (an update is starte
 background when it is behind); the current transcript is read from its tail only.
 
 Each candidate is one `name-opacity` score question for the first endpoint that answers. A
-score at or above `pushBackAbove` is a block, at or above `reportAbove` a report. A phrase
-is judged once per session: its answer is kept in
-$XDG_RUNTIME_DIR/claude-tic-check/coinage/<session id>.json, and a judged phrase is not a
-candidate again. Without XDG_RUNTIME_DIR nothing is kept.
+score at or above `pushBackAbove` (`writePushBackAbove` with `--write`) is a block, at or
+above `reportAbove` a report. A phrase is judged once per session: its answer is kept in
+$XDG_RUNTIME_DIR/claude-tic-check/coinage/<session id>.json, and a judged phrase is not
+asked about again. With `--write`, a kept phrase that has not blocked yet blocks when its
+kept score reaches `writePushBackAbove`. Without XDG_RUNTIME_DIR nothing is kept.
 
 Without `--write`, the text checked is the current turn: the assistant messages since the
 user's last typed prompt, and the final message from stdin (as with claude-turn-text). With
@@ -309,10 +310,33 @@ def check(
     data = sessions.load(index)
     path = state_file(transcript)
     judged = read_judged(path)
-    found = [c for c in candidates(checked, before, written, data, transcript, long_session) if c["phrase"] not in judged]
-    if not found:
-        return result
     section = config.get("coinage", {})
+    block_at = float(section.get("writePushBackAbove" if write else "pushBackAbove", 1.4))
+    report_at = float(section.get("reportAbove", 1.0))
+    found = candidates(checked, before, written, data, transcript, long_session)
+    texts = [*before, checked]
+    names = backticked_names(texts)
+    if write:
+        # A write blocks at a lower score than a reply, so a phrase the session judged
+        # earlier without blocking blocks now if its kept score reaches the write level.
+        for cand in found:
+            kept = judged.get(cand["phrase"])
+            if kept and kept.get("action") != "block" and float(kept.get("score", 0)) >= block_at:
+                result["candidates"].append(
+                    {
+                        "phrase": f"the {cand['phrase']}",
+                        "score": kept["score"],
+                        "action": "block",
+                        "sentence": cand["sentence"][:300],
+                        "real_name": real_name(cand["phrase"], names),
+                    }
+                )
+                judged[cand["phrase"]] = {**kept, "action": "block"}
+    found = [c for c in found if c["phrase"] not in judged]
+    if not found:
+        if result["candidates"]:
+            write_judged(path, judged)
+        return result
     question = {
         "name-opacity": {
             "type": "score",
@@ -320,10 +344,6 @@ def check(
             "criteria": section.get("levels", DEFAULT_LEVELS),
         }
     }
-    block_at = float(section.get("pushBackAbove", 1.2))
-    report_at = float(section.get("reportAbove", 1.0))
-    texts = [*before, checked]
-    names = backticked_names(texts)
     for cand in found[:max_candidates]:
         answers, endpoint = first_answer(config, question, state_for(cand["phrase"], texts, names, typed))
         if answers is None:

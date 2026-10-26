@@ -40,7 +40,7 @@ seen="$runtime/claude-tic-check/seen/${session:0:8}-$key"
 
 verdict=$(tic_verdict message "$text" "" "$(field '.transcript_path')")
 
-findings=$(tic_findings "$text" "$verdict")
+findings=$(tic_findings "$text" "$verdict" message)
 
 # A commit message or pull request text is where a coined phrase
 # leaves the session, so it gets the coinage check (tic_write_coinage

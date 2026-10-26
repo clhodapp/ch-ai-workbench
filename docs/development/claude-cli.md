@@ -575,7 +575,9 @@ output-style rule that needs judgment (seeded from
   blocks, and the Stop hook still checks the whole turn at its end.
 - **Confident blocks, less confident informs.** A write is judged once,
   before it runs, by the edit or message hook. A finding at or above
-  `judge.pushBackAbove` denies the call. Otherwise the hook keeps its
+  `judge.writePushBackAbove` (0.7) denies the call. That level is lower
+  than the one for replies because a write stays in the repository
+  after the turn. Otherwise the hook keeps its
   verdict under `$XDG_RUNTIME_DIR/claude-tic-check/writes/`, keyed by a
   digest of the payload's `{tool_name, tool_input}` with sorted keys,
   which the PreToolUse and PostToolUse payloads share. After the call,
@@ -630,7 +632,10 @@ output-style rule that needs judgment (seeded from
     session. It is reported at 1.0 and pushes back at 1.4. The edit hook
     (prose files) and the message hook (commit messages, pull request
     texts, reviews) run the same check on what they write, counting the
-    write as a use, and deny it once at 1.4.
+    write as a use, and deny it once at 1.2 (`writePushBackAbove`). A
+    phrase a reply already used at a score between 1.2 and 1.4 was
+    reported then, and the first write that uses it is denied from the
+    kept score.
   - References the user cannot resolve (`judge.references`):
     `claude-reference-check` flags a definite reference to work the user
     did not see ("the recording proxy", "their notes") that nothing

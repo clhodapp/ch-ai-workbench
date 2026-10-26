@@ -138,6 +138,7 @@ let
     }) enabledDimensions;
     inherit (cfg.judge)
       pushBackAbove
+      writePushBackAbove
       reportAbove
       turnScoresAbove
       maxChars
@@ -896,7 +897,19 @@ in
       pushBackAbove = lib.mkOption {
         type = lib.types.float;
         default = 0.9;
-        description = "Probability at or above which a dimension with pushBack set is a finding of the tic-check cycle.";
+        description = "Probability at or above which a dimension with pushBack set is a finding of the tic-check cycle, for a reply or a progress message.";
+      };
+
+      writePushBackAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 0.7;
+        description = ''
+          Probability at or above which a dimension with pushBack set
+          denies a write: an edit to a prose or code file, or a commit
+          message, pull request text, or review. It is lower than
+          pushBackAbove because a write stays in the repository after the
+          turn, while a reply is read once.
+        '';
       };
 
       reportAbove = lib.mkOption {
@@ -977,7 +990,19 @@ in
         pushBackAbove = lib.mkOption {
           type = lib.types.float;
           default = 1.4;
-          description = "Opacity score at or above which a candidate is a finding (deny the write, or block the stop).";
+          description = "Opacity score at or above which a candidate in the final message is a finding that blocks the stop.";
+        };
+
+        writePushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 1.2;
+          description = ''
+            Opacity score at or above which a candidate in a write (a prose
+            file, a commit message, a pull request text, a review) denies
+            the write once. A phrase the session already judged below
+            pushBackAbove is denied from its kept score when it reaches this
+            level.
+          '';
         };
 
         rule = lib.mkOption {

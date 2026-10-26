@@ -888,6 +888,13 @@
                     tail -n 1 requests.log | jq -e '.state.kind | contains("prose file")'
                     [ -z "$(write docs/notes.md 'Build green, pushed.')" ]
 
+                    # A write is denied at writePushBackAbove, below the
+                    # level at which a reply is blocked.
+                    answers '{"fragments": 0.75}'
+                    res=$(write docs/other.md 'Tests green, merged.')
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.75): '
+
                     # The whole turn: a finding in a message written
                     # between tool calls, and a final message that leaves
                     # out what the turn found.
