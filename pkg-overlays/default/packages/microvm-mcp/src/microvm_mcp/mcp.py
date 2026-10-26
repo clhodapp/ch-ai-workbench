@@ -49,6 +49,16 @@ from .guests import Guest, connect_guest, read_lines
 SERVER_INFO = {"name": "microvm", "version": "0.3.0"}
 PROTOCOL_VERSION = "2025-06-18"
 MANAGER_TOOLS = ("microvm_up", "microvm_down", "microvm_status")
+# Claude Code reports the tools a guest served, once this server removes
+# them, as tools of a disconnected server, and it can list this
+# server's own tools among them. The text tells the session reading the
+# report that this server stays connected.
+TOOLS_REMOVED = (
+    "When this server removes the tools of a stopped guest, Claude Code may report that the "
+    "microvm server disconnected and that its tools are gone. The server stays connected. "
+    "microvm_up, microvm_down and microvm_status remain, and a session that loads tools on "
+    "demand finds them again with its tool search."
+)
 # What the server forwards from a guest to Claude Code without a request.
 FORWARDED_NOTIFICATIONS = ("notifications/progress", "notifications/message")
 
@@ -120,7 +130,7 @@ def manager_tools(instances: Instances, mcp_kinds: dict[str, dict | None]) -> li
                 "Stop the guests this session holds, or one of them, and remove the tools they served. "
                 "Stop a guest when the task that needed it is done. The files in the directory of an "
                 "instance stay until a new session leases its default directory. The guests of this "
-                "session also stop when the session ends."
+                "session also stop when the session ends. " + TOOLS_REMOVED
             ),
             "inputSchema": {
                 "type": "object",
@@ -333,8 +343,8 @@ class Server:
         self.events.put(("done", name, args, msg_id, out.getvalue(), error))
 
     def done(self, name: str, args: dict[str, Any], msg_id: Any, text: str, error: str | None) -> None:
-        if name == "microvm_down":
-            self.drop_stopped()
+        if name == "microvm_down" and self.drop_stopped() and error is None:
+            text += TOOLS_REMOVED + "\n"
         if error is not None:
             self.reply(msg_id, text_result(text + error, is_error=True))
         elif name == "microvm_up":
@@ -345,14 +355,17 @@ class Server:
         else:
             self.reply(msg_id, text_result(text))
 
-    def drop_stopped(self) -> None:
+    def drop_stopped(self) -> bool:
         """Close the connections to the guests whose instance this
-        session no longer holds."""
+        session no longer holds, and say whether any was closed."""
         leases = self.instances.leases()
+        dropped = False
         for guest in list(self.guests.values()):
             lease = leases.get(guest.instance)
             if lease is None or not self.instances.holds(self.holder, lease):
                 self.drop(guest, "it was stopped")
+                dropped = True
+        return dropped
 
     # The guests.
 
