@@ -669,6 +669,22 @@ output-style rule that needs judgment (seeded from
   three typed messages, read from the tail of `transcript_path`
   (entries of type `user` that are neither `isMeta`, which marks hook
   feedback and skill bodies, nor `isSidechain`, nor tool results).
+- **Ghost sentences in prose writes** (`judge.ghosts`). Asked about a
+  whole write, the judge gives a single sentence that argues with
+  ghosts a middling probability, so a long write with one such sentence
+  passes. `claude-ghost-check` (`ghosts.py`) therefore asks about each
+  candidate sentence on its own. A sentence is a candidate when it
+  narrates a correction or the history of the text ("I had", "was
+  wrong", "the user's correction"), or when it states an absence, a
+  negation, or a non-change and shares a word with the user's latest
+  messages. The judge answers one noul question per candidate, with
+  the replaced text, the new text and those messages beside it
+  (`lib/judge-checks.nix`). A sentence at 0.6 or more denies the write
+  once, and one at 0.4 or more is reported after the call. On 95 prose
+  writes from earlier sessions, labeled by one rater, 14 argue with
+  ghosts. This check flags 13 writes, 10 of them correct, while the
+  whole-write question at the write level of 0.7 flags 7, 4 of them
+  correct.
 - **Commit messages, pull request texts, and reviews.** The model
   writes these through Bash, so `tic-check-message` (PreToolUse on
   `Bash`) checks them. `claude-vcs-message`, the second program of the

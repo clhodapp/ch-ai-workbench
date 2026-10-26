@@ -21,6 +21,12 @@
 # tic_write_coinage TEXT TRANSCRIPT prints the same object for a durable
 # write (a prose file, a commit message, a pull request text), from the
 # coinage check alone, which then counts the write as a use.
+#
+# tic_write_ghosts TEXT REPLACED TRANSCRIPT prints {"findings": TEXT,
+# "report": [SENTENCE, ...]} for a prose write: claude-ghost-check asks
+# the judge about each sentence that may argue with ghosts (judge.ghosts),
+# a sentence at the push-back level is a finding, and one at the report
+# level goes in report.
 
 tic_json_or_null() { # $1 = text; prints it when it is JSON, else null
   if [ -n "$1" ] && jq -e . >/dev/null 2>&1 <<<"$1"; then printf '%s' "$1"; else printf 'null'; fi
@@ -89,4 +95,25 @@ tic_write_coinage() {
     coinage=$(tic_json_or_null "$(claude-coinage-check --config "$judge" --transcript "$transcript" --write <<<"$text" 2>/dev/null)")
   fi
   tic_assemble_checks null "$coinage" null
+}
+
+# shellcheck disable=SC2329
+tic_write_ghosts() {
+  local text=$1 replaced=$2 transcript=$3 file='' args=() ghosts=null
+  if tic_check_enabled ghosts; then
+    if [ -n "$replaced" ] && file=$(mktemp 2>/dev/null); then
+      printf '%s' "$replaced" > "$file" 2>/dev/null && args=(--replaced "$file")
+    fi
+    [ -z "$transcript" ] || args+=(--transcript "$transcript")
+    ghosts=$(tic_json_or_null "$(claude-ghost-check --config "$judge" "${args[@]}" <<<"$text" 2>/dev/null)")
+    [ -z "$file" ] || rm -f "$file" 2>/dev/null || true
+  fi
+  jq -cn --slurpfile c "$judge" --argjson g "$ghosts" '
+    $c[0] as $c
+    | ($g.sentences // []) as $s
+    | {findings: ([$s[] | select(.action == "block")
+                   | "\n- arguing-with-ghosts (judge \((.p * 100 | round) / 100)): \($c.ghosts.rule)\n    sentence: \(.sentence)"]
+                  | add // ""),
+       report: [$s[] | select(.action == "report")]}
+  ' 2>/dev/null || printf '{"findings": "", "report": []}'
 }

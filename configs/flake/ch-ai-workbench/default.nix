@@ -895,6 +895,23 @@
                     [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.75): '
 
+                    # A prose sentence that answers the correction in the
+                    # user's latest message is judged on its own, with the
+                    # replaced text beside it.
+                    answers '{"ghost-sentence": 0.7}'
+                    ghost() { jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" --arg n "$1" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/homes.md", old_string: "Each home sets nix.package.", new_string: $n}}' | "$edit"; }
+                    res=$(ghost 'A home builds its profile. The homes do not set nix.package.')
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.7): '
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- 'sentence: The homes do not set nix.package.'
+                    grep '"ghost-sentence"' requests.log | tail -n 1 | jq -e '.state["the sentence"] == "The homes do not set nix.package." and .state["replaced text"] == "Each home sets nix.package."'
+                    # Below the push-back level the write goes through, and
+                    # the sentence reaches the model after the call.
+                    answers '{"ghost-sentence": 0.5}'
+                    [ -z "$(ghost 'A home builds its profile. The homes never set nix.package.')" ]
+                    ctx=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/homes.md", old_string: "Each home sets nix.package.", new_string: "A home builds its profile. The homes never set nix.package."}, tool_response: {}}' | ${lib.getExe judgeHooks.tic-check-turn.package} | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q -- '- arguing-with-ghosts sentence (judge 0.5): "The homes never set nix.package."' <<<"$ctx"
+
                     # The whole turn: a finding in a message written
                     # between tool calls, and a final message that leaves
                     # out what the turn found.

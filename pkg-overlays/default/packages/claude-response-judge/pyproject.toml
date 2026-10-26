@@ -18,6 +18,7 @@ claude-session-index = "claude_response_judge.sessions:main"
 claude-turn-load = "claude_response_judge.load:main"
 claude-coinage-check = "claude_response_judge.coinage:main"
 claude-reference-check = "claude_response_judge.references:main"
+claude-ghost-check = "claude_response_judge.ghosts:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

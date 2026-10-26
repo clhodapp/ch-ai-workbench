@@ -145,6 +145,7 @@ let
       proseExtensions
       load
       coinage
+      ghosts
       references
       ;
   };
@@ -1012,6 +1013,49 @@ in
         };
       };
 
+      ghosts = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the edit hook looks for sentences of a prose write that
+            argue with ghosts. claude-ghost-check takes a sentence that
+            narrates a correction or the history of the text, or one that
+            states an absence or a non-change about something named in the
+            latest messages from the user, and asks the judge whether a
+            writer who never saw the replaced text or the conversation would
+            write it.
+          '';
+        };
+
+        instructions = lib.mkOption {
+          type = lib.types.str;
+          description = "The noul question the judge answers about one candidate sentence.";
+        };
+
+        criteria = lib.mkOption {
+          type = lib.types.attrsOf lib.types.str;
+          description = "The `true` and `false` criteria of that question.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.4;
+          description = "Probability at or above which a sentence is reported after the write.";
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.6;
+          description = "Probability at or above which a sentence denies the write once.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          description = "Reminder returned with a finding or report.";
+        };
+      };
+
       references = {
         enable = lib.mkOption {
           type = lib.types.bool;
@@ -1151,6 +1195,12 @@ in
     ch-ai-workbench.claude-code.judge.coinage = {
       instructions = lib.mkDefault judgeChecks.coinage.instructions;
       levels = lib.mkDefault judgeChecks.coinage.levels;
+    };
+
+    ch-ai-workbench.claude-code.judge.ghosts = {
+      instructions = lib.mkDefault judgeChecks.ghosts.instructions;
+      criteria = lib.mkDefault judgeChecks.ghosts.criteria;
+      rule = lib.mkDefault (import ./lib/judge-dimensions.nix).arguing-with-ghosts.rule;
     };
 
     ch-ai-workbench.claude-code.judge.references = {

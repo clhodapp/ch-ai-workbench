@@ -54,20 +54,28 @@ findings=$(tic_findings "$text" "$verdict" "$kind")
 # the session, so it gets the coinage check (tic_write_coinage from
 # tic-check-turn-checks.sh), which counts this write as a use.
 coined='[]'
+ghosts='[]'
 if [ "$kind" = prose ]; then
   wchecks=$(tic_write_coinage "$text" "$(field '.transcript_path')")
   findings+=$(jq -r '.findings // ""' <<<"$wchecks" 2>/dev/null) || true
   coined=$(jq -c '.report.coinage // []' <<<"$wchecks" 2>/dev/null) || coined=
   [ -n "$coined" ] || coined='[]'
+  # Each sentence that may argue with ghosts is judged on its own
+  # (tic_write_ghosts): asked about the whole write, the judge gives one
+  # such sentence in a long text a middling probability.
+  gchecks=$(tic_write_ghosts "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
+  findings+=$(jq -r '.findings // ""' <<<"$gchecks" 2>/dev/null) || true
+  ghosts=$(jq -c '.report // []' <<<"$gchecks" 2>/dev/null) || ghosts=
+  [ -n "$ghosts" ] || ghosts='[]'
 fi
 
 if [ -z "$findings" ]; then
   # The write goes through: keep the verdict for claude-tic-check-turn-hook,
   # which reports what it found below the push-back level after the call.
-  if { [ -n "$verdict" ] || [ "$coined" != '[]' ]; } && written=$(tic_write_path "$session" "$payload"); then
+  if { [ -n "$verdict" ] || [ "$coined" != '[]' ] || [ "$ghosts" != '[]' ]; } && written=$(tic_write_path "$session" "$payload"); then
     { mkdir -p "$(dirname "$written")" &&
-      jq -cn --arg k "$kind" --argjson v "$(tic_json_or_null "$verdict")" --argjson c "$coined" \
-        '{kind: $k, verdict: ($v // {}), coinage: $c}' > "$written"; } 2>/dev/null || true
+      jq -cn --arg k "$kind" --argjson v "$(tic_json_or_null "$verdict")" --argjson c "$coined" --argjson g "$ghosts" \
+        '{kind: $k, verdict: ($v // {}), coinage: $c, ghosts: $g}' > "$written"; } 2>/dev/null || true
   fi
   exit 0
 fi
