@@ -2,8 +2,9 @@
 # NotebookEdit, and the emacs server's edit-file / edit-buffer): the
 # edit-side twin of claude-tic-check-hook.sh.  The text a call writes
 # (new_string, content, new_source, or new-string) is matched against
-# the same table (tic_findings from tic-check-match.sh, prepended by
-# the package wrapper with $table); on a hit the call is denied once
+# the same table, and also scored by the judge as prose or code
+# (tic_verdict and tic_findings from tic-check-match.sh, prepended by
+# the package wrapper with $table and $judge); on a finding the call is denied once
 # with the matching lines and rules, and the reason comes back to the
 # model as the tool result, so it re-reads and re-issues the edit.
 #
@@ -33,14 +34,63 @@ key=$(jq -c '{tool_name, tool_input}' <<<"$payload" 2>/dev/null | sha256sum | cu
 seen="$runtime/claude-tic-check/seen/${session:0:8}-$key"
 [ -e "$seen" ] && exit 0
 
-findings=$(tic_findings "$text")
-[ -n "$findings" ] || exit 0
+# A write to a file (or a buffer named like one) whose extension is in
+# judge.proseExtensions is judged as prose, any other write as code;
+# each kind is asked only the dimensions that target it.  The text an
+# Edit replaces and the user's latest messages (read from the session
+# transcript) go beside the new text, so the judge can see what the
+# edit removes and what correction the new text may be answering.
+target=$(field '.tool_input.file_path // .tool_input.notebook_path // .tool_input.file // .tool_input.buffer')
+kind=code
+if [[ $target == *.* ]] &&
+  jq -en --arg ext "${target##*.}" --slurpfile c "$judge" '$c[0].proseExtensions | index($ext)' >/dev/null 2>&1; then
+  kind=prose
+fi
+verdict=$(tic_verdict "$kind" "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
+
+findings=$(tic_findings "$text" "$verdict" "$kind")
+
+# A prose file (a doc, a memory note) is where a coined phrase leaves
+# the session, so it gets the coinage check (tic_write_coinage from
+# tic-check-turn-checks.sh), which counts this write as a use.
+coined='[]'
+ghosts='[]'
+if [ "$kind" = prose ]; then
+  wchecks=$(tic_write_coinage "$text" "$(field '.transcript_path')")
+  findings+=$(jq -r '.findings // ""' <<<"$wchecks" 2>/dev/null) || true
+  coined=$(jq -c '.report.coinage // []' <<<"$wchecks" 2>/dev/null) || coined=
+  [ -n "$coined" ] || coined='[]'
+  # Each sentence that may argue with ghosts is judged on its own
+  # (tic_write_ghosts): asked about the whole write, the judge gives one
+  # such sentence in a long text a middling probability.
+  gchecks=$(tic_write_ghosts "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
+  findings+=$(jq -r '.findings // ""' <<<"$gchecks" 2>/dev/null) || true
+  ghosts=$(jq -c '.report // []' <<<"$gchecks" 2>/dev/null) || ghosts=
+  [ -n "$ghosts" ] || ghosts='[]'
+  # What the file leans on that only the conversation showed
+  # (tic_write_familiarity).
+  fchecks=$(tic_write_familiarity prose "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
+  findings+=$(jq -r '.findings // ""' <<<"$fchecks" 2>/dev/null) || true
+  familiar=$(jq -c '.report // []' <<<"$fchecks" 2>/dev/null) || familiar=
+fi
+[ -n "${familiar:-}" ] || familiar='[]'
+
+if [ -z "$findings" ]; then
+  # The write goes through: keep the verdict for claude-tic-check-turn-hook,
+  # which reports what it found below the push-back level after the call.
+  if { [ -n "$verdict" ] || [ "$coined" != '[]' ] || [ "$ghosts" != '[]' ] || [ "$familiar" != '[]' ]; } && written=$(tic_write_path "$session" "$payload"); then
+    { mkdir -p "$(dirname "$written")" &&
+      jq -cn --arg k "$kind" --argjson v "$(tic_json_or_null "$verdict")" --argjson c "$coined" --argjson g "$ghosts" --argjson f "$familiar" \
+        '{kind: $k, verdict: ($v // {}), coinage: $c, ghosts: $g, familiarity: $f}' > "$written"; } 2>/dev/null || true
+  fi
+  exit 0
+fi
 
 mkdir -p "$(dirname "$seen")" 2>/dev/null && : > "$seen" 2>/dev/null || exit 0
 
 reason="tic-check: check
-The text this call writes contains phrasing the output style bans:$findings
-Re-read each occurrence against its rule. If any is the tic, re-issue the call with that phrasing rewritten. If every occurrence is legitimate (quoted text, a real possessive, a literal symbol in code or quoted output), re-issue the same call unchanged; an identical re-issue is not checked again."
+The text this call writes may break the output style's rules:$findings
+Re-read the text against each finding's rule. If any finding is real, re-issue the call with that phrasing rewritten. If every finding is a false alarm (quoted text, a real possessive, a literal symbol in code or quoted output), re-issue the same call unchanged; an identical re-issue is not checked again."
 
 jq -cn --arg r "$reason" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse",

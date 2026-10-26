@@ -271,6 +271,29 @@
                 // extra;
               };
 
+            # A home of `tester` whose judge has one endpoint, the stub
+            # System One server the tic-check check starts on a fixed
+            # port of the build sandbox's own loopback. Its hooks are the
+            # packages the module builds from the real tables.
+            judgeHooks =
+              (inputs.home-manager.lib.homeManagerConfiguration {
+                inherit pkgs;
+                modules = [
+                  self.modules.homeManager.claude-code
+                  self.modules.homeManager.claude-code-sandbox
+                  {
+                    home.username = "tester";
+                    home.homeDirectory = "/home/tester";
+                    home.stateVersion = "25.05";
+                    ch-ai-workbench.claude-code.enable = true;
+                    ch-ai-workbench.claude-code.judge.endpoints = {
+                      local.url = "http://127.0.0.1:18731";
+                      baseten.enable = false;
+                    };
+                  }
+                ];
+              }).config.ch-ai-workbench.claude-code.hooks;
+
             # The hook packages from this layer's library, so the checks
             # below drive the same scripts a real configuration installs.
             claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
@@ -299,6 +322,9 @@
               claude-code-sandbox = self.packages.${system}.claude-code-sandbox;
               claude-code-sandbox-plugin = self.packages.${system}.claude-code-sandbox-plugin;
               landlock-shim = self.packages.${system}.landlock-shim;
+              # Building the judge client runs its unittest suite against
+              # stub System One servers.
+              claude-response-judge = self.packages.${system}.claude-response-judge;
               # Building runs the integration tests of call against serve.
               trusted-exec = self.packages.${system}.trusted-exec;
               # Building runs the unittest suite of the microvm program
@@ -756,6 +782,255 @@
                     quiet 'ls'
                     [ -z "$(call 'git push' | env -u XDG_RUNTIME_DIR "$hook")" ]
                     [ -z "$(echo 'not json' | "$hook")" ]
+                    touch $out
+                  '';
+
+              # The tic-check hooks with the judge, against a stub System
+              # One server: with the judge down the regex table decides
+              # alone; the judge pushes back on a dimension at or above
+              # pushBackAbove that no regex catches; a regex hit fires
+              # whatever the judge says; a verdict below
+              # pushBackAbove (and a report-only dimension above it) does
+              # not block and reaches the next prompt once as context,
+              # beside every score, highest first;
+              # the rewrite step is unchanged; the edit hook asks a code
+              # write only the dimensions that target code, sends an
+              # Edit's replaced text beside the new text, asks a prose
+              # write the prose dimensions, and still lets an identical
+              # re-issue through.
+              claude-tic-check-judge =
+                pkgs.runCommand "claude-tic-check-judge"
+                  {
+                    nativeBuildInputs = [
+                      pkgs.jq
+                      pkgs.python3
+                    ];
+                  }
+                  ''
+                    hook=${lib.getExe judgeHooks.tic-check.package}
+                    context=${lib.getExe judgeHooks.tic-check-context.package}
+                    edit=${lib.getExe judgeHooks.tic-check-edit.package}
+                    export XDG_RUNTIME_DIR="$TMPDIR/run"
+                    mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    session=0123456789abcdef-0000-4000-8000-000000000000
+                    stored="$XDG_RUNTIME_DIR/claude-tic-check/verdicts/$session.json"
+                    stop() { jq -cn --arg m "$1" --arg s "$session" '{session_id: $s, stop_hook_active: false, last_assistant_message: $m}' | "$hook"; }
+                    prompt() { jq -cn --arg s "$session" '{session_id: $s, prompt: "next"}' | "$context"; }
+                    write() { jq -cn --arg f "$1" --arg c "$2" --arg s "$session" '{session_id: $s, tool_name: "Write", tool_input: {file_path: $f, content: $c}}' | "$edit"; }
+                    reason() { jq -r .reason; }
+                    lacks() { ! grep -q -- "$1"; }
+                    answers() { printf '%s' "$1" > answers.json; }
+
+                    # The judge is down: the regex table alone.
+                    res=$(stop 'The merge step is yours.')
+                    reason <<<"$res" | grep -q '^tic-check: check'
+                    reason <<<"$res" | grep -q -- '- elliptical-possessive (1): '
+                    reason <<<"$res" | lacks judge
+                    [ -z "$(stop 'The build passed and the branch is pushed.')" ]
+                    [ ! -e "$stored" ]
+
+                    answers '{}'
+                    python3 ${self}/tests/tic-check/stub-systemone.py 18731 answers.json requests.log &
+                    for _ in $(seq 100); do
+                      (: <>/dev/tcp/127.0.0.1/18731) 2>/dev/null && break
+                      sleep 0.1
+                    done
+
+                    # A clean message; the verdict waits for the next
+                    # prompt, which reports the readability scores and no
+                    # problems.
+                    [ -z "$(stop 'The build passed and the branch is pushed.')" ]
+                    jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
+                    tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("count-obsession") and has("undefined-terms") and (has("arguing-with-ghosts") | not))'
+                    tail -n 1 requests.log | jq -e '.questions["information-density"].type == "score" and (.questions["information-density"].criteria[1] | startswith("even"))'
+                    ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q -- '- information-density 0 of 3, most likely sparse' <<<"$ctx"
+                    lacks 'These problems' <<<"$ctx"
+                    [ -z "$(prompt)" ]
+                    [ ! -e "$stored" ]
+
+                    # A confident dimension the regex cannot see.
+                    answers '{"fragments": 0.95}'
+                    res=$(stop 'Build green, pushed, PR open.')
+                    reason <<<"$res" | grep -q '^tic-check: check'
+                    reason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
+                    reason <<<"$res" | grep -q 'elephant-1 at local'
+                    [ ! -e "$stored" ]
+
+                    # A regex hit stands whatever the judge says.
+                    answers '{}'
+                    reason <<<"$(stop 'The merge step is yours.')" | grep -q -- '- elliptical-possessive (1): '
+                    reason <<<"$(stop 'One — two.')" | grep -q -- '- em-dash (1): '
+
+                    # Below pushBackAbove, and report-only: context, once.
+                    # A score never blocks and is reported highest first.
+                    answers '{"fragments": 0.6, "undefined-terms": 0.99, "information-density": [0, 0.2, 0.6, 0.2]}'
+                    [ -z "$(stop 'The build passed.')" ]
+                    ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q '^tic-check: verdicts' <<<"$ctx"
+                    grep -q -- '- undefined-terms 0.99: ' <<<"$ctx"
+                    grep -q -- '- fragments 0.6: ' <<<"$ctx"
+                    grep -q -- '- information-density 2 of 3, most likely dense: several facts per sentence (0.6); aim: ' <<<"$ctx"
+                    [ -z "$(prompt)" ]
+
+                    # The rewrite step.
+                    res=$(jq -cn '{session_id: "s", stop_hook_active: true, last_assistant_message: "tic-check: tic"}' | "$hook")
+                    reason <<<"$res" | grep -q '^tic-check: rewrite'
+
+                    # The edit side: code is asked only the dimensions
+                    # that target code.
+                    answers '{"fragments": 0.95}'
+                    [ -z "$(write src/main.nix 'Build green, pushed.')" ]
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("source file")) and (.questions | keys) == ["arguing-with-ghosts"]'
+
+                    # A comment explaining a deleted line after a
+                    # correction, judged with the replaced text and the
+                    # user's latest message beside it.
+                    answers '{"arguing-with-ghosts": 0.95}'
+                    jq -cn '{type: "user", message: {role: "user", content: "drop nix.package from the homes"}}' > transcript.jsonl
+                    res=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "home.nix", old_string: "nix.package = pkgs.nix;", new_string: "# nix.package is not set here."}}' | "$edit")
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '.state["replaced text"] == "nix.package = pkgs.nix;"'
+                    tail -n 1 requests.log | jq -e '[.state | to_entries[] | select(.key | contains("latest messages")) | .value] == [["drop nix.package from the homes"]]'
+
+                    # A prose file is asked the prose dimensions.
+                    answers '{"fragments": 0.95}'
+                    res=$(write docs/notes.md 'Build green, pushed.')
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '.state.kind | contains("prose file")'
+                    [ -z "$(write docs/notes.md 'Build green, pushed.')" ]
+
+                    # A write is denied at writePushBackAbove, below the
+                    # level at which a reply is blocked.
+                    answers '{"fragments": 0.75}'
+                    res=$(write docs/other.md 'Tests green, merged.')
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.75): '
+
+                    # A prose sentence that answers the correction in the
+                    # user's latest message is judged on its own, with the
+                    # replaced text beside it.
+                    answers '{"ghost-sentence": 0.7}'
+                    ghost() { jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" --arg n "$1" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/homes.md", old_string: "Each home sets nix.package.", new_string: $n}}' | "$edit"; }
+                    res=$(ghost 'A home builds its profile. The homes do not set nix.package.')
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.7): '
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- 'sentence: The homes do not set nix.package.'
+                    grep '"ghost-sentence"' requests.log | tail -n 1 | jq -e '.state["the sentence"] == "The homes do not set nix.package." and .state["replaced text"] == "Each home sets nix.package."'
+                    # Below the push-back level the write goes through, and
+                    # the sentence reaches the model after the call.
+                    answers '{"ghost-sentence": 0.5}'
+                    [ -z "$(ghost 'A home builds its profile. The homes never set nix.package.')" ]
+                    ctx=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/homes.md", old_string: "Each home sets nix.package.", new_string: "A home builds its profile. The homes never set nix.package."}, tool_response: {}}' | ${lib.getExe judgeHooks.tic-check-turn.package} | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q -- '- arguing-with-ghosts sentence (judge 0.5): "The homes never set nix.package."' <<<"$ctx"
+
+                    # The whole turn: a finding in a message written
+                    # between tool calls, and a final message that leaves
+                    # out what the turn found.
+                    {
+                      jq -cn '{type: "user", message: {role: "user", content: "fix it"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "One — two."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
+                      jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "t", content: "ok"}]}}'
+                    } > turn.jsonl
+                    answers '{"final-message-recap": 0.95}'
+                    res=$(jq -cn --arg s "$session" --arg t "$PWD/turn.jsonl" '{session_id: $s, transcript_path: $t, stop_hook_active: false, last_assistant_message: "All fixed."}' | "$hook")
+                    reason <<<"$res" | grep -q '^The turn you just finished'
+                    reason <<<"$res" | grep -q -- '- em-dash (1): '
+                    reason <<<"$res" | grep -q -- '- final-message-recap (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '.state.text | contains("[earlier message of this turn]\nOne — two.") and contains("[final message]\nAll fixed.")'
+
+                    # Mid-turn: a labeled note after a tool call, for the
+                    # messages not judged yet, and nothing for the next
+                    # call until a new message is written.
+                    turnhook=${lib.getExe judgeHooks.tic-check-turn.package}
+                    {
+                      jq -cn '{type: "user", message: {role: "user", content: "ship it"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "Build green, pushed."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
+                    } > progress.jsonl
+                    post() { jq -cn --arg s "$session" --arg t "$PWD/progress.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Bash", tool_input: {command: "ls"}, tool_response: {}}' | "$turnhook"; }
+                    answers '{"fragments": 0.6, "information-density": [0, 0, 1, 0]}'
+                    ctx=$(post | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q '^tic-check: mid-turn verdicts' <<<"$ctx"
+                    grep -q 'not from the Bash call: it is not part of the tool' <<<"$ctx"
+                    grep -q -- '- fragments 0.6: ' <<<"$ctx"
+                    grep -q -- '- information-density 2 of 3, most likely dense' <<<"$ctx"
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("between tool calls")) and (.questions | has("fragments") and (has("final-message-recap") | not) and (has("arguing-with-ghosts") | not))'
+                    before=$(wc -l < requests.log)
+                    [ -z "$(post)" ]
+                    [ "$(wc -l < requests.log)" = "$before" ]
+                    jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "Now the docs."}, {type: "tool_use", id: "u", name: "Edit", input: {}}]}}' >> progress.jsonl
+                    post | jq -r .hookSpecificOutput.additionalContext | grep -q '^tic-check: mid-turn verdicts'
+                    tail -n 1 requests.log | jq -e '.state.text | contains("Now the docs.") and (contains("Build green") | not)'
+
+                    # Below the push-back level a write goes through, and
+                    # its verdict reaches the model after the call, once.
+                    answers '{"arguing-with-ghosts": 0.6}'
+                    call='{tool_name: "Edit", tool_input: {file_path: "home.nix", old_string: "a = 1;", new_string: "# a is not set here anymore."}}'
+                    [ -z "$(jq -cn --arg s "$session" "$call + {session_id: \$s}" | "$edit")" ]
+                    after() { jq -cn --arg s "$session" --arg t "$PWD/progress.jsonl" "$call + {session_id: \$s, transcript_path: \$t, tool_response: {}}" | "$turnhook"; }
+                    ctx=$(after | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q 'not from the Edit call' <<<"$ctx"
+                    grep -q 'The text this Edit call wrote, judged as code before it ran' <<<"$ctx"
+                    grep -q -- '- arguing-with-ghosts 0.6: ' <<<"$ctx"
+                    [ -z "$(after)" ]
+
+                    # The checks of the final message beside the session:
+                    # its reading load, a phrase the assistant coined, and
+                    # a reference to tool output the user never saw.
+                    export XDG_CACHE_HOME="$TMPDIR/cache"
+                    answers '{"information-density": [0, 0, 0, 1]}'
+                    res=$(stop "$(printf 'The parser now reads every line. %.0s' $(seq 60))")
+                    reason <<<"$res" | grep -q -- '- too-much-at-once (load '
+                    {
+                      jq -cn '{type: "user", origin: {kind: "human"}, message: {role: "user", content: "score the replies"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "The ladder has four levels."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
+                      jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "t", content: "ok"}]}}'
+                    } > coinage.jsonl
+                    answers '{"name-opacity": [0, 0, 1]}'
+                    res=$(jq -cn --arg s "$session" --arg t "$PWD/coinage.jsonl" '{session_id: $s, transcript_path: $t, stop_hook_active: false, last_assistant_message: "Each reply sits on the ladder."}' | "$hook")
+                    reason <<<"$res" | grep -q -- '- coined-phrase "the ladder" (judge 2): '
+                    {
+                      jq -cn '{type: "user", origin: {kind: "human"}, message: {role: "user", content: "record the lockfile"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "tool_use", id: "u", name: "Bash", input: {command: "nix build .#deps"}}]}}'
+                      jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "u", content: "starting the recording proxy on :8080"}]}}'
+                    } > references.jsonl
+                    answers '{}'
+                    [ -z "$(jq -cn --arg s "$session" --arg t "$PWD/references.jsonl" '{session_id: $s, transcript_path: $t, stop_hook_active: false, last_assistant_message: "The lockfile failed because the recording proxy bypasses the sandbox."}' | "$hook")" ]
+                    ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q -- '- references the user may not be able to resolve: ' <<<"$ctx"
+                    grep -q -- 'the recording proxy: The lockfile failed' <<<"$ctx"
+
+                    # Commit messages, pull request texts, and reviews
+                    # written through Bash.
+                    msg=${lib.getExe judgeHooks.tic-check-message.package}
+                    run() { jq -cn --arg c "$1" --arg s "$session" --arg t "$PWD/transcript.jsonl" --arg d "$PWD" '{session_id: $s, transcript_path: $t, cwd: $d, tool_name: "Bash", tool_input: {command: $c}}' | "$msg"; }
+                    answers '{"fragments": 0.95}'
+                    before=$(wc -l < requests.log)
+                    [ -z "$(run 'ls -la && git log --oneline -3')" ]
+                    [ "$(wc -l < requests.log)" = "$before" ]
+                    res=$(run "git add -A && git commit -m 'Build green, pushed.'")
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("commit message")) and (.state.text | rtrimstr("\n")) == "Build green, pushed." and (.questions | has("arguing-with-ghosts") and (has("information-density") | not))'
+                    [ -z "$(run "git add -A && git commit -m 'Build green, pushed.'")" ]
+                    answers '{"arguing-with-ghosts": 0.95}'
+                    res=$(run "gh pr review 59 --comment --body 'Nothing publishes into packages anymore.'")
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.95): '
+
+                    # A message that leans on what only the conversation
+                    # showed is denied once; a brief description in the
+                    # text exonerates it.
+                    answers '{"familiarity": [0.05, 0.05, 0.1, 0.8], "described": 0.2}'
+                    res=$(run "git commit -m 'docs: rewrite the passages a phrasing review flagged'")
+                    [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- needs-the-conversation "a phrasing review" (judge 0.8): '
+                    grep '"described"' requests.log | tail -n 1 | jq -e '.state.candidate == "a phrasing review" and (.questions | has("familiarity"))'
+                    answers '{"familiarity": [0.05, 0.05, 0.1, 0.8], "described": 0.9}'
+                    [ -z "$(run "git commit -m 'docs: rewrite the passages a phrasing review of the docs flagged'")" ]
+
+                    kill %1
                     touch $out
                   '';
 

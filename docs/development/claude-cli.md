@@ -495,7 +495,7 @@ hook).
   message on screen, so every step of the tic-check cycle is headed
   by a fixed line. The checker's block reason starts with
   `tic-check: check` (emitted whenever it fires, however confident it
-  is: a regex today, a classifier later) and asks the model for a
+  is: a regex entry or a judge dimension, below) and asks the model for a
   verdict only, `tic-check: clean` (the message stands) or
   `tic-check: tic`; the MessageDisplay hook below renders those two
   as status lines. On `tic` the hook (seeing `stop_hook_active` plus
@@ -509,6 +509,230 @@ hook).
   renders user events shows it; MessageDisplay cannot touch that,
   which is why those reasons carry the `tic-check: check` /
   `tic-check: rewrite` headers for the consumer to match on.
+
+### The judge (decision-model verdicts)
+
+The regex table catches only phrasings a pattern can find, and it
+cannot tell a real possessive from a dangling one when the noun sits in
+backticks or on the next line. The judge adds a System One decision
+model to the same cycle. A decision model reads a text (the `state`)
+and named yes/no questions and returns, for each question, the
+probability that the answer is yes, without generating text. The
+claude-code module's `judge.dimensions` are those questions, one per
+output-style rule that needs judgment (seeded from
+`modules/homeManager/claude-code/lib/judge-dimensions.nix`).
+
+- **Client.** `claude-response-judge`
+  (`pkg-overlays/default/packages/claude-response-judge`) posts the
+  text, with code blocks replaced by a marker, to `<url>/v1/systemone`
+  of each `judge.endpoints` entry in ascending `order` and prints the
+  first answer as `{endpoint, model, answers}`. The seeded `local`
+  entry is ch-local-llms' `decision-server` (elephant-1, 9B) at
+  `http://127.0.0.1:8000`. While no server runs there, the connection
+  is refused at once and costs no wait. The seeded `baseten` entry is
+  `https://inference.baseten.co` with
+  `decision-models/baseten-mammoth-27b-latest` (mammoth-1, 27B). Its key
+  is read at each request from `apiKeyFile` (default
+  `$XDG_CONFIG_HOME/baseten/api-key`) and sent as `Authorization:
+  Api-Key <key>`. While that file is missing, the entry is skipped. When
+  no endpoint answers, every hook behaves as it did with the regex
+  table alone.
+- **The whole turn.** In a turn with tool calls, each stretch of
+  text between calls is its own assistant message, and the Stop
+  payload's `last_assistant_message` holds only the final one. This
+  session showed it: a regex match in a message written between tool
+  calls did not appear in the finished turn's check. So the Stop hook
+  runs `claude-turn-text`, a third program of the judge package. It
+  reads the assistant text since the user's last typed prompt from
+  `transcript_path`, splits it at tool calls, heads each earlier
+  message `[earlier message of this turn]`, and appends the final
+  message headed `[final message]`. The final message is dropped from
+  the transcript side when the CLI has already written it there, so it
+  appears once either way. A turn longer than `judge.maxChars` keeps
+  its trailing characters behind a `[start of the turn cut]` marker, so
+  the newest text is what gets judged. The regex table, the judge, and
+  the stored verdict all work on that text.
+  The `final-message-recap` noul asks whether the final message leaves
+  out key context from the turn, such as a finding, a change, a
+  failure, or the next action. The rewrite step asks for the final
+  message again, restating any point the reader still needs.
+- **Mid-turn.** `tic-check-turn` (PostToolUse, every tool) judges the
+  messages the model writes between tool calls while the turn is still
+  running. After each tool call, `claude-turn-text --progress-state`
+  prints this turn's messages the hook has not judged yet, tracked by
+  digest under `$XDG_RUNTIME_DIR/claude-tic-check/progress/`. A tool
+  call with no new message before it costs a transcript read and no
+  judge call, and a `flock` makes parallel tool calls abstain instead of
+  judging the same text twice. The text is judged as kind `progress`,
+  which the prose nouls and the readability scores target but
+  `final-message-recap` and `arguing-with-ghosts` do not. The result
+  comes back as PostToolUse `additionalContext`, the channel the
+  redaction hook's notes use. The note is headed `tic-check: mid-turn
+  verdicts` and says that it comes from the hook and is not part of the
+  tool's output. It lists the regex and confident findings, the noul
+  problems at or above `judge.reportAbove`, and the scores at or above
+  `judge.turnScoresAbove` (1, a level up from the first). It never
+  blocks, and the Stop hook still checks the whole turn at its end.
+- **Confident blocks, less confident informs.** A write is judged once,
+  before it runs, by the edit or message hook. A finding at or above
+  `judge.writePushBackAbove` (0.7) denies the call. That level is lower
+  than the one for replies because a write stays in the repository
+  after the turn. Otherwise the hook keeps its
+  verdict under `$XDG_RUNTIME_DIR/claude-tic-check/writes/`, keyed by a
+  digest of the payload's `{tool_name, tool_input}` with sorted keys,
+  which the PreToolUse and PostToolUse payloads share. After the call,
+  `tic-check-turn` reads and deletes the verdict for the same call and
+  adds its noul problems at or above `judge.reportAbove` to the
+  mid-turn note, in a section that names the call. That is how a
+  comment or a commit message that argues with ghosts below the
+  push-back level reaches the model, which can still correct it with
+  another edit.
+- **Push-back.** On the first stop the Stop hook asks the judge, then
+  builds its findings from both checkers. A dimension with `pushBack`
+  set at or above `judge.pushBackAbove` (0.9) is a finding, and every
+  regex hit is one. The two checkers split the rules: a ban on a word
+  or a character is a regex entry, and the judge asks only what a
+  pattern cannot decide. The findings go out under
+  `tic-check: check`, and the verdict and rewrite steps are unchanged:
+  the model writing the message still has the last word.
+- **Context.** When the Stop hook lets a message stand, it writes the
+  verdict to `$XDG_RUNTIME_DIR/claude-tic-check/verdicts/<session>.json`.
+  The `tic-check-context` hook (UserPromptSubmit) reads and deletes it
+  with the next prompt. It returns the dimensions at or above
+  `judge.reportAbove` (0.5) as `hookSpecificOutput.additionalContext`,
+  headed `tic-check: verdicts`, which the CLI adds to the model's
+  context beside the prompt. The user does not see it. This path has
+  been exercised by the flake check against the hook's output shape
+  only. It has not been probed live in a CLI session the way the Stop
+  facts above were.
+- **Density.** `modules/homeManager/claude-code/lib/judge-readability.nix`
+  holds one score, `information-density`: how much each sentence
+  carries, from sparse (filler, restatement) through even (one point per
+  sentence) to packed. qev answers a score with a probability per level
+  and their expected level index; the client reports that index, the
+  most likely level, and its probability. The context hook lists it
+  with the style's aim. A score never pushes back on its own.
+- **Checks of the final message.** Three checks look at the final
+  message beside the session. A deterministic step finds candidates,
+  and the judge, where it takes part, answers about one candidate at a
+  time on a state built for it. They run in the Stop hook through
+  `tic_turn_checks` (`lib/tic-check-turn-checks.sh`); a finding joins
+  the `tic-check: check` cycle, and a report reaches the next prompt
+  through the context hook.
+  - Reading load (`judge.load`): `claude-turn-load` computes
+    ln(prose words + 1) + the density score − 0.25 · ln(words of the
+    prompt that opened the turn + 8). A turn a task notification opened
+    has a prompt of 0 words. It is reported at 7.15 and pushes back at
+    8.0.
+  - Coined phrases (`judge.coinage`): `claude-coinage-check` finds a
+    "the <word>" phrase at its second use when the assistant used it
+    first, the user has typed none of its words in any session, and
+    earlier sessions rarely use it. The judge scores each candidate's
+    opacity (`lib/judge-checks.nix`); a phrase is judged once per
+    session. It is reported at 1.0 and pushes back at 1.4. The edit hook
+    (prose files) and the message hook (commit messages, pull request
+    texts, reviews) run the same check on what they write, counting the
+    write as a use, and deny it once at 1.2 (`writePushBackAbove`). A
+    phrase a reply already used at a score between 1.2 and 1.4 was
+    reported then, and the first write that uses it is denied from the
+    kept score.
+  - References the user cannot resolve (`judge.references`):
+    `claude-reference-check` flags a definite reference to work the user
+    did not see ("the recording proxy", "their notes") that nothing
+    earlier in the message or the session anchors. It also flags a name
+    that appears only in tool calls and their output when the judge puts
+    P(not resolvable) × P(presupposed) at 0.44 or more. Two flags push
+    back; fewer are reported.
+  The cross-session statistics come from `claude-session-index`
+  (`sessions.py`). It keeps, for each transcript, the words the user
+  typed and the words and "the" phrases the assistant wrote, in
+  `$XDG_CACHE_HOME/claude-tic-check/session-index.json`. A transcript
+  only grows, so each update reads the lines appended since the last
+  one. A check that finds the index behind starts an update in a
+  detached process and uses the index as it stands. Over 55 transcripts
+  (825 MB) a cold update took 2.3 s, and each check about 0.1 s before
+  its judge calls, about 0.35 s each.
+- **Turn inputs and typed prompts.** A `user` entry with text starts a
+  turn. It is a typed prompt only when its `origin.kind` is `human`, or
+  when it has no origin. A task notification starts a turn but was not
+  typed, so it is not one of the user's messages.
+- **Edits.** The edit hook asks the judge about every write. The
+  target (`file_path`, `notebook_path`, or the emacs verbs' `file` and
+  `buffer`) decides the kind: prose when its extension is in
+  `judge.proseExtensions`, code otherwise. Each dimension's `targets`
+  lists the kinds it is asked of, and most target replies and prose
+  only. `arguing-with-ghosts` targets prose and code. It asks whether a
+  comment, doc, or test is written as a correction to the author's own
+  earlier version, arguing a difference from what was removed or
+  rejected, instead of for a new reader. For that question the request
+  carries the edit's replaced text (`old_string`) and the user's last
+  three typed messages, read from the tail of `transcript_path`
+  (entries of type `user` that are neither `isMeta`, which marks hook
+  feedback and skill bodies, nor `isSidechain`, nor tool results).
+- **Ghost sentences in prose writes** (`judge.ghosts`). Asked about a
+  whole write, the judge gives a single sentence that argues with
+  ghosts a middling probability, so a long write with one such sentence
+  passes. `claude-ghost-check` (`ghosts.py`) therefore asks about each
+  candidate sentence on its own. A sentence is a candidate when it
+  narrates a correction or the history of the text ("I had", "was
+  wrong", "the user's correction"), or when it states an absence, a
+  negation, or a non-change and shares a word with the user's latest
+  messages. The judge answers one noul question per candidate, with
+  the replaced text, the new text and those messages beside it
+  (`lib/judge-checks.nix`). A sentence at 0.6 or more denies the write
+  once, and one at 0.4 or more is reported after the call. On 95 prose
+  writes from earlier sessions, labeled by one rater, 14 argue with
+  ghosts. This check flags 13 writes, 10 of them correct, while the
+  whole-write question at the write level of 0.7 flags 7, 4 of them
+  correct.
+- **What only the conversation showed** (`judge.familiarity`). A file
+  may lean on the ecosystem and the codebase, and a pull request
+  description ideally only on the ecosystem. Neither may lean on what
+  only the chat or the work showed. Asked about a whole text, the judge
+  scores how hard the subject is, so `claude-familiarity-check`
+  (`familiarity.py`) asks about candidates. These are the phrases about
+  the work ("a phrasing review", "the next PR", "item 4", "29 of 29"),
+  then the names the reference check would find, minus those the
+  replaced text already holds, up to 8. Each gets a score on the ladder
+  general programming, the ecosystem, this codebase, this conversation
+  or task, and a noul asking whether the text says briefly what it is.
+  A brief description exonerates a candidate. One at the last level
+  with probability 0.7 or more denies the write once, and one at 0.4
+  or more is reported after the call. The edit hook runs it on prose
+  files and the message hook on commit messages, pull request texts and
+  reviews. On 100 commit and pull request messages from earlier
+  sessions, labeled by one rater, 7 lean on the conversation; at 0.7
+  the check flags 2, both correct.
+- **Commit messages, pull request texts, and reviews.** The model
+  writes these through Bash, so `tic-check-message` (PreToolUse on
+  `Bash`) checks them. `claude-vcs-message`, the second program of the
+  judge package, reads the command and prints the text it writes. That
+  covers `git ... commit` with `-m`, `--message`, or `-F` (a
+  here-document, the `"$(cat <<'EOF' ...)"` form, or a file), `gh pr
+  create|edit|comment|review` with `--title`, `--body`, or
+  `--body-file`, and `gh api` calls to a pull request's review and
+  comment endpoints, from `body` fields or every `body` in an
+  `--input` JSON document. The text is judged as kind `message`
+  together with the user's latest messages. Every noul with the
+  default targets asks about it, and so does arguing-with-ghosts, which
+  lets a message say what the change removes relative to the code
+  before it. A finding denies the command once, and an identical
+  re-issue runs.
+- **Latency.** On an R9700, decision-server answers a request of two or
+  three questions over a few hundred tokens in 0.15 to 0.26 s, and ten
+  questions over 5k tokens in 1.2 s (ch-local-llms README). The judge
+  asks a reply eleven questions (ten nouls and the density score), a
+  prose write nine prose nouls plus arguing-with-ghosts, and a code
+  write one. The hooks that run it are registered with a timeout of 10
+  s plus the sum of the enabled endpoints' timeouts (30 s each by
+  default), because a hung endpoint costs its whole timeout before the
+  next is tried.
+- **Calibration.** The thresholds of the three checks of the final
+  message were set from runs of elephant-1 over recent sessions,
+  against labels from one rater per check, so they are starting values.
+  The noul thresholds (0.9, 0.5) were not tuned. The flake check
+  `claude-tic-check-judge` drives the hooks against a stub server with
+  fixed answers, so it tests the plumbing, not the questions.
 
 ### MessageDisplay hooks (display-only rewriting)
 

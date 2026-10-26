@@ -91,19 +91,126 @@ let
     inherit (check) pattern rule;
   }) (lib.filterAttrs (_name: check: check.enable) cfg.ticChecks);
 
+  # The judge: a System One decision model that scores every finished
+  # message (and every write to a prose file) on judge.dimensions.
+  # The config below is what claude-response-judge reads; the hooks
+  # read the thresholds from the same file.
+  enabledDimensions = lib.filterAttrs (_name: dimension: dimension.enable) cfg.judge.dimensions;
+
+  judgeChecks = import ./lib/judge-checks.nix;
+
+  malformedDimensions = lib.attrNames (
+    lib.filterAttrs (
+      _name: dimension:
+      if dimension.type == "score" then
+        lib.length dimension.levels < 2 || lib.length dimension.levels > 10
+      else
+        dimension.criteria.true == null || dimension.criteria.false == null
+    ) enabledDimensions
+  );
+
+  enabledEndpoints = lib.sort (a: b: a.order < b.order) (
+    lib.mapAttrsToList (name: endpoint: endpoint // { inherit name; }) (
+      lib.filterAttrs (_name: endpoint: endpoint.enable) cfg.judge.endpoints
+    )
+  );
+
+  judgeConfig = {
+    endpoints = map (endpoint: {
+      inherit (endpoint)
+        name
+        url
+        model
+        apiKeyFile
+        timeout
+        ;
+    }) enabledEndpoints;
+    dimensions = lib.mapAttrs (_name: dimension: {
+      inherit (dimension)
+        type
+        instructions
+        criteria
+        levels
+        rule
+        targets
+        pushBack
+        ;
+    }) enabledDimensions;
+    inherit (cfg.judge)
+      pushBackAbove
+      writePushBackAbove
+      reportAbove
+      turnScoresAbove
+      maxChars
+      proseExtensions
+      load
+      coinage
+      ghosts
+      familiarity
+      references
+      ;
+  };
+
+  # The judge tries the endpoints one after another, so a hook that
+  # asks it may wait for every endpoint's timeout in turn.
+  judgeHookTimeout = 10 + lib.foldl' (sum: endpoint: sum + endpoint.timeout) 0 enabledEndpoints;
+
   claudeTicCheckHook = import ./lib/claude-tic-check-hook.nix {
     inherit pkgs;
     checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
   };
 
   # Edit-side twin (PreToolUse on the disk and buffer writers): the
-  # text a call writes is matched against the same table and the
-  # call is denied once with the findings; an identical re-issue
-  # passes (script: lib/claude-tic-check-edit-hook.sh).
+  # text a call writes is matched against the same table, and judged
+  # when it goes to a prose file, and the call is denied once with the
+  # findings; an identical re-issue passes (script:
+  # lib/claude-tic-check-edit-hook.sh).
   claudeTicCheckEditHook = import ./lib/claude-tic-check-edit-hook.nix {
     inherit pkgs;
     checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
   };
+
+  # PreToolUse on Bash: the commit message or pull request text a
+  # command writes is matched and judged the same way, and the command
+  # is denied once with the findings (script:
+  # lib/claude-tic-check-message-hook.sh).
+  claudeTicCheckMessageHook = import ./lib/claude-tic-check-message-hook.nix {
+    inherit pkgs;
+    checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
+  };
+
+  # PostToolUse on every tool: the messages written since the last
+  # tool call are judged while the turn runs, and the verdict comes
+  # back as a labeled note after the tool result (script:
+  # lib/claude-tic-check-turn-hook.sh).
+  claudeTicCheckTurnHook = import ./lib/claude-tic-check-turn-hook.nix {
+    inherit pkgs;
+    checks = ticCheckTable;
+    judge = judgeConfig;
+    claude-response-judge = cfg.judge.package;
+  };
+
+  # UserPromptSubmit: the judge's verdict on a message the Stop hook
+  # let stand reaches the model with the next prompt, as context
+  # (script: lib/claude-tic-check-context-hook.sh).
+  claudeTicCheckContextHook = import ./lib/claude-tic-check-context-hook.nix {
+    inherit pkgs;
+    judge = judgeConfig;
+  };
+
+  claudeResponseJudge =
+    pkgs.ch-ai-workbench.claude-response-judge or (throw ''
+      ch-ai-workbench.claude-code needs `pkgs.ch-ai-workbench.claude-response-judge`:
+      apply this flake's package overlay (`overlays.default`; a caisson
+      consumer lists the flake in `projects`) to the nixpkgs instance
+      home-manager uses.
+    '');
 
   # Companion MessageDisplay hook: the tic-check reminder asks for a
   # verdict in a fixed line ("tic-check: clean" / "tic-check: tic"),
@@ -439,12 +546,21 @@ in
         (an entry is identified by its command). The same manifest
         carries permissions.deny. Merged across all modules that set
         it. This module seeds
-        tic-check, the Stop hook driven by ticChecks, and
+        tic-check, the Stop hook driven by ticChecks and the judge,
+        tic-check-turn, the PostToolUse hook that judges the messages
+        written between tool calls while a turn runs and hands the
+        verdict to the model as a note labeled "tic-check: mid-turn
+        verdicts",
+        tic-check-context, the UserPromptSubmit hook that hands the
+        judge's verdict on a message the Stop hook let stand to the
+        model with the next prompt, and
         tic-check-display, the MessageDisplay hook that renders that
         check's verdict lines ("tic-check: clean" / "tic-check: tic")
         as status lines on screen, tic-check-edit, the PreToolUse
         hook that applies the same table to the text written by Edit,
-        Write, NotebookEdit, and the emacs server's edit verbs, and
+        Write, NotebookEdit, and the emacs server's edit verbs,
+        tic-check-message, the PreToolUse hook on Bash that applies it
+        to the commit message or pull request text a command writes, and
         redact, the PostToolUse hook that runs every tool result
         through betterleaks and replaces a recognized secret with
         [REDACTED:<rule>] before the model sees it, and reveal, the
@@ -552,12 +668,528 @@ in
         cannot be withdrawn, since a hook's only channel back is the
         reason string. The same table drives hooks.tic-check-edit,
         which denies an edit or write once with the findings and lets
-        an identical re-issue through. Merged across all
-        modules that set it. This module seeds the peer-programmer
-        style's regex-catchable bans (lib/tic-checks.nix):
-        elliptical-possessive, em-dash, click, arrow,
-        relationship-words, performed-enthusiasm.
+        an identical re-issue through. The judge (judge.*) feeds the
+        same cycle with the rules a pattern cannot decide. Merged
+        across all modules that set it. This module seeds the
+        peer-programmer style's bans on a word or a character
+        (lib/tic-checks.nix): elliptical-possessive, em-dash, click,
+        arrow, relationship-words, grows, performed-enthusiasm.
       '';
+    };
+
+    judge = {
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = claudeResponseJudge;
+        defaultText = lib.literalExpression "pkgs.ch-ai-workbench.claude-response-judge";
+        description = ''
+          The claude-response-judge client the tic-check hooks run: it
+          sends a text and the enabled dimensions to the System One API
+          (`POST /v1/systemone`) of the first endpoint that answers and
+          prints the probability the model put on each dimension.
+          Override to substitute a build.
+        '';
+      };
+
+      endpoints = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = "Whether the judge tries this endpoint.";
+              };
+
+              order = lib.mkOption {
+                type = lib.types.int;
+                default = 1000;
+                description = "Endpoints are tried in ascending order; the first that answers gives the verdict.";
+              };
+
+              url = lib.mkOption {
+                type = lib.types.str;
+                example = "http://127.0.0.1:8000";
+                description = "Base URL; the judge posts to <url>/v1/systemone.";
+              };
+
+              model = lib.mkOption {
+                type = lib.types.str;
+                example = "decision-models/baseten-elephant-9b-latest";
+                description = "The request's model field. A local decision-server serves one model and ignores it.";
+              };
+
+              apiKeyFile = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "/run/user/1000/secrets/baseten-api-key";
+                description = ''
+                  File holding the API key, read at each request and sent
+                  as `Authorization: Api-Key <key>` (Baseten's scheme).
+                  The judge skips the endpoint while the file is missing,
+                  unreadable, or empty. A path string rather than a Nix
+                  path, so the key stays out of the store.
+                '';
+              };
+
+              timeout = lib.mkOption {
+                type = lib.types.int;
+                default = 30;
+                description = ''
+                  Seconds the judge waits for this endpoint before trying
+                  the next. A server that is not running refuses the
+                  connection at once and costs no wait. The hooks that run
+                  the judge are registered with a timeout of 10 seconds
+                  plus the sum over the enabled endpoints.
+                '';
+              };
+            };
+          }
+        );
+        default = { };
+        example = lib.literalExpression ''
+          {
+            # A decision-server on another port.
+            local.url = "http://127.0.0.1:8010";
+            # The cloud's smaller model.
+            baseten.model = "decision-models/baseten-elephant-9b-latest";
+          }
+        '';
+        description = ''
+          System One endpoints the judge tries, in ascending order. This
+          module seeds two. local is a decision-server from ch-local-llms
+          (elephant-1, 9B) on this machine's GPU at its default port
+          (http://127.0.0.1:8000); while none is running the connection is
+          refused and the judge moves on at once. baseten is Base Labs'
+          hosted API at https://inference.baseten.co with mammoth-1 (27B),
+          the larger of the two decision models; its key is read from
+          $XDG_CONFIG_HOME/baseten/api-key, and while that file does not
+          exist the endpoint is skipped. With no endpoint answering, the
+          hooks run on the regex table alone. Merged across all modules
+          that set it.
+        '';
+      };
+
+      dimensions = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              enable = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = "Whether the judge asks this question.";
+              };
+
+              type = lib.mkOption {
+                type = lib.types.enum [
+                  "noul"
+                  "score"
+                ];
+                default = "noul";
+                description = ''
+                  noul: a yes/no question (criteria.true and criteria.false)
+                  whose answer is the probability that the problem is
+                  present; it can push back. score: an ordered scale
+                  (levels) whose answer is a probability for each level; it
+                  is reported to the model as context and never pushes back.
+                '';
+              };
+
+              instructions = lib.mkOption {
+                type = lib.types.str;
+                description = "The question the decision model answers about the text.";
+              };
+
+              criteria.true = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "For a noul: what the text looks like when the answer is yes (the problem is present).";
+              };
+
+              criteria.false = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "For a noul: what the text looks like when the answer is no.";
+              };
+
+              levels = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+                description = "For a score: the levels of the scale, low to high, 2 to 10 of them.";
+              };
+
+              rule = lib.mkOption {
+                type = lib.types.str;
+                description = ''
+                  One-line reminder returned to the model with this
+                  dimension: for a noul when the judge pushes back or
+                  reports it, for a score as the style's aim beside the
+                  level the judge found.
+                '';
+              };
+
+              targets = lib.mkOption {
+                type = lib.types.listOf (
+                  lib.types.enum [
+                    "reply"
+                    "progress"
+                    "prose"
+                    "code"
+                    "message"
+                  ]
+                );
+                default = [
+                  "reply"
+                  "progress"
+                  "prose"
+                  "message"
+                ];
+                description = ''
+                  What the judge asks this question about: reply (a finished
+                  turn), progress (the messages written between tool calls
+                  during a turn, judged by hooks.tic-check-turn), prose (a write to a file with an extension in
+                  judge.proseExtensions), code (a write to any other file),
+                  and message (a commit message or pull request text a Bash
+                  command writes). For prose, code, and message, the user's
+                  latest messages from the session transcript are sent beside
+                  the text, and for an edit also the text it replaces.
+                '';
+              };
+
+              pushBack = lib.mkOption {
+                type = lib.types.bool;
+                default = true;
+                description = ''
+                  Whether a probability at or above judge.pushBackAbove
+                  blocks the stop (or denies the edit) through the
+                  tic-check cycle. False keeps the dimension to the
+                  context report, for a question the model cannot answer
+                  reliably from the message alone.
+                '';
+              };
+            };
+          }
+        );
+        default = { };
+        description = ''
+          The questions the judge asks about finished messages and
+          writes to files (see targets). A noul dimension is a yes/no
+          question of the System One API whose answer is the probability
+          that the problem is present; at or above pushBackAbove it is a
+          finding of the tic-check cycle ("tic-check: check", then the
+          model's clean or tic verdict). A score dimension is an ordered
+          scale whose answer is a probability per level; it never pushes
+          back. When nothing pushes back, the noul dimensions at or above
+          reportAbove and every score reach the model with the next prompt
+          as context (hooks.tic-check-context). Merged across all modules
+          that set it. This module seeds lib/judge-readability.nix (the
+          score information-density, asked of replies and progress
+          messages), and the peer-programmer style's rules that need
+          judgment (lib/judge-dimensions.nix): arguing-with-ghosts (asked
+          of writes only), final-message-recap (asked of finished turns
+          only), count-obsession, staccato-pronouncements,
+          rhetorical-hooks, grading-the-point, self-correction-narration,
+          selling, fragments, process-narration, and undefined-terms
+          (report only). Reading load, coined phrases, and references the
+          reader cannot resolve are separate checks: judge.load,
+          judge.coinage, and judge.references.
+        '';
+      };
+
+      pushBackAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 0.9;
+        description = "Probability at or above which a dimension with pushBack set is a finding of the tic-check cycle, for a reply or a progress message.";
+      };
+
+      writePushBackAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 0.7;
+        description = ''
+          Probability at or above which a dimension with pushBack set
+          denies a write: an edit to a prose or code file, or a commit
+          message, pull request text, or review. It is lower than
+          pushBackAbove because a write stays in the repository after the
+          turn, while a reply is read once.
+        '';
+      };
+
+      reportAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 0.5;
+        description = ''
+          Probability at or above which a dimension is listed in the
+          context the model gets with the next prompt, when the Stop hook
+          let the message stand. Set to 0 to report every dimension.
+        '';
+      };
+
+      load = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Whether the Stop hook scores the reading load of the final message.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 7.15;
+          description = ''
+            Load at or above which the final message is reported with the
+            next prompt. The load is ln(prose words + 1) + the judge's
+            information-density score - 0.25 * ln(words of the prompt that
+            opened the turn + 8), computed by claude-turn-load: each density
+            level multiplies the words a message may spend by e, and a
+            longer request earns a longer answer. At density 2.2 and no
+            request, 7.15 is about 230 words.
+          '';
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 8.0;
+          description = "Load at or above which the final message is a finding of the tic-check cycle.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "say less at once: lead with what the reader needs now, cut what they do not, and leave detail for when it is asked for";
+          description = "Reminder returned with a load finding or report.";
+        };
+      };
+
+      coinage = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the Stop hook and the hooks on durable writes (prose
+            files, commit messages, pull request texts) look for phrases
+            the assistant coined. claude-coinage-check finds "the <word>"
+            phrases at their second use when the assistant used them first,
+            the user has used none of their words in any session, and
+            earlier sessions rarely use them; the judge then scores each
+            candidate's opacity on its own state.
+          '';
+        };
+
+        instructions = lib.mkOption {
+          type = lib.types.str;
+          description = "The score question the judge answers about one candidate phrase.";
+        };
+
+        levels = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          description = "The levels of that score, from an ordinary term to an opaque coined name.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 1.0;
+          description = "Opacity score (expected level) at or above which a candidate is reported.";
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 1.4;
+          description = "Opacity score at or above which a candidate in the final message is a finding that blocks the stop.";
+        };
+
+        writePushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 1.2;
+          description = ''
+            Opacity score at or above which a candidate in a write (a prose
+            file, a commit message, a pull request text, a review) denies
+            the write once. A phrase the session already judged below
+            pushBackAbove is denied from its kept score when it reaches this
+            level.
+          '';
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "do not coin names from generic words; use the real name (the function, the file, the option) or say plainly what the thing is";
+          description = "Reminder returned with a coinage finding or report.";
+        };
+      };
+
+      ghosts = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the edit hook looks for sentences of a prose write that
+            argue with ghosts. claude-ghost-check takes a sentence that
+            narrates a correction or the history of the text, or one that
+            states an absence or a non-change about something named in the
+            latest messages from the user, and asks the judge whether a
+            writer who never saw the replaced text or the conversation would
+            write it.
+          '';
+        };
+
+        instructions = lib.mkOption {
+          type = lib.types.str;
+          description = "The noul question the judge answers about one candidate sentence.";
+        };
+
+        criteria = lib.mkOption {
+          type = lib.types.attrsOf lib.types.str;
+          description = "The `true` and `false` criteria of that question.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.4;
+          description = "Probability at or above which a sentence is reported after the write.";
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.6;
+          description = "Probability at or above which a sentence denies the write once.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          description = "Reminder returned with a finding or report.";
+        };
+      };
+
+      familiarity = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the edit hook (prose files) and the message hook
+            (commit messages, pull request texts, reviews) look for what a
+            write leans on that only the conversation or the task showed.
+            claude-familiarity-check takes the phrases about the work and
+            the names of the write that the replaced text does not already
+            hold, and asks the judge about each one: what a reader must know
+            to resolve it, and whether the text briefly says what it is.
+          '';
+        };
+
+        familiarity = lib.mkOption {
+          type = lib.types.attrsOf lib.types.anything;
+          description = "The score question, from general programming to this conversation or task.";
+        };
+
+        described = lib.mkOption {
+          type = lib.types.attrsOf lib.types.anything;
+          description = "The noul question whether the text briefly says what the candidate is.";
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.7;
+          description = "Probability of the conversation level at or above which an undescribed candidate denies the write once.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.4;
+          description = "Probability of the conversation level at or above which an undescribed candidate is reported after the write.";
+        };
+
+        describedBelow = lib.mkOption {
+          type = lib.types.float;
+          default = 0.8;
+          description = "A candidate counts as undescribed when the described question is below this probability.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "write for a reader who never saw the conversation: a file may lean on the codebase, and a pull request description ideally only on the ecosystem; give what only the chat or the work showed a brief description in the sentence that uses it, or leave it out, rather than making the text longer";
+          description = "Reminder returned with a finding or report.";
+        };
+      };
+
+      references = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the Stop hook looks for references the user cannot
+            resolve. claude-reference-check flags definite references to
+            work the user never saw ("the recording proxy", "their notes")
+            that nothing earlier in the message anchors, and names that
+            appear only in tool calls and output, outside anything the user
+            has typed or been shown, when the judge confirms the reader can
+            neither resolve them nor is expected to know them.
+          '';
+        };
+
+        resolvable = lib.mkOption {
+          type = lib.types.attrs;
+          description = "The noul question whether the reader can tell what a tool-only name refers to.";
+        };
+
+        presupposed = lib.mkOption {
+          type = lib.types.attrs;
+          description = "The noul question whether the message uses a tool-only name as if the reader already knew it.";
+        };
+
+        flagAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.44;
+          description = "P(not resolvable) times P(presupposed) at or above which a tool-only name is flagged.";
+        };
+
+        blockAtFlags = lib.mkOption {
+          type = lib.types.int;
+          default = 2;
+          description = "Number of flagged references at which the final message is a finding; fewer are reported with the next prompt.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "give each reference the few words a reader who did not see the work needs: what the thing is and where it came from";
+          description = "Reminder returned with a reference finding or report.";
+        };
+      };
+
+      turnScoresAbove = lib.mkOption {
+        type = lib.types.float;
+        default = 1.0;
+        description = ''
+          Expected position on its scale (0 is the first level) at or above
+          which a score is listed in the mid-turn note of
+          hooks.tic-check-turn. The note after a finished turn lists every
+          score; the mid-turn note, which can come after every tool call,
+          lists only the scores that are off the first level by this much.
+        '';
+      };
+
+      maxChars = lib.mkOption {
+        type = lib.types.int;
+        default = 40000;
+        description = ''
+          Longest text, after code blocks are replaced by a marker, the
+          judge sends; a longer text is cut. elephant-1 was trained on
+          prompts of at most 16,384 tokens, and a local decision-server
+          refuses a longer one (the judge then tries the next endpoint).
+        '';
+      };
+
+      proseExtensions = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [
+          "md"
+          "markdown"
+          "org"
+          "txt"
+          "rst"
+          "adoc"
+        ];
+        description = ''
+          File extensions whose writes the judge reads as prose and asks
+          the dimensions targeting prose. A write to any other file is
+          read as code and asked the dimensions targeting code.
+        '';
+      };
     };
   };
 
@@ -566,6 +1198,10 @@ in
       {
         assertion = unknownServerNames == [ ];
         message = "ch-ai-workbench.lspServers names not in the language-server table: ${lib.concatStringsSep ", " unknownServerNames}";
+      }
+      {
+        assertion = malformedDimensions == [ ];
+        message = "ch-ai-workbench.claude-code.judge.dimensions: a noul needs criteria.true and criteria.false, a score 2 to 10 levels: ${lib.concatStringsSep ", " malformedDimensions}";
       }
       {
         assertion = duplicateClaims == { };
@@ -604,11 +1240,58 @@ in
 
     ch-ai-workbench.claude-code.ticChecks = import ./lib/tic-checks.nix;
 
+    ch-ai-workbench.claude-code.judge.dimensions =
+      import ./lib/judge-dimensions.nix // import ./lib/judge-readability.nix;
+
+    ch-ai-workbench.claude-code.judge.coinage = {
+      instructions = lib.mkDefault judgeChecks.coinage.instructions;
+      levels = lib.mkDefault judgeChecks.coinage.levels;
+    };
+
+    ch-ai-workbench.claude-code.judge.ghosts = {
+      instructions = lib.mkDefault judgeChecks.ghosts.instructions;
+      criteria = lib.mkDefault judgeChecks.ghosts.criteria;
+      rule = lib.mkDefault (import ./lib/judge-dimensions.nix).arguing-with-ghosts.rule;
+    };
+
+    ch-ai-workbench.claude-code.judge.familiarity = {
+      familiarity = lib.mkDefault judgeChecks.familiarity.familiarity;
+      described = lib.mkDefault judgeChecks.familiarity.described;
+    };
+
+    ch-ai-workbench.claude-code.judge.references = {
+      resolvable = lib.mkDefault judgeChecks.references.resolvable;
+      presupposed = lib.mkDefault judgeChecks.references.presupposed;
+    };
+
+    # The local GPU first, the cloud when it is not running. The fields
+    # are defaults so a consumer can move either endpoint (another port,
+    # the cloud's elephant-1) by setting the field.
+    ch-ai-workbench.claude-code.judge.endpoints = {
+      local = {
+        order = lib.mkDefault 100;
+        url = lib.mkDefault "http://127.0.0.1:8000";
+        model = lib.mkDefault "elephant-1";
+      };
+      baseten = {
+        order = lib.mkDefault 200;
+        url = lib.mkDefault "https://inference.baseten.co";
+        model = lib.mkDefault "decision-models/baseten-mammoth-27b-latest";
+        apiKeyFile = lib.mkDefault "${config.xdg.configHome}/baseten/api-key";
+      };
+    };
+
     ch-ai-workbench.claude-code.hooks = {
       tic-check = {
         event = "Stop";
         command = "claude-tic-check-hook";
         package = claudeTicCheckHook;
+        timeout = judgeHookTimeout;
+      };
+      tic-check-context = {
+        event = "UserPromptSubmit";
+        command = "claude-tic-check-context-hook";
+        package = claudeTicCheckContextHook;
       };
       tic-check-display = {
         event = "MessageDisplay";
@@ -620,6 +1303,20 @@ in
         matcher = "Edit|Write|NotebookEdit|mcp__emacs__edit-file|mcp__emacs__edit-buffer";
         command = "claude-tic-check-edit-hook";
         package = claudeTicCheckEditHook;
+        timeout = judgeHookTimeout;
+      };
+      tic-check-turn = {
+        event = "PostToolUse";
+        command = "claude-tic-check-turn-hook";
+        package = claudeTicCheckTurnHook;
+        timeout = judgeHookTimeout;
+      };
+      tic-check-message = {
+        event = "PreToolUse";
+        matcher = "Bash";
+        command = "claude-tic-check-message-hook";
+        package = claudeTicCheckMessageHook;
+        timeout = judgeHookTimeout;
       };
       redact = {
         event = "PostToolUse";

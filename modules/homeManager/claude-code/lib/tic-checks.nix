@@ -4,8 +4,8 @@
 # with few false positives.  Patterns are GNU grep EREs matched
 # case-insensitively against the finished message with code fences
 # and backtick spans removed; the rule is the one-line reminder the
-# model gets back.  Left out on purpose: "never", "grows", "seam",
-# and "rides", which have too many ordinary uses for a pattern.
+# model gets back.  A hit is a trigger, not a verdict: the model
+# answers the check with clean when the match is legitimate.
 {
   # The ownership handoff: a possessive left dangling at the end of a
   # clause ("two steps are yours", "the merge is the owner's", "the
@@ -34,8 +34,14 @@
     rule = "write the sentence; no \"X → Y\" shorthand";
   };
   relationship-words = {
-    pattern = "\\b(load-bearing|substrate|travels)\\b";
-    rule = "say the actual relationship or what breaks, not \"load-bearing\", \"substrate\", or \"travels\"";
+    pattern = "\\b(load-bearing|substrate|travels|rides|riding|seams?)\\b";
+    rule = "say the actual relationship, what breaks, or what the thing is, not \"load-bearing\", \"substrate\", \"travels\", \"rides\", or \"seam\"";
+  };
+  # A system or a person gaining a capability; a number or a file
+  # growing in size also matches, and is answered clean.
+  grows = {
+    pattern = "\\bgr(ow|ows|ew|own|owing)\\b";
+    rule = "say what happens (\"if we add a title hook\", \"once the parser handles nested lists\"), not that something \"grows\" a capability";
   };
   performed-enthusiasm = {
     pattern = "\\b(happy|glad) to\\b";
