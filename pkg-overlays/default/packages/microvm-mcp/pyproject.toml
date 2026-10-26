@@ -4,14 +4,15 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "microvm"
+name = "microvm-mcp"
 version = "0.1.0"
-description = "Lease, start and stop the microvm guest slots of a machine for Claude Code sessions"
+description = "The MCP server that leases microvm guests of the user to Claude Code sessions"
 requires-python = ">=3.11"
 license = "MIT"
+dependencies = ["ch-microvm"]
 
 [project.scripts]
-microvm = "microvm_slots.cli:main"
+microvm-mcp = "microvm_mcp.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

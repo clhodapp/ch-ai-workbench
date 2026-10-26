@@ -1,30 +1,34 @@
 # SPDX-License-Identifier: MIT
-"""The `microvm` MCP server: `microvm mcp`.
+"""The `microvm` MCP server: `microvm-mcp`.
 
 Claude Code starts the server from the `microvm` plugin, outside the
-sandbox of Bash, so the server reaches the system bus and the vsock of
-the guests itself. It serves the tools `microvm_up`, `microvm_down` and
-`microvm_status` for the kinds that the configuration lets agents use,
-and for no other kind. It starts a guest only when `microvm_up` asks.
+sandbox of Bash, so the server reaches the user's systemd manager and
+the hybrid vsock sockets of the guests itself. It serves the tools
+`microvm_up`, `microvm_down` and `microvm_status` for the kinds that
+the configuration lets agents use, and for no other kind. It starts a
+guest only when `microvm_up` asks. The instances, their leases and
+their units are those of the library `ch_microvm`, so `ch-microvm
+status` shows them and `ch-microvm reap` stops them.
 
 When `microvm_up` brings up a guest of a kind that serves MCP, the
-server connects to the vsock port of the guest, through `AF_VSOCK` or
-through the hybrid vsock socket of the slot, and initializes the MCP
-server of the guest, and adds the tools of that server to its own
-tools, under their own names. A name that a tool of this server or of a
-guest connected earlier already has gets the prefix `<kind>_`. The
-server then sends `notifications/tools/list_changed`. It forwards a call
-of such a tool to its guest, and the progress and log notifications of
-the guest back. When the guest stops, its connection drops, or
+server connects to the vsock port of the guest through the hybrid vsock
+socket in the directory of its instance, initializes the MCP server of
+the guest, and adds the tools of that server to its own tools, under
+their own names. A name that a tool of this server or of a guest
+connected earlier already has gets the prefix `<kind>_`. The server
+then sends `notifications/tools/list_changed`. It forwards a call of
+such a tool to its guest, and the progress and log notifications of the
+guest back. When the guest stops, its connection drops, or
 `microvm_down` stops it, the server fails the calls in flight, removes
 the tools of the guest and sends `list_changed` again.
 
-The holder of what the server claims is its parent process, Claude
-Code, with that process's start time. The server stops the slots of the
-session when its input ends or it receives SIGTERM or SIGHUP, which
-happens when the session ends. It queues each stop with
-`systemctl --no-block`, so that it exits before Claude Code kills it.
-The reap timer stops the slots of a session that crashed.
+The holder of what the server leases is its parent process, Claude
+Code, with that process's start time. The server stops the instances
+of the session when its input ends or it receives SIGTERM or SIGHUP,
+which happens when the session ends. It queues each stop with
+`systemctl --user --no-block`, so that it exits before Claude Code
+kills it. The reap timer of ch-microvm stops the instances of a session
+that crashed.
 """
 
 from __future__ import annotations
@@ -37,58 +41,76 @@ import sys
 import threading
 from typing import Any, Callable
 
-from .guests import Guest, connect_guest, read_lines
-from .slots import Caller, Refused, Slots
-from .transport import Endpoint
+from ch_microvm.instances import Holder, Instances, Refused
+from ch_microvm.transport import Endpoint
 
-SERVER_INFO = {"name": "microvm", "version": "0.1.0"}
+from .guests import Guest, connect_guest, read_lines
+
+SERVER_INFO = {"name": "microvm", "version": "0.3.0"}
 PROTOCOL_VERSION = "2025-06-18"
 MANAGER_TOOLS = ("microvm_up", "microvm_down", "microvm_status")
 # What the server forwards from a guest to Claude Code without a request.
 FORWARDED_NOTIFICATIONS = ("notifications/progress", "notifications/message")
 
 
-def kind_line(kind: str, info: dict) -> str:
-    count = len(info["slots"])
-    line = f"{kind} ({count} slot{'s' if count != 1 else ''})"
-    mcp = info.get("mcp")
+def kind_line(kind: str, info: dict, mcp: dict | None) -> str:
+    count = int(info["maxInstances"])
+    line = f"{kind} (at most {count} instance{'s' if count != 1 else ''})"
     if mcp is not None:
         line += f", serving MCP: {mcp['description']}"
     return line
 
 
-def share_line(kind: str, info: dict) -> str:
+def share_line(kind: str, info: dict, lease: dict | None) -> str:
     """What the result of `microvm_up` says about reaching the share
     directories of a guest of `kind` from Bash."""
-    if info.get("shareRoot") is None:
+    if not info.get("shares") or lease is None:
         return ""
+    if not lease.get("default"):
+        return (
+            "No sandbox module grants Bash commands the share directories of a directory passed to microvm_up; "
+            "Bash commands reach them only where the sandbox of the session already lets them write\n"
+        )
     return (
         "Bash commands of a session reach these share directories only when its checkout has "
         f"chosen the sandbox module microvm-{kind}\n"
     )
 
 
-def manager_tools(slots: Slots) -> list[dict[str, Any]]:
-    kinds = sorted(slots.kinds)
-    names = sorted(slots.slots)
-    listing = "; ".join(kind_line(kind, slots.kind_info[kind]) for kind in kinds) or "none"
+def manager_tools(instances: Instances, mcp_kinds: dict[str, dict | None]) -> list[dict[str, Any]]:
+    kinds = sorted(instances.kinds)
+    names = list(instances.instances)
+    listing = "; ".join(kind_line(kind, instances.kind_info[kind], mcp_kinds.get(kind)) for kind in kinds) or "none"
     return [
         {
             "name": "microvm_up",
             "description": (
-                "Lease a guest virtual machine of a kind to this session, start it, and wait until it "
-                "answers. The result names the slot, its vsock CID and port, and its share directories "
-                "on the host. Bash commands reach the share directories of a kind only in a checkout "
-                "that has chosen the sandbox module microvm-<kind>. "
-                "A guest this session already holds is used again, with the files in its shares. A "
-                "guest newly leased to this session starts with empty shares. When the kind serves "
-                "MCP, the tools of the guest then appear among the tools of this server. Start a guest "
-                "only when the task needs it: each takes memory and the slots of a kind are few. "
-                f"The kinds: {listing}."
+                "Lease a guest virtual machine of a kind to this session, start it as a unit of the user's "
+                "systemd manager, and wait until it answers. The guest runs as an instance named "
+                "<kind>-<n>, in a directory of its own. The result names the instance, its directory, its "
+                "vsock port and its share directories on the host. Without directory, the instance runs in "
+                "its default directory, which is emptied when this session newly leases the instance. With "
+                "directory, an absolute path, the instance runs there: the directory is created when it is "
+                "missing and is never emptied. Bash commands reach the share directories of a default "
+                "directory only in a checkout that has chosen the sandbox module microvm-<kind>. No sandbox "
+                "module grants a directory passed here. "
+                "An instance this session already holds is used again, with the files in its directory. "
+                "When the kind serves MCP, the tools of the guest then appear among the tools of this "
+                "server. Start a guest only when the task needs it: each takes memory and the instances of "
+                f"a kind are few. The kinds: {listing}."
             ),
             "inputSchema": {
                 "type": "object",
-                "properties": {"kind": {"type": "string", "enum": kinds, "description": "The kind of guest."}},
+                "properties": {
+                    "kind": {"type": "string", "enum": kinds, "description": "The kind of guest."},
+                    "directory": {
+                        "type": "string",
+                        "description": (
+                            "An absolute path for the directory of the instance. The default directory of "
+                            "the instance is used when it is left out."
+                        ),
+                    },
+                },
                 "required": ["kind"],
             },
         },
@@ -96,16 +118,17 @@ def manager_tools(slots: Slots) -> list[dict[str, Any]]:
             "name": "microvm_down",
             "description": (
                 "Stop the guests this session holds, or one of them, and remove the tools they served. "
-                "Stop a guest when the task that needed it is done. A guest started again later is a "
-                "fresh guest. The guests of this session also stop when the session ends."
+                "Stop a guest when the task that needed it is done. The files in the directory of an "
+                "instance stay until a new session leases its default directory. The guests of this "
+                "session also stop when the session ends."
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "slot": {
+                    "instance": {
                         "type": "string",
                         "enum": names,
-                        "description": "One slot to stop. Without it, every slot this session holds stops.",
+                        "description": "One instance to stop. Without it, every instance this session holds stops.",
                     }
                 },
             },
@@ -113,13 +136,13 @@ def manager_tools(slots: Slots) -> list[dict[str, Any]]:
         {
             "name": "microvm_status",
             "description": (
-                "Show the guests this session holds, each with the state of its unit, whether it "
-                "answers and how long it has run, and how many slots of each kind are free. With "
-                "all, show every slot and the session that holds it."
+                "Show the instances this session holds, each with its directory, the state of its unit, "
+                "whether it answers and how long it has run, and how many instances of each kind are "
+                "free. With all, show every instance and its holder. This session is the caller."
             ),
             "inputSchema": {
                 "type": "object",
-                "properties": {"all": {"type": "boolean", "description": "Show every slot."}},
+                "properties": {"all": {"type": "boolean", "description": "Show every instance."}},
             },
             "annotations": {"readOnlyHint": True},
         },
@@ -134,29 +157,32 @@ def text_result(text: str, is_error: bool = False) -> dict[str, Any]:
 
 
 class Server:
-    """One MCP session over `slots`, for `caller`. Every message goes
-    through `events`; the thread that calls `run` handles them in order.
-    The tools of this server run in threads of their own, so a guest
-    that boots does not hold up the calls of other guests."""
+    """One MCP session over `instances`, for `holder`. `mcp_kinds` gives
+    the MCP server of the guest of each kind, or None. Every message
+    goes through `events`; the thread that calls `run` handles them in
+    order. The tools of this server run in threads of their own, so a
+    guest that boots does not hold up the calls of other guests."""
 
     def __init__(
         self,
-        slots: Slots,
-        caller: Caller,
+        instances: Instances,
+        holder: Holder,
         send: Callable[[dict[str, Any]], None],
+        mcp_kinds: dict[str, dict | None],
         *,
         connect: Callable[[Endpoint], socket.socket] = connect_guest,
     ) -> None:
-        self.slots = slots
-        self.caller = caller
+        self.instances = instances
+        self.holder = holder
         self.send_client = send
+        self.mcp_kinds = mcp_kinds
         self.connect = connect
         self.events: queue.Queue[tuple] = queue.Queue()
         self.guests: dict[str, Guest] = {}
         self.generation = 0
         # The `microvm_up` calls that wait for the guest of a kind to
         # list its tools: the ID of each call and what bringing up the
-        # slot printed.
+        # instance printed.
         self.waiting: dict[str, list[tuple[Any, str]]] = {}
         # The tools of the guests, by the name this server gives each,
         # to the kind and the name of the tool in its guest.
@@ -195,14 +221,14 @@ class Server:
             self.cleanup()
 
     def cleanup(self) -> None:
-        """Close the connections and stop the slots of the session, best
-        effort."""
+        """Close the connections and stop the instances of the session,
+        best effort."""
         for guest in list(self.guests.values()):
             guest.close()
         self.guests.clear()
         try:
-            with self.slots.capture() as out:
-                self.slots.down(self.caller, None, no_block=True)
+            with self.instances.capture() as out:
+                self.instances.down(self.holder, None, no_block=True)
             sys.stderr.write(out.getvalue())
         except (Refused, OSError) as error:
             print(f"microvm: {error}", file=sys.stderr)
@@ -239,7 +265,7 @@ class Server:
         elif method == "ping":
             self.reply(msg["id"], {})
         elif method == "tools/list":
-            self.reply(msg["id"], {"tools": manager_tools(self.slots) + self.guest_tools})
+            self.reply(msg["id"], {"tools": manager_tools(self.instances, self.mcp_kinds) + self.guest_tools})
         elif method == "tools/call":
             self.call(msg["id"], params)
         else:
@@ -277,26 +303,29 @@ class Server:
         """Run a tool of this server, in a thread of its own, and hand
         the outcome to the loop."""
         error = None
-        with self.slots.capture() as out:
+        with self.instances.capture() as out:
             try:
                 if name == "microvm_up":
                     kind = args.get("kind")
-                    if kind not in self.slots.kinds:
+                    if kind not in self.instances.kinds:
                         raise Refused(
                             f"unknown kind {kind!r}; the kinds agents may use are "
-                            f"{', '.join(sorted(self.slots.kinds)) or 'none'}"
+                            f"{', '.join(sorted(self.instances.kinds)) or 'none'}"
                         )
-                    self.slots.up(kind, self.caller)
+                    directory = args.get("directory")
+                    if directory is not None and not isinstance(directory, str):
+                        raise Refused("directory is not a string")
+                    self.instances.up(kind, self.holder, directory)
                 elif name == "microvm_down":
-                    slot = args.get("slot")
-                    if slot is not None and slot not in self.slots.slots:
+                    instance = args.get("instance")
+                    if instance is not None and instance not in self.instances.instances:
                         raise Refused(
-                            f"unknown slot {slot!r}; the slots agents may use are "
-                            f"{', '.join(sorted(self.slots.slots)) or 'none'}"
+                            f"unknown instance {instance!r}; the instances agents may use are "
+                            f"{', '.join(self.instances.instances) or 'none'}"
                         )
-                    self.slots.down(self.caller, slot)
+                    self.instances.down(self.holder, instance)
                 else:
-                    self.slots.status(self.caller, bool(args.get("all")))
+                    self.instances.status(self.holder, bool(args.get("all")))
             except (Refused, OSError) as e:
                 error = str(e)
             except Exception as e:  # noqa: BLE001 (report to the agent, keep serving)
@@ -310,39 +339,41 @@ class Server:
             self.reply(msg_id, text_result(text + error, is_error=True))
         elif name == "microvm_up":
             kind = args["kind"]
-            self.connect_guest(kind, msg_id, text + share_line(kind, self.slots.kind_info[kind]))
+            held = self.held(kind)
+            lease = self.instances.leases().get(held) if held is not None else None
+            self.connect_guest(kind, msg_id, text + share_line(kind, self.instances.kind_info[kind], lease))
         else:
             self.reply(msg_id, text_result(text))
 
     def drop_stopped(self) -> None:
-        """Close the connections to the guests whose slot this session
-        no longer holds."""
-        leases = self.slots.leases()
+        """Close the connections to the guests whose instance this
+        session no longer holds."""
+        leases = self.instances.leases()
         for guest in list(self.guests.values()):
-            lease = leases.get(guest.slot)
-            if lease is None or not self.slots.holds(self.caller, lease):
+            lease = leases.get(guest.instance)
+            if lease is None or not self.instances.holds(self.holder, lease):
                 self.drop(guest, "it was stopped")
 
     # The guests.
 
     def held(self, kind: str) -> str | None:
-        leases = self.slots.leases()
-        for slot in self.slots.kinds[kind]:
-            if slot in leases and self.slots.holds(self.caller, leases[slot]):
-                return slot
+        leases = self.instances.leases()
+        for name in self.instances.kinds[kind]:
+            if name in leases and self.instances.holds(self.holder, leases[name]):
+                return name
         return None
 
     def connect_guest(self, kind: str, msg_id: Any, text: str) -> None:
         """After `microvm_up` of `kind`: connect to the MCP server of its
         guest when the kind serves MCP, and answer the call once the
         tools of the guest are listed."""
-        if self.slots.kind_info[kind].get("mcp") is None:
+        if self.mcp_kinds.get(kind) is None:
             self.reply(msg_id, text_result(text))
             return
-        slot = self.held(kind)
+        name = self.held(kind)
         guest = self.guests.get(kind)
-        if guest is not None and guest.slot != slot:
-            self.drop(guest, "this session holds another slot of its kind now")
+        if guest is not None and guest.instance != name:
+            self.drop(guest, "this session holds another instance of its kind now")
             guest = None
         if guest is not None and guest.state == "ready":
             self.reply(msg_id, text_result(text + self.tools_line(kind)))
@@ -350,22 +381,23 @@ class Server:
         self.waiting.setdefault(kind, []).append((msg_id, text))
         if guest is not None:
             return  # the connection is being set up
-        if slot is None:
+        lease = self.instances.leases().get(name) if name is not None else None
+        if name is None or lease is None:
             self.answer_waiting(kind, f"the {kind} guest is no longer held by this session", is_error=True)
             return
-        endpoint = self.slots.endpoint(slot)
+        endpoint = self.instances.endpoint(name, lease["directory"])
         assert endpoint is not None  # a kind with `mcp` has a vsock port
         try:
             sock = self.connect(endpoint)
         except OSError as e:
             self.answer_waiting(
                 kind,
-                f"the MCP server of {slot} at {endpoint} is not reachable: {e}",
+                f"the MCP server of {name} at {endpoint} is not reachable: {e}",
                 is_error=True,
             )
             return
         self.generation += 1
-        guest = Guest(kind, slot, self.generation, sock, self.deliver)
+        guest = Guest(kind, name, self.generation, sock, self.deliver)
         self.guests[kind] = guest
         try:
             guest.request(
@@ -475,7 +507,10 @@ class Server:
                         f"that name. " + str(tool.get("description") or "")
                     ).strip()
                 if name in used:
-                    print(f"microvm: the tool {original} of {guest.slot} is left out: {name} is taken", file=sys.stderr)
+                    print(
+                        f"microvm: the tool {original} of {guest.instance} is left out: {name} is taken",
+                        file=sys.stderr,
+                    )
                     continue
                 used.add(name)
                 tool["name"] = name
@@ -491,15 +526,17 @@ class Server:
         guest.close()
         for answers in guest.pending.values():
             if answers[0] == "call":
-                self.fail(answers[1], -32000, f"the {guest.kind} guest {guest.slot} is gone: {reason}")
+                self.fail(answers[1], -32000, f"the {guest.kind} guest {guest.instance} is gone: {reason}")
         guest.pending.clear()
-        self.answer_waiting(guest.kind, f"the MCP server of {guest.slot} is not available: {reason}", is_error=True)
+        self.answer_waiting(
+            guest.kind, f"the MCP server of {guest.instance} is not available: {reason}", is_error=True
+        )
         if guest.state == "ready":
             self.rebuild()
             self.list_changed()
 
 
-def serve(slots: Slots, caller: Caller) -> int:
+def serve(instances: Instances, holder: Holder, mcp_kinds: dict[str, dict | None]) -> int:
     lock = threading.Lock()
 
     def send(msg: dict[str, Any]) -> None:
@@ -507,7 +544,7 @@ def serve(slots: Slots, caller: Caller) -> int:
             sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
             sys.stdout.flush()
 
-    server = Server(slots, caller, send)
+    server = Server(instances, holder, send, mcp_kinds)
     # SystemExit unwinds through the cleanup of `run`.
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, lambda *_: sys.exit(0))

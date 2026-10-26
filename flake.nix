@@ -43,6 +43,10 @@
     # The mermaid renderer behind the message-display hook.
     merman-nix.url = "github:clhodapp/merman-nix";
 
+    # The on-demand microvm guests of the user, which the MCP server
+    # `microvm` leases to sessions.
+    ch-microvm.url = "github:clhodapp/ch-microvm";
+
     nixpkgs.follows = "ch-emacs-config/nixpkgs";
 
     # The library comes from the nixpkgs.lib mirror. The package sets
@@ -66,6 +70,7 @@
           ch-emacs-config = inputs.ch-emacs-config;
           ch-zsh-config = inputs.ch-zsh-config;
           merman-nix = inputs.merman-nix;
+          ch-microvm = inputs.ch-microvm;
         };
 
         # The three trees, read from the layout: each entry under
