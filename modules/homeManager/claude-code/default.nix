@@ -932,7 +932,7 @@ in
 
         pushBackAbove = lib.mkOption {
           type = lib.types.float;
-          default = 7.6;
+          default = 8.0;
           description = "Load at or above which the final message is a finding of the tic-check cycle.";
         };
 
@@ -976,7 +976,7 @@ in
 
         pushBackAbove = lib.mkOption {
           type = lib.types.float;
-          default = 1.2;
+          default = 1.4;
           description = "Opacity score at or above which a candidate is a finding (deny the write, or block the stop).";
         };
 

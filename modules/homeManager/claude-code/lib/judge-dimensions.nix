@@ -100,6 +100,10 @@ in
     criteria.true = "A sentence tells the story of the author's earlier error, framing, or omission where stating the corrected content would serve the reader.";
     criteria.false = "Corrections are given as the corrected content, and a mistake is mentioned only where the reader needs to know that something they relied on was wrong.";
     rule = "give the corrected content, not the story of the earlier mistake; say only what the reader relied on that was wrong";
+    # An answer to "what happened?" tells the story of a mistake on
+    # purpose, and the judge cannot tell it from narration; report it,
+    # do not block.
+    pushBack = false;
   };
   fragments = {
     instructions = "Does the prose carry its facts in elliptical fragments instead of full sentences: dropped subjects, verbs, or articles (\"Build green, pushed, PR open\"), colon-fragment parallelism (\"What it covers: X. What it doesn't: Y.\"), or arrows and slashes standing in for a sentence? Only compressed text that states facts counts. A short line that carries no fact and only grades or punctuates (\"Fair.\", \"Recorded.\") is a different problem and does not count here, and neither do headings, table cells, short labels in a list, or code.";

@@ -621,16 +621,16 @@ output-style rule that needs judgment (seeded from
     ln(prose words + 1) + the density score − 0.25 · ln(words of the
     prompt that opened the turn + 8). A turn a task notification opened
     has a prompt of 0 words. It is reported at 7.15 and pushes back at
-    7.6.
+    8.0.
   - Coined phrases (`judge.coinage`): `claude-coinage-check` finds a
     "the <word>" phrase at its second use when the assistant used it
     first, the user has typed none of its words in any session, and
     earlier sessions rarely use it. The judge scores each candidate's
     opacity (`lib/judge-checks.nix`); a phrase is judged once per
-    session. It is reported at 1.0 and pushes back at 1.2. The edit hook
+    session. It is reported at 1.0 and pushes back at 1.4. The edit hook
     (prose files) and the message hook (commit messages, pull request
     texts, reviews) run the same check on what they write, counting the
-    write as a use, and deny it once at 1.2.
+    write as a use, and deny it once at 1.4.
   - References the user cannot resolve (`judge.references`):
     `claude-reference-check` flags a definite reference to work the user
     did not see ("the recording proxy", "their notes") that nothing
