@@ -1,29 +1,30 @@
 # SPDX-License-Identifier: MIT
 #
-# Guests for Claude Code sessions: microvm guests of the machine this
-# home runs on, which a session leases, starts and stops. The guests
-# are the units `microvm@<slot>.service` that caisson's `microvm-host`
-# NixOS module runs. The option `kinds` declares them, and the module
-# reads nothing else about them. It knows nothing of what runs in them.
+# Guests for Claude Code sessions. ch-microvm runs on-demand instances
+# of microvm.nix guests for the user of this home, with the kinds of
+# `ch-microvm.kinds`. This module imports the home-manager module of
+# ch-microvm from the registry of this layer, as `ch-microvm/microvm`,
+# and lets Claude Code sessions use some of those kinds. The option
+# `kinds` names the kinds agents may use, and the guests among them
+# that serve MCP.
 #
-# With kinds, the module installs the `microvm` command with the kinds
-# baked in, and a user timer that stops the slots of holders that are
-# gone. With kinds that agents may use, it also installs the Claude
-# Code plugin `microvm`, which declares the MCP server `microvm`.
-# Without kinds it declares nothing. The plugin installs through the
-# claude-code module of this layer, so a home that lets agents use a
-# kind selects that module as well.
+# With kinds that agents may use, the module installs the Claude Code
+# plugin `microvm`, which declares the MCP server `microvm`. A session
+# leases, starts and stops instances through it. The plugin installs
+# through the claude-code module of this layer, so a home that lets
+# agents use a kind selects that module as well.
 #
-# For each kind that agents may use and that has a share root, the
-# module declares the claude-code-sandbox module `microvm-<kind>`. It
-# grants Bash commands read and write access to `<shareRoot>/<slot>`
-# for every slot of the kind. A checkout that chooses it can put
-# targets into the `in` share of a slot and read its `out` share. The
-# module declares these sandbox modules when the home also selects the
-# claude-code-sandbox module of this layer.
+# For each kind that agents may use and that has shares, the module
+# declares the claude-code-sandbox module `microvm-<kind>`. It grants
+# Bash commands read and write access to the share directories of every
+# instance of the kind in its default directory, as
+# `ch-microvm.instances` lists them. A checkout that chooses it can put
+# targets into the `in` share of an instance and read its `out` share.
+# The module declares these sandbox modules when the home also selects
+# the claude-code-sandbox module of this layer.
 #
 # docs/development/microvm-guests.md describes the whole mechanism.
-{ ... }:
+{ closure-lib, ... }:
 {
   config,
   lib,
@@ -33,6 +34,7 @@
 }:
 let
   cfg = config.ch-ai-workbench.microvm;
+  microvm = config.ch-microvm;
 
   # One of this layer's packages, from the evaluation's package set.
   workbenchPackage =
@@ -44,87 +46,21 @@ let
       this home evaluates with.
     '');
 
-  namePattern = "[A-Za-z0-9][A-Za-z0-9_.-]*";
-
-  slotType = lib.types.submodule {
-    options = {
-      name = lib.mkOption {
-        type = lib.types.strMatching namePattern;
-        description = ''
-          The name of the guest. Its unit is `microvm@<name>.service`.
-        '';
-      };
-      cid = lib.mkOption {
-        type = lib.types.ints.between 3 4294967294;
-        description = "The vsock CID of the guest.";
-      };
-      vsockSocket = lib.mkOption {
-        type = lib.types.nullOr (lib.types.strMatching "/.+");
-        default = null;
-        example = "/var/lib/microvms/rea-1/notify.vsock";
-        description = ''
-          The hybrid vsock socket of the guest, or null. A guest that
-          runs under cloud-hypervisor offers its vsock as a Unix socket
-          on the host. When this is set, the program reaches the vsock
-          port of the guest through that socket, for the wait of `up`
-          and for the connection to the MCP server of the guest. With
-          null, it connects to the CID through `AF_VSOCK`. caisson
-          records the path as `outputs.slots.<slot>.vsockSocket` of a
-          caisson-microvm configuration. The user of this home must be
-          an operator of the guest to open the socket.
-        '';
-      };
-    };
-  };
-
   kindType = lib.types.submodule {
     options = {
-      slots = lib.mkOption {
-        type = lib.types.nonEmptyListOf slotType;
-        example = lib.literalExpression ''
-          [
-            { name = "rea-1"; cid = 101; }
-            { name = "rea-2"; cid = 102; }
-          ]
-        '';
-        description = ''
-          The guests of the kind, in the order a session claims them.
-        '';
-      };
-      vsockPort = lib.mkOption {
-        type = lib.types.nullOr lib.types.port;
-        default = null;
-        description = ''
-          The vsock port every guest of the kind serves on. `up` waits
-          until a started guest accepts a connection on it. With null,
-          `up` returns once the unit has started.
-        '';
-      };
-      shareRoot = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        example = "/home/chris/rea";
-        description = ''
-          The directory that holds the share directories of the guests.
-          The guest `<slot>` shares `<shareRoot>/<slot>/in`, read-only
-          in the guest, and `<shareRoot>/<slot>/out`, writable in the
-          guest. This is the layout of `shareRoot` of a caisson-microvm
-          configuration. With null, the guests share no directories that
-          `up` reports.
-        '';
-      };
       agents = lib.mkOption {
         type = lib.types.bool;
         default = false;
         description = ''
           Whether agents may use the kind. The MCP server `microvm`
-          offers only the kinds that set this. The `microvm` command
-          controls every kind. When the kind has a `shareRoot` and the
-          home selects the claude-code-sandbox module of this layer, the
-          sandbox module `microvm-<kind>` grants read and write access
-          to `<shareRoot>/<slot>` for every slot of the kind. The Bash
-          commands of a checkout that chooses it reach the share
-          directories.
+          offers only the kinds that set this. When the kind has shares
+          and the home selects the claude-code-sandbox module of this
+          layer, the sandbox module `microvm-<kind>` grants read and
+          write access to the share directories that
+          `ch-microvm.instances.<kind>` lists. The Bash commands of a
+          checkout that chooses it reach the share directories of the
+          instances in their default directories. No sandbox module
+          grants a directory a caller passes to `microvm_up`.
         '';
       };
       mcp = lib.mkOption {
@@ -141,10 +77,10 @@ let
         );
         default = null;
         description = ''
-          Whether the guests of the kind serve MCP on `vsockPort`. When
-          `microvm_up` brings up such a guest, the MCP server `microvm`
-          connects to it and offers the tools of the guest as tools of
-          its own.
+          Whether the guest serves MCP on the `vsockPort` of its kind in
+          `ch-microvm.kinds`. When `microvm_up` brings up such a guest,
+          the MCP server `microvm` connects to it and offers the tools of
+          the guest as tools of its own.
         '';
       };
     };
@@ -154,115 +90,71 @@ let
 
   agentKinds = lib.filterAttrs (_: kind: kind.agents) kinds;
 
-  # One sandbox module per kind, so a checkout that works with one kind
-  # reaches the share directories of that kind and of no other.
-  sandboxModules = lib.mapAttrs' (
-    name: kind:
-    let
-      paths = map (slot: "${kind.shareRoot}/${slot.name}") kind.slots;
-    in
-    lib.nameValuePair "microvm-${name}" {
-      description = "Read and write the share directories of the microvm guests of kind ${name}: ${lib.concatStringsSep ", " paths}";
-      extraAllowRead = paths;
-      allowWrite = paths;
-    }
-  ) (lib.filterAttrs (_: kind: kind.shareRoot != null) agentKinds);
-
-  allSlots = lib.concatMap (kind: kind.slots) (builtins.attrValues kinds);
-
-  duplicates =
-    values:
-    builtins.attrNames (
-      lib.filterAttrs (_: n: n > 1) (
-        lib.foldl' (acc: v: acc // { ${v} = (acc.${v} or 0) + 1; }) { } values
-      )
-    );
-
-  duplicateSlots = duplicates (map (slot: slot.name) allSlots);
-
-  duplicateCids = duplicates (map (slot: toString slot.cid) allSlots);
-
-  badKindNames = builtins.filter (name: builtins.match namePattern name == null) (
-    builtins.attrNames kinds
-  );
+  undeclared = builtins.filter (name: !(microvm.kinds ? ${name})) (builtins.attrNames kinds);
 
   mcpWithoutPort = builtins.attrNames (
-    lib.filterAttrs (_: kind: kind.mcp != null && kind.vsockPort == null) kinds
+    lib.filterAttrs (
+      name: kind: kind.mcp != null && microvm.kinds ? ${name} && microvm.kinds.${name}.vsockPort == null
+    ) kinds
   );
 
-  stateDir = "${config.xdg.stateHome}/ch-ai-workbench/microvm";
+  # One sandbox module per kind, so a checkout that works with one kind
+  # reaches the share directories of that kind and of no other. The
+  # grant names every share directory, since Claude Code ignores glob
+  # patterns of `allowWrite` on Linux. It names the share directories
+  # and not the directory of the instance, so a Bash command cannot
+  # replace a share directory by a symbolic link.
+  sandboxModules =
+    lib.mapAttrs'
+      (
+        name: _:
+        let
+          paths = lib.concatMap (instance: instance.shareDirectories) microvm.instances.${name};
+        in
+        lib.nameValuePair "microvm-${name}" {
+          description = "Read and write the share directories of the microvm instances of kind ${name} in their default directories: ${lib.concatStringsSep ", " paths}";
+          extraAllowRead = paths;
+          allowWrite = paths;
+        }
+      )
+      (
+        lib.filterAttrs (name: _: microvm.kinds ? ${name} && microvm.kinds.${name}.shares != [ ]) agentKinds
+      );
 
-  # What the program reads: the kinds, where the leases live, and the
-  # systemctl it runs.
-  programConfig = pkgs.writeText "microvm-kinds.json" (
+  # What the program reads: the configuration file of ch-microvm, and
+  # the kinds agents may use with the MCP server of each guest.
+  programConfig = pkgs.writeText "microvm-mcp.json" (
     builtins.toJSON {
-      kinds = builtins.mapAttrs (_: kind: {
-        slots = map (slot: { inherit (slot) name cid vsockSocket; }) kind.slots;
-        inherit (kind)
-          vsockPort
-          shareRoot
-          agents
-          mcp
-          ;
-      }) kinds;
-      inherit stateDir;
-      systemctl = lib.getExe' pkgs.systemd "systemctl";
-      inherit (cfg) upTimeout;
+      instances = "${microvm.configFile}";
+      kinds = builtins.mapAttrs (_: kind: { inherit (kind) mcp; }) agentKinds;
     }
   );
 
   # The program with the configuration baked in.
   command =
-    pkgs.runCommand "microvm"
+    pkgs.runCommand "microvm-mcp"
       {
         nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
-        meta.mainProgram = "microvm";
+        meta.mainProgram = "microvm-mcp";
       }
       ''
-        makeWrapper ${lib.getExe cfg.programPackage} "$out/bin/microvm" \
-          --set MICROVM_CONFIG ${programConfig}
+        makeWrapper ${lib.getExe cfg.programPackage} "$out/bin/microvm-mcp" \
+          --set MICROVM_MCP_CONFIG ${programConfig}
       '';
-
-  # What the reap service may not do. It talks to the system bus, reads
-  # /proc/<pid>/stat of the holders and writes its state directory, and
-  # nothing more.
-  hardening = {
-    NoNewPrivileges = true;
-    PrivateUsers = true;
-    ProtectSystem = "strict";
-    ProtectHome = "read-only";
-    ReadWritePaths = stateDir;
-    PrivateTmp = true;
-    PrivateDevices = true;
-    ProtectKernelTunables = true;
-    ProtectKernelModules = true;
-    ProtectKernelLogs = true;
-    ProtectControlGroups = true;
-    ProtectClock = true;
-    ProtectHostname = true;
-    RestrictNamespaces = true;
-    RestrictRealtime = true;
-    RestrictSUIDSGID = true;
-    LockPersonality = true;
-    SystemCallArchitectures = "native";
-    RestrictAddressFamilies = "AF_UNIX";
-    UMask = "0077";
-  };
 
   # The skills-directory plugin that declares the MCP server.
   plugin = pkgs.writeTextDir ".claude-plugin/plugin.json" (
     builtins.toJSON {
       name = "microvm";
-      description = "Start and stop the microvm guests of this machine for a session, and use the tools of the guests that serve MCP";
-      version = "0.2.0";
-      mcpServers.microvm = {
-        command = lib.getExe command;
-        args = [ "mcp" ];
-      };
+      description = "Start and stop microvm guests of the user for a session, and use the tools of the guests that serve MCP";
+      version = "0.4.0";
+      mcpServers.microvm.command = lib.getExe command;
     }
   );
 in
 {
+  imports = [ closure-lib.caisson.modules.homeManager."ch-microvm/microvm" ];
+
   options.ch-ai-workbench.microvm = {
     kinds = lib.mkOption {
       type = lib.types.attrsOf kindType;
@@ -270,45 +162,27 @@ in
       example = lib.literalExpression ''
         {
           rea = {
-            slots = [
-              { name = "rea-1"; cid = 101; }
-              { name = "rea-2"; cid = 102; }
-            ];
-            vsockPort = 7000;
-            shareRoot = "/home/chris/rea";
             agents = true;
             mcp.description = "Reverse-engineering tools for the binaries in the in share.";
           };
         }
       '';
       description = ''
-        The guest kinds this home controls, by name. Each kind is a pool
-        of guests that the machine runs as `microvm@<slot>.service` and
-        that the user of this home may start and stop, which caisson's
-        `microvm-host` NixOS module grants through
-        `caisson.microvm-host.operators`. A machine that declares the
-        slots in a caisson-microvm configuration gives the same names,
-        CIDs, vsock sockets, port and share root here. Slot names and CIDs are unique
-        across the kinds.
+        The kinds of `ch-microvm.kinds` that Claude Code sessions use,
+        by name. An agent starts an instance of a kind with the tool
+        `microvm_up` of the MCP server `microvm`. The instance belongs
+        to the session: its holder is the Claude Code process, and it
+        stops when the session ends.
       '';
     };
 
     programPackage = lib.mkOption {
       type = lib.types.package;
-      default = workbenchPackage "microvm";
-      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.microvm";
+      default = workbenchPackage "microvm-mcp";
+      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.microvm-mcp";
       description = ''
-        The `microvm` program before the module bakes the kinds of this
-        home into it.
-      '';
-    };
-
-    upTimeout = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = 120;
-      description = ''
-        The number of seconds `up` waits for a started guest to accept a
-        connection on the vsock port of its kind.
+        The program `microvm-mcp` before the module bakes the kinds of
+        this home into it.
       '';
     };
 
@@ -316,10 +190,10 @@ in
       type = lib.types.package;
       readOnly = true;
       default = command;
-      defaultText = lib.literalMD "the `microvm` program with the kinds of this home baked in";
+      defaultText = lib.literalMD "the program `microvm-mcp` with the kinds of this home baked in";
       description = ''
-        The `microvm` command of this home, with the kinds of this home
-        baked in. The home installs it when it has kinds.
+        The MCP server `microvm` of this home, with the kinds agents may
+        use baked in. The plugin `microvm` runs it.
       '';
     };
   };
@@ -329,45 +203,14 @@ in
       {
         assertions = [
           {
-            assertion = duplicateSlots == [ ];
-            message = "ch-ai-workbench.microvm.kinds: the slot names ${lib.concatStringsSep ", " duplicateSlots} appear more than once.";
-          }
-          {
-            assertion = duplicateCids == [ ];
-            message = "ch-ai-workbench.microvm.kinds: the CIDs ${lib.concatStringsSep ", " duplicateCids} appear more than once.";
-          }
-          {
-            assertion = badKindNames == [ ];
-            message = "ch-ai-workbench.microvm.kinds: the kind names ${lib.concatStringsSep ", " badKindNames} are not of letters, digits, `.`, `_` and `-`.";
+            assertion = undeclared == [ ];
+            message = "ch-ai-workbench.microvm.kinds: the kinds ${lib.concatStringsSep ", " undeclared} are not in ch-microvm.kinds.";
           }
           {
             assertion = mcpWithoutPort == [ ];
-            message = "ch-ai-workbench.microvm.kinds: the kinds ${lib.concatStringsSep ", " mcpWithoutPort} set `mcp` and no `vsockPort` to serve it on.";
+            message = "ch-ai-workbench.microvm.kinds: the kinds ${lib.concatStringsSep ", " mcpWithoutPort} set `mcp`, and their `vsockPort` in ch-microvm.kinds is null.";
           }
         ];
-
-        home.packages = [ command ];
-
-        # The program writes leases here, and the reap service sees the
-        # rest of home read-only, so the directory exists before it runs.
-        systemd.user.tmpfiles.rules = [ "d ${stateDir}/leases 0700 - - -" ];
-
-        systemd.user.timers.ch-ai-workbench-microvm-reap = {
-          Unit.Description = "Stop the microvm slots of holders that are gone";
-          Timer = {
-            OnCalendar = "minutely";
-            AccuracySec = "10s";
-          };
-          Install.WantedBy = [ "timers.target" ];
-        };
-
-        systemd.user.services.ch-ai-workbench-microvm-reap = {
-          Unit.Description = "Stop the microvm slots of holders that are gone";
-          Service = hardening // {
-            Type = "oneshot";
-            ExecStart = "${lib.getExe command} reap";
-          };
-        };
       }
       (lib.mkIf (agentKinds != { }) {
         assertions = [

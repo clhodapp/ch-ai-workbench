@@ -5,9 +5,9 @@ A guest of a kind that serves MCP listens on the vsock port of its kind.
 The `microvm` MCP server opens one connection per running guest, speaks
 MCP to it as a client, one JSON-RPC message per line, and hands every
 message the guest sends to a callback. `connect_guest` opens the
-connection through `transport.connect`, the function the readiness
-probe of `up` uses as well, so a slot with a hybrid vsock socket is
-reached through that socket.
+connection through `ch_microvm.transport.connect`, the function the
+readiness probe of `up` uses as well, so the guest is reached through
+the hybrid vsock socket in the directory of its instance.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import socket
 import threading
 from typing import Any, Callable
 
-from .transport import Endpoint, connect
+from ch_microvm.transport import Endpoint, connect
 
 # The number of seconds connecting to the MCP server of a guest waits.
 CONNECT_TIMEOUT = 5.0
@@ -48,7 +48,7 @@ def read_lines(stream: Any, put: Callable[[dict[str, Any] | None], None]) -> Non
 
 
 class Guest:
-    """One connection to the MCP server of the guest in `slot`. The
+    """One connection to the MCP server of the guest of `instance`. The
     connection numbers its requests itself, so they never meet the IDs
     of Claude Code. A thread reads what the guest sends and passes each
     message, then None when the connection ends, to `deliver`."""
@@ -56,13 +56,13 @@ class Guest:
     def __init__(
         self,
         kind: str,
-        slot: str,
+        instance: str,
         generation: int,
         sock: socket.socket,
         deliver: Callable[["Guest", dict[str, Any] | None], None],
     ) -> None:
         self.kind = kind
-        self.slot = slot
+        self.instance = instance
         self.generation = generation
         self.sock = sock
         # "initializing", then "listing" while the first tools/list is

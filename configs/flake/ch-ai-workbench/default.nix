@@ -191,9 +191,11 @@
               }).config.home-files;
 
             # Homes of `tester` that select the microvm module with the
-            # given kinds.
+            # given kinds of ch-microvm and the given kinds for agents.
+            # The microvm module imports the home-manager module of
+            # ch-microvm, which declares `ch-microvm.kinds`.
             microvmHome =
-              kinds:
+              instanceKinds: agentKinds:
               (inputs.home-manager.lib.homeManagerConfiguration {
                 inherit pkgs;
                 modules = [
@@ -205,71 +207,58 @@
                     home.homeDirectory = "/home/tester";
                     home.stateVersion = "25.05";
                     ch-ai-workbench.claude-code.enable = true;
-                    ch-ai-workbench.microvm.kinds = kinds;
+                    ch-microvm.kinds = instanceKinds;
+                    ch-ai-workbench.microvm.kinds = agentKinds;
                   }
                 ];
               }).config;
-            # Two slots of `probe`, which serves MCP and has shares, the
-            # second reached through a hybrid vsock socket, and one of
-            # `quiet`, which serves no MCP and has no shares, both
-            # for agents, and one of `hidden`, which has shares and which
-            # agents may not use.
-            microvmKinds = {
+            # A package with the files of a microvm.nix runner that
+            # ch-microvm looks for. No check runs it.
+            microvmRunner = pkgs.runCommand "microvm-fake-runner" { } ''
+              mkdir -p $out/bin $out/share/microvm
+              for name in microvm-run virtiofsd-run microvm-shutdown; do
+                printf '#!/bin/sh\nexit 1\n' > $out/bin/$name
+                chmod +x $out/bin/$name
+              done
+              echo 3 > $out/share/microvm/vsock-cid
+            '';
+            # Two instances of `probe`, which has shares and a vsock
+            # port, one of `quiet`, which has neither, and one of
+            # `hidden`, which has a share.
+            microvmInstanceKinds = {
               probe = {
-                slots = [
-                  {
-                    name = "probe-1";
-                    cid = 101;
-                  }
-                  {
-                    name = "probe-2";
-                    cid = 102;
-                    vsockSocket = "/var/lib/microvms/probe-2/notify.vsock";
-                  }
+                runner = microvmRunner;
+                shares = [
+                  "in"
+                  "out"
                 ];
                 vsockPort = 5000;
-                shareRoot = "/var/lib/probe";
+                maxInstances = 2;
+                runtimeMaxSec = 3600;
+              };
+              quiet.runner = microvmRunner;
+              hidden = {
+                runner = microvmRunner;
+                shares = [ "in" ];
+              };
+            };
+            # Agents may use `probe`, which serves MCP, and `quiet`,
+            # which serves none. They may not use `hidden`.
+            microvmAgentKinds = {
+              probe = {
                 agents = true;
                 mcp.description = "Probes binaries.";
               };
-              quiet = {
-                slots = [
-                  {
-                    name = "quiet-1";
-                    cid = 201;
-                  }
-                ];
-                agents = true;
-              };
-              hidden = {
-                slots = [
-                  {
-                    name = "hidden-1";
-                    cid = 301;
-                  }
-                ];
-                shareRoot = "/var/lib/hidden";
-              };
+              quiet.agents = true;
             };
-            microvmFullHome = microvmHome microvmKinds;
-            microvmHiddenHome = microvmHome { inherit (microvmKinds) hidden; };
-            microvmBareHome = microvmHome { };
-            # Homes that fail an assertion of the module: a CID that two
-            # kinds give, a slot name that two kinds give, and a kind
-            # that serves MCP on no port. home-manager refuses to
-            # evaluate a home whose assertions fail.
+            microvmFullHome = microvmHome microvmInstanceKinds microvmAgentKinds;
+            microvmHiddenHome = microvmHome microvmInstanceKinds { };
+            microvmBareHome = microvmHome { } { };
+            # Whether a home fails an assertion of the module.
+            # home-manager refuses to evaluate a home whose assertions
+            # fail.
             microvmRefused =
-              kind:
-              !(builtins.tryEval (microvmHome ({ inherit (microvmKinds) hidden; } // kind)).home.packages)
-              .success;
-            microvmClash =
-              slot: extra:
-              microvmRefused {
-                clash = {
-                  slots = [ slot ];
-                }
-                // extra;
-              };
+              agentKinds: !(builtins.tryEval (microvmHome microvmInstanceKinds agentKinds).home.packages).success;
 
             # A home of `tester` whose judge has one endpoint, the stub
             # System One server the tic-check check starts on a fixed
@@ -327,118 +316,80 @@
               claude-response-judge = self.packages.${system}.claude-response-judge;
               # Building runs the integration tests of call against serve.
               trusted-exec = self.packages.${system}.trusted-exec;
-              # Building runs the unittest suite of the microvm program
-              # against a fake systemctl, /proc and vsock probe.
-              microvm = self.packages.${system}.microvm;
+              # Building runs the unittest suite of the MCP server against
+              # the fakes of `ch_microvm.testing` and fake guest MCP
+              # servers behind fake VMMs.
+              microvm-mcp = self.packages.${system}.microvm-mcp;
 
-              # The microvm module with kinds from its options. The full
-              # home gets the command with the kinds baked in, the reap
-              # timer, and the plugin with the MCP server `microvm`, which
-              # offers the kinds for agents and no other. The baked
-              # configuration carries the vsock socket of the slot that
-              # sets one, and null for the other slots. The home whose
-              # only kind is not for agents gets the command and the
-              # timer and no plugin. The home without kinds gets none of
-              # it. A CID or a slot name that two kinds give, and a kind
-              # that serves MCP on no port, fail an assertion. The full
-              # home gets the sandbox module `microvm-probe`, which grants
-              # exactly the directories of the slots of `probe`, and no
-              # sandbox module for `quiet`, which has no share root, or
-              # for `hidden`, which agents may not use.
+              # The microvm module with kinds from its options and from
+              # those of ch-microvm. The full home gets the plugin with
+              # the MCP server `microvm`, which offers the kinds for
+              # agents and no other. The baked configuration names the
+              # configuration file of ch-microvm and carries the MCP
+              # server of each kind for agents. The home without kinds
+              # for agents gets no plugin, and the command of ch-microvm
+              # stays installed. The home without kinds gets none of it.
+              # A kind outside `ch-microvm.kinds`, and a kind that serves
+              # MCP on no port, fail an assertion. The full home gets the
+              # sandbox module `microvm-probe`, which grants exactly the
+              # share directories that `ch-microvm.instances` lists for
+              # the two instances of `probe`, and no sandbox module for
+              # `quiet`, which has no shares, or for `hidden`, which
+              # agents may not use.
               microvm-home-module =
                 let
-                  probeSlotDirs = [
-                    "/var/lib/probe/probe-1"
-                    "/var/lib/probe/probe-2"
+                  stateRoot = "/home/tester/.local/state/ch-microvm";
+                  probeShareDirs = [
+                    "${stateRoot}/probe-1/in"
+                    "${stateRoot}/probe-1/out"
+                    "${stateRoot}/probe-2/in"
+                    "${stateRoot}/probe-2/out"
                   ];
                   sandboxModulesOf = home: home.ch-ai-workbench.claude-code-sandbox.modules;
                 in
                 assert builtins.attrNames (sandboxModulesOf microvmFullHome) == [ "microvm-probe" ];
-                assert (sandboxModulesOf microvmFullHome).microvm-probe.allowWrite == probeSlotDirs;
-                assert (sandboxModulesOf microvmFullHome).microvm-probe.extraAllowRead == probeSlotDirs;
+                assert (sandboxModulesOf microvmFullHome).microvm-probe.allowWrite == probeShareDirs;
+                assert (sandboxModulesOf microvmFullHome).microvm-probe.extraAllowRead == probeShareDirs;
                 assert sandboxModulesOf microvmHiddenHome == { };
                 assert sandboxModulesOf microvmBareHome == { };
                 assert microvmFullHome.ch-ai-workbench.claude-code.skills ? microvm;
                 assert !(microvmHiddenHome.ch-ai-workbench.claude-code.skills ? microvm);
-                assert microvmHiddenHome.systemd.user.timers ? ch-ai-workbench-microvm-reap;
-                assert builtins.elem microvmHiddenHome.ch-ai-workbench.microvm.package
-                  microvmHiddenHome.home.packages;
+                assert builtins.elem microvmHiddenHome.ch-microvm.package microvmHiddenHome.home.packages;
                 assert !(microvmBareHome.ch-ai-workbench.claude-code.skills ? microvm);
-                assert !(microvmBareHome.systemd.user.timers ? ch-ai-workbench-microvm-reap);
-                assert
-                  !(builtins.elem microvmBareHome.ch-ai-workbench.microvm.package microvmBareHome.home.packages);
-                # The control: a kind of its own name and CID evaluates.
-                assert
-                  !microvmClash {
-                    name = "clash-1";
-                    cid = 302;
-                  } { };
-                assert microvmClash {
-                  name = "clash-1";
-                  cid = 301;
-                } { };
-                assert microvmClash {
-                  name = "hidden-1";
-                  cid = 302;
-                } { };
-                assert microvmClash {
-                  name = "clash-1";
-                  cid = 302;
-                } { mcp.description = "Nothing."; };
+                assert !(builtins.elem microvmBareHome.ch-microvm.package microvmBareHome.home.packages);
+                # The control: a kind of ch-microvm with a port for its MCP
+                # server evaluates.
+                assert !microvmRefused { probe.mcp.description = "Nothing."; };
+                assert microvmRefused { quiet.mcp.description = "Nothing."; };
+                assert microvmRefused { extra.agents = true; };
                 pkgs.runCommand "microvm-home-module"
                   {
                     nativeBuildInputs = [ pkgs.jq ];
                     files = microvmFullHome.home-files;
                     command = lib.getExe microvmFullHome.ch-ai-workbench.microvm.package;
-                    installed = builtins.elem microvmFullHome.ch-ai-workbench.microvm.package microvmFullHome.home.packages;
+                    instancesConfig = microvmFullHome.ch-microvm.configFile;
                   }
                   ''
-                    test "$installed" = 1
-                    units=$files/.config/systemd/user
-
-                    # The reap timer and its service, with the access the
-                    # module leaves it.
-                    grep -qx 'OnCalendar=minutely' "$units/ch-ai-workbench-microvm-reap.timer"
-                    service=$units/ch-ai-workbench-microvm-reap.service
-                    grep -qx "ExecStart=$command reap" "$service"
-                    for line in PrivateUsers=true ProtectSystem=strict ProtectHome=read-only \
-                      "ReadWritePaths=/home/tester/.local/state/ch-ai-workbench/microvm" \
-                      "RestrictAddressFamilies=AF_UNIX" NoNewPrivileges=true; do
-                      grep -qx "$line" "$service"
-                    done
-
                     # The plugin declares the MCP server `microvm` and no
                     # other.
                     manifest=$files/.claude/skills/microvm/.claude-plugin/plugin.json
                     jq -e '.name == "microvm"' "$manifest"
-                    jq -e --arg c "$command" '.mcpServers == {microvm: {command: $c, args: ["mcp"]}}' "$manifest"
+                    jq -e --arg c "$command" '.mcpServers == {microvm: {command: $c}}' "$manifest"
 
-                    # The command has every kind baked in. No systemd runs
-                    # here, so the unit state is unknown.
-                    # The configuration the command reads carries the
-                    # vsock socket of the slot that sets one, and null
-                    # for the slot that does not.
-                    config=$(grep -ao '${builtins.storeDir}/[a-z0-9]*-microvm-kinds\.json' "$command" | head -n 1)
-                    jq -e '.kinds.probe.slots == [
-                      {name: "probe-1", cid: 101, vsockSocket: null},
-                      {name: "probe-2", cid: 102, vsockSocket: "/var/lib/microvms/probe-2/notify.vsock"}
-                    ]' "$config"
-                    jq -e '.kinds.quiet.slots == [{name: "quiet-1", cid: 201, vsockSocket: null}]' "$config"
-
-                    "$command" status --all > status.txt
-                    grep -qx 'probe-1  kind probe  free  unknown' status.txt
-                    grep -qx 'probe-2  kind probe  free  unknown' status.txt
-                    grep -qx 'hidden-1  kind hidden  free  unknown' status.txt
-                    grep -qx '  probe: 2 slots, 2 free' status.txt
-                    rc=0
-                    "$command" up nope 2> err.txt || rc=$?
-                    test "$rc" = 2
-                    grep -q "^microvm: unknown kind 'nope'" err.txt
+                    # The configuration the server reads names the
+                    # configuration file of ch-microvm and carries the
+                    # kinds for agents.
+                    config=$(grep -ao '${builtins.storeDir}/[a-z0-9]*-microvm-mcp\.json' "$command" | head -n 1)
+                    jq -e --arg i "$instancesConfig" '. == {
+                      instances: $i,
+                      kinds: {probe: {mcp: {description: "Probes binaries."}}, quiet: {mcp: null}}
+                    }' "$config"
 
                     # The MCP server over stdio offers the kinds for agents
                     # and refuses `hidden`. Its input stays open until the
                     # four answers are out, since it stops at the end of
-                    # its input.
+                    # its input. No systemd runs here, so the unit state is
+                    # unknown.
                     touch mcp.jsonl
                     {
                       echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}'
@@ -449,15 +400,15 @@
                         [ "$(wc -l < mcp.jsonl)" -ge 4 ] && break
                         sleep 0.1
                       done
-                    } | "$command" mcp > mcp.jsonl 2> mcp.err
+                    } | "$command" > mcp.jsonl 2> mcp.err
                     jq -s -e 'map(.id) | sort == [1, 2, 3, 4]' mcp.jsonl
                     jq -s -e 'map(select(.id == 1))[0].result.serverInfo.name == "microvm"' mcp.jsonl
                     jq -s -e 'map(select(.id == 2))[0].result.tools | map(.name) == ["microvm_up", "microvm_down", "microvm_status"]' mcp.jsonl
                     jq -s -e 'map(select(.id == 2))[0].result.tools[0].inputSchema.properties.kind.enum == ["probe", "quiet"]' mcp.jsonl
-                    jq -s -e 'map(select(.id == 2))[0].result.tools[1].inputSchema.properties.slot.enum == ["probe-1", "probe-2", "quiet-1"]' mcp.jsonl
+                    jq -s -e 'map(select(.id == 2))[0].result.tools[1].inputSchema.properties.instance.enum == ["probe-1", "probe-2", "quiet-1"]' mcp.jsonl
                     jq -s -e 'map(select(.id == 3))[0].result | .isError and (.content[0].text | test("unknown kind .hidden."))' mcp.jsonl
-                    jq -s -e 'map(select(.id == 4))[0].result.content[0].text | test("probe-1  kind probe  free") and (test("hidden") | not)' mcp.jsonl
-                    grep -qx 'this session holds no slots' mcp.err
+                    jq -s -e 'map(select(.id == 4))[0].result.content[0].text | test("probe-1  kind probe  directory [^ ]*/ch-microvm/probe-1  free  unknown") and (test("hidden") | not)' mcp.jsonl
+                    grep -qx 'the caller holds no instances' mcp.err
                     touch $out
                   '';
 
