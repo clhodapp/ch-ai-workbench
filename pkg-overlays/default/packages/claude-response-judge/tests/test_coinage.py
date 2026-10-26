@@ -21,7 +21,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
 from claude_response_judge import sessions  # noqa: E402
-from claude_response_judge.coinage import DEFAULT_INSTRUCTIONS, DEFAULT_LEVELS  # noqa: E402
+from claude_response_judge.coinage import DEFAULT_INSTRUCTIONS, DEFAULT_LEVELS, occurrences  # noqa: E402
 
 COINAGE = {"instructions": DEFAULT_INSTRUCTIONS, "levels": DEFAULT_LEVELS, "pushBackAbove": 1.2, "reportAbove": 1.0}
 OPAQUE = {"name-opacity": [0.05, 0.15, 0.8]}  # expected level 1.75
@@ -100,6 +100,13 @@ class CoinageTest(unittest.TestCase):
                 *extra,
             ],
         )
+
+    def test_a_contraction_is_not_part_of_a_name(self):
+        self.assertEqual(
+            [p for p, _ in occurrences("The judge doesn't decide. The judge doesn’t either.")],
+            ["judge", "judge"],
+        )
+        self.assertEqual([p for p, _ in occurrences("The edit hook runs.")], ["edit", "edit hook"])
 
     def test_second_use_fires_with_the_question_and_state(self):
         stub = self.stub(answers=OPAQUE)

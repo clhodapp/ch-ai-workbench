@@ -67,7 +67,9 @@ MAX_CANDIDATES = 4
 SENTENCES = 6
 NAMES = 80
 
-PHRASE = re.compile(r"\bthe ([a-z][a-z-]{2,})(?: ([a-z][a-z-]{2,}))?")
+# The second word must end at a word boundary that no apostrophe follows, so a contraction
+# ("the judge doesn't") does not make "doesn" part of a name.
+PHRASE = re.compile(r"\bthe ([a-z][a-z-]{2,})(?: ([a-z][a-z-]{2,})\b(?!['’]))?")
 TICK = re.compile(r"`([^`\n]{2,60})`")
 SENTENCE_END = re.compile(r"(?<=[.!?:;])\s+|\n+")
 # Words after "the" that describe or count rather than name.
