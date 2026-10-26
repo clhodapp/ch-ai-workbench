@@ -123,6 +123,7 @@ let
         model
         apiKeyFile
         timeout
+        wakeUnit
         ;
     }) enabledEndpoints;
     dimensions = lib.mapAttrs (_name: dimension: {
@@ -741,6 +742,20 @@ in
                   connection at once and costs no wait. The hooks that run
                   the judge are registered with a timeout of 10 seconds
                   plus the sum over the enabled endpoints.
+                '';
+              };
+
+              wakeUnit = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                example = "decision-server.service";
+                description = ''
+                  A systemd user unit that runs the server behind this
+                  endpoint and is started on demand. The prompt hook and
+                  the mid-turn hook start it with `systemctl --user start
+                  --no-block` and do not wait, so a server that takes a
+                  while to load is usually up by the time the turn ends.
+                  Starting a unit that is already running does nothing.
                 '';
               };
             };
