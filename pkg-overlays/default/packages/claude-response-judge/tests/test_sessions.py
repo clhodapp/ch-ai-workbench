@@ -62,6 +62,15 @@ class SessionsTest(unittest.TestCase):
         self.assertTrue({"judge", "judge reads", "ladder"} <= set(e["assistant_phrases"]))
         self.assertNotIn("code", " ".join(e["assistant_phrases"]))
 
+    def test_an_accepted_suggestion_is_not_the_user_vocabulary(self):
+        path = self.transcript(
+            "a",
+            {**human("show me the frobnicator", "2026-10-01T00:00:00Z"), "promptSource": "suggestion_accepted"},
+            {**human("thanks", "2026-10-01T00:01:00Z"), "promptSource": "typed"},
+        )
+        sessions.update(self.projects, self.index)
+        self.assertEqual(sessions.load(self.index)["sessions"][str(path)]["user_words"], ["thanks"])
+
     def test_incremental(self):
         path = self.transcript("a", human("one", "2026-10-01T00:00:00Z"))
         sessions.update(self.projects, self.index)

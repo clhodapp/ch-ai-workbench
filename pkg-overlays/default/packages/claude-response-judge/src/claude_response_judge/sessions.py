@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .cli import REMINDER, typed_prompt
+from .cli import REMINDER, user_wrote
 
 VERSION = 1
 WORD = re.compile(r"[a-z0-9][a-z0-9_.-]*[a-z0-9]|[a-z0-9]")
@@ -109,9 +109,9 @@ def read_appended(path: Path, entry: dict[str, Any]) -> dict[str, Any]:
             assistant_words |= words(p)
             assistant_phrases |= phrases(p)
             continue
-        typed = typed_prompt(e)
-        if typed:
-            user_words |= words(typed)
+        written = user_wrote(e)
+        if written:
+            user_words |= words(written)
     return {
         "offset": entry["offset"] + end,
         "started": started,

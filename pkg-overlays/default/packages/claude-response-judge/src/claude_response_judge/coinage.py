@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any
 
 from . import sessions
-from .cli import TRANSCRIPT_TAIL, USER_MESSAGES, cut, first_answer, transcript_entries, typed_prompt
+from .cli import TRANSCRIPT_TAIL, USER_MESSAGES, cut, first_answer, transcript_entries, typed_prompt, user_wrote
 from .turn import earlier_messages
 
 DEFAULT_INSTRUCTIONS = (
@@ -127,24 +127,27 @@ def occurrences(text: str) -> list[tuple[str, str]]:
     return found
 
 
-def split_turn(entries: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
-    """The assistant texts before the current turn and the user's typed prompts, both oldest
-    first, from transcript ENTRIES."""
+def split_turn(entries: list[dict[str, Any]]) -> tuple[list[str], list[str], list[str]]:
+    """From transcript ENTRIES, oldest first: the assistant texts before the current turn,
+    the user's typed prompts, and the prompts whose words are the user's own (accepted
+    prompt suggestions left out, since their words come from the conversation)."""
     start = 0
     for i, entry in enumerate(entries):
         if typed_prompt(entry):
             start = i
-    before, typed = [], []
+    before, typed, written = [], [], []
     for i, entry in enumerate(entries):
         text = typed_prompt(entry)
         if text:
             typed.append(text)
+            if user_wrote(entry):
+                written.append(text)
             continue
         if i < start:
             text = sessions.assistant_text(entry)
             if text:
                 before.append(text)
-    return before, typed
+    return before, typed, written
 
 
 def user_stems(data: dict[str, Any], typed: list[str]) -> set[str]:
@@ -290,7 +293,7 @@ def check(
         long_session = transcript.stat().st_size > TRANSCRIPT_TAIL
     except OSError:
         return result
-    before, typed = split_turn(entries)
+    before, typed, written = split_turn(entries)
     if write:
         # Everything in the tail is earlier text, the current turn included.
         before = [t for t in (sessions.assistant_text(e) for e in entries) if t]
@@ -304,7 +307,7 @@ def check(
     data = sessions.load(index)
     path = state_file(transcript)
     judged = read_judged(path)
-    found = [c for c in candidates(checked, before, typed, data, transcript, long_session) if c["phrase"] not in judged]
+    found = [c for c in candidates(checked, before, written, data, transcript, long_session) if c["phrase"] not in judged]
     if not found:
         return result
     section = config.get("coinage", {})

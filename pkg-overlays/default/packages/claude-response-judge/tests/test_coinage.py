@@ -153,6 +153,19 @@ class CoinageTest(unittest.TestCase):
         self.assertEqual(out["candidates"], [])
         self.assertEqual(stub.requests, [])
 
+    def test_an_accepted_suggestion_does_not_vouch_for_a_phrase(self):
+        # A prompt suggestion is generated from the conversation, so sending one that uses
+        # the assistant's phrase does not make the phrase the user's word.
+        stub = self.stub(answers=OPAQUE)
+        for source, expected in (("suggestion_accepted", ["the ladder"]), ("typed", [])):
+            ask = {**prompt("show me the ladder levels"), "promptSource": source}
+            path = self.session(
+                source,
+                [prompt("score the replies"), say("The ladder has four levels."), ask],
+            )
+            out = self.run_check(path, "On the ladder.", endpoints=[endpoint("local", stub.url)], runtime=False)
+            self.assertEqual([c["phrase"] for c in out["candidates"]], expected, source)
+
     def test_rarity_gate_counts_earlier_sessions_only(self):
         stub = self.stub(answers=OPAQUE)
         for i in range(3):

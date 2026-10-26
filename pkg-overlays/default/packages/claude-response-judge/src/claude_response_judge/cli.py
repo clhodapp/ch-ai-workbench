@@ -118,6 +118,13 @@ def typed_prompt(entry: dict[str, Any]) -> str | None:
     return turn_input(entry) if kind in (None, "human") else None
 
 
+def user_wrote(entry: dict[str, Any]) -> str | None:
+    """The text of a typed prompt whose words are the user's own: a prompt suggestion the
+    user accepted (promptSource suggestion_accepted) is generated from the conversation, so
+    its words are the assistant's even though the user sent it."""
+    return None if entry.get("promptSource") == "suggestion_accepted" else typed_prompt(entry)
+
+
 def user_messages(transcript: Path) -> list[str]:
     """The last USER_MESSAGES things the user typed in a Claude Code session transcript."""
     found = []
