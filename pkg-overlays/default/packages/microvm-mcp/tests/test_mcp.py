@@ -297,6 +297,7 @@ class ServerCase(Fixture):
         slow = self.send("tools/call", {"name": "slow", "arguments": {}})
         result = self.call("microvm_down", {"instance": "probe-1"})
         self.assertIn("stopped probe-1", self.text(result))
+        self.assertIn("The server stays connected.", self.text(result))
         self.assertEqual(self.response(slow)["error"]["code"], -32000)
         self.assertEqual(self.list_changes(), 2)
         self.assertEqual(self.tool_names(), list(MANAGER_TOOLS))

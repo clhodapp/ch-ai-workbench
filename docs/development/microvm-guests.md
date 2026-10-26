@@ -151,6 +151,15 @@ error, removes the tools of the guest, and sends `list_changed`. An
 instance that stays leased after a drop is connected again by the next
 `microvm_up` of its kind.
 
+Claude Code reports the tools that `list_changed` removes as tools of a
+disconnected server, and its report can list `microvm_up`,
+`microvm_down` and `microvm_status` among them, although the server is
+still connected and `/mcp` shows it up. A session that read the report
+took the server for down. So the description of `microvm_down` and its
+result after a guest was stopped say that the server stays connected and
+that a session loading tools on demand finds its tools again with its
+tool search.
+
 A kind without `mcp` gets no connection: `microvm_up` starts it and
 returns the instance, its directory, its vsock socket and its shares.
 
