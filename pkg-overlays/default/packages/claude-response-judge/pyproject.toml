@@ -14,6 +14,10 @@ license = "MIT"
 claude-response-judge = "claude_response_judge.cli:main"
 claude-vcs-message = "claude_response_judge.vcs_message:main"
 claude-turn-text = "claude_response_judge.turn:main"
+claude-session-index = "claude_response_judge.sessions:main"
+claude-turn-load = "claude_response_judge.load:main"
+claude-coinage-check = "claude_response_judge.coinage:main"
+claude-reference-check = "claude_response_judge.references:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

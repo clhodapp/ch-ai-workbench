@@ -96,11 +96,11 @@ def transcript_entries(transcript: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def typed_prompt(entry: dict[str, Any]) -> str | None:
-    """The text the user typed, when ENTRY is a typed prompt. A typed prompt is a `user`
-    entry whose content is a string or holds text blocks; tool results are `user` entries
-    holding tool_result blocks, and hook feedback and skill bodies are `user` entries marked
-    isMeta."""
+def turn_input(entry: dict[str, Any]) -> str | None:
+    """The text of ENTRY when it starts a model turn: a `user` entry whose content is a string
+    or holds text blocks. Tool results are `user` entries holding tool_result blocks, and hook
+    feedback and skill bodies are `user` entries marked isMeta; neither starts a turn. A
+    task notification does, and so does a prompt the user typed."""
     if entry.get("type") != "user" or entry.get("isMeta"):
         return None
     content = entry.get("message", {}).get("content")
@@ -109,6 +109,13 @@ def typed_prompt(entry: dict[str, Any]) -> str | None:
     if not isinstance(content, str):
         return None
     return REMINDER.sub("", content).strip() or None
+
+
+def typed_prompt(entry: dict[str, Any]) -> str | None:
+    """The text the user typed, when ENTRY is a typed prompt: a turn input whose origin is
+    the human. Entries from transcripts that record no origin count as typed."""
+    kind = (entry.get("origin") or {}).get("kind")
+    return turn_input(entry) if kind in (None, "human") else None
 
 
 def user_messages(transcript: Path) -> list[str]:
@@ -170,7 +177,8 @@ def read_score(answer: dict[str, Any], levels: list[str]) -> dict[str, Any]:
     return {"score": round(float(answer["score"]), 3), "levels": len(levels), "level": levels[best], "p": probs[best]}
 
 
-def ask(endpoint: dict[str, Any], body: dict[str, Any], dims: dict[str, Any]) -> dict[str, Any]:
+def post(endpoint: dict[str, Any], questions: dict[str, Any], state: Any) -> dict[str, Any]:
+    """qev's raw answer map for QUESTIONS about STATE from one endpoint."""
     headers = {"Content-Type": "application/json"}
     if endpoint.get("apiKeyFile"):
         key = Path(endpoint["apiKeyFile"]).read_text().strip()
@@ -179,12 +187,27 @@ def ask(endpoint: dict[str, Any], body: dict[str, Any], dims: dict[str, Any]) ->
         headers["Authorization"] = f"Api-Key {key}"
     req = urllib.request.Request(
         endpoint["url"].rstrip("/") + "/v1/systemone",
-        data=json.dumps(body).encode(),
+        data=json.dumps({"model": endpoint["model"], "state": state, "questions": questions}).encode(),
         headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=endpoint["timeout"]) as resp:
-        answers = json.load(resp)["answers"]
+        return json.load(resp)["answers"]
+
+
+def first_answer(config: dict[str, Any], questions: dict[str, Any], state: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """The raw answers of the first endpoint that answers, with its name, or (None, None).
+    For checks that build their own questions, one state per candidate."""
+    for endpoint in config["endpoints"]:
+        try:
+            return post(endpoint, questions, state), endpoint["name"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return None, None
+
+
+def ask(endpoint: dict[str, Any], body: dict[str, Any], dims: dict[str, Any]) -> dict[str, Any]:
+    answers = post(endpoint, body["questions"], body["state"])
     verdict: dict[str, Any] = {"answers": {}, "scores": {}}
     for name in body["questions"]:
         if dims[name]["type"] == "score":

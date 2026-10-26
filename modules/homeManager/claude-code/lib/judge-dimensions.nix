@@ -101,18 +101,6 @@ in
     criteria.false = "Corrections are given as the corrected content, and a mistake is mentioned only where the reader needs to know that something they relied on was wrong.";
     rule = "give the corrected content, not the story of the earlier mistake; say only what the reader relied on that was wrong";
   };
-  # More than a reader can take in at one sitting.
-  too-much-at-once = {
-    instructions = "Is the message more than a reader can take in at one sitting: more points, sections, options, caveats, or detail than the reader needs right now, so that what they need to know or do is buried or would be missed? Length alone does not count when every part is needed now.";
-    criteria.true = "Parts of the message could be cut or left for later without losing what the reader needs now, and the amount makes the important part hard to find.";
-    criteria.false = "The reader can take the message in at once, or every part of it is needed now.";
-    rule = "say less at once: lead with what the reader needs now, cut what they do not, and leave detail for when it is asked for";
-    targets = [
-      "reply"
-      "progress"
-      "message"
-    ];
-  };
   fragments = {
     instructions = "Does the prose carry its facts in elliptical fragments instead of full sentences: dropped subjects, verbs, or articles (\"Build green, pushed, PR open\"), colon-fragment parallelism (\"What it covers: X. What it doesn't: Y.\"), or arrows and slashes standing in for a sentence? Only compressed text that states facts counts. A short line that carries no fact and only grades or punctuates (\"Fair.\", \"Recorded.\") is a different problem and does not count here, and neither do headings, table cells, short labels in a list, or code.";
     criteria.true = "At least one passage that states facts is written as fragments the reader has to reconstruct into sentences.";

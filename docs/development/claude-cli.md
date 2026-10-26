@@ -603,23 +603,54 @@ output-style rule that needs judgment (seeded from
   been exercised by the flake check against the hook's output shape
   only. It has not been probed live in a CLI session the way the Stop
   facts above were.
-- **Readability.** `modules/homeManager/claude-code/lib/judge-readability.nix`
-  holds two scores and two nouls about how much work a reply makes for
-  a developer who has not seen the work. `assumed-context` asks how
-  much the reply assumes beyond what its subject requires, from nothing
-  to a note only someone who took part could follow. It leaves aside
-  what the subject requires, so an answer about this codebase is not
-  marked up for using its names. `information-density` asks how much
-  each sentence carries, from sparse (filler, restatement) through even
-  (one point per sentence) to packed. The nouls `generic-concept-words`
-  ("the fold" standing for a mechanism the reply never names) and
-  `unexplained-references` (a file, option, decision, or earlier message
-  mentioned without the few words a new reader needs) name causes with
-  a fix. qev answers a score with a probability per level and their expected
-  level index. The client reports that index, the most likely level,
-  and its probability. The context hook lists every score, highest
-  effort first, with the style's aim for that cause. Scores never push
-  back.
+- **Density.** `modules/homeManager/claude-code/lib/judge-readability.nix`
+  holds one score, `information-density`: how much each sentence
+  carries, from sparse (filler, restatement) through even (one point per
+  sentence) to packed. qev answers a score with a probability per level
+  and their expected level index; the client reports that index, the
+  most likely level, and its probability. The context hook lists it
+  with the style's aim. A score never pushes back on its own.
+- **Checks of the final message.** Three checks look at the final
+  message beside the session. A deterministic step finds candidates,
+  and the judge, where it takes part, answers about one candidate at a
+  time on a state built for it. They run in the Stop hook through
+  `tic_turn_checks` (`lib/tic-check-turn-checks.sh`); a finding joins
+  the `tic-check: check` cycle, and a report reaches the next prompt
+  through the context hook.
+  - Reading load (`judge.load`): `claude-turn-load` computes
+    ln(prose words + 1) + the density score − 0.25 · ln(words of the
+    prompt that opened the turn + 8). A turn a task notification opened
+    has a prompt of 0 words. It is reported at 7.15 and pushes back at
+    7.6.
+  - Coined phrases (`judge.coinage`): `claude-coinage-check` finds a
+    "the <word>" phrase at its second use when the assistant used it
+    first, the user has typed none of its words in any session, and
+    earlier sessions rarely use it. The judge scores each candidate's
+    opacity (`lib/judge-checks.nix`); a phrase is judged once per
+    session. It is reported at 1.0 and pushes back at 1.2. The edit hook
+    (prose files) and the message hook (commit messages, pull request
+    texts, reviews) run the same check on what they write, counting the
+    write as a use, and deny it once at 1.2.
+  - References the user cannot resolve (`judge.references`):
+    `claude-reference-check` flags a definite reference to work the user
+    did not see ("the recording proxy", "their notes") that nothing
+    earlier in the message or the session anchors. It also flags a name
+    that appears only in tool calls and their output when the judge puts
+    P(not resolvable) × P(presupposed) at 0.44 or more. Two flags push
+    back; fewer are reported.
+  The cross-session statistics come from `claude-session-index`
+  (`sessions.py`). It keeps, for each transcript, the words the user
+  typed and the words and "the" phrases the assistant wrote, in
+  `$XDG_CACHE_HOME/claude-tic-check/session-index.json`. A transcript
+  only grows, so each update reads the lines appended since the last
+  one. A check that finds the index behind starts an update in a
+  detached process and uses the index as it stands. Over 55 transcripts
+  (825 MB) a cold update took 2.3 s, and each check about 0.1 s before
+  its judge calls, about 0.35 s each.
+- **Turn inputs and typed prompts.** A `user` entry with text starts a
+  turn. It is a typed prompt only when its `origin.kind` is `human`, or
+  when it has no origin. A task notification starts a turn but was not
+  typed, so it is not one of the user's messages.
 - **Edits.** The edit hook asks the judge about every write. The
   target (`file_path`, `notebook_path`, or the emacs verbs' `file` and
   `buffer`) decides the kind: prose when its extension is in
@@ -651,14 +682,16 @@ output-style rule that needs judgment (seeded from
 - **Latency.** On an R9700, decision-server answers a request of two or
   three questions over a few hundred tokens in 0.15 to 0.26 s, and ten
   questions over 5k tokens in 1.2 s (ch-local-llms README). The judge
-  asks a reply nineteen (ten nouls and the nine scores), a prose
-  write the ten prose nouls plus arguing-with-ghosts, and a code write
-  one. The hooks that run it are registered with a timeout of 10
+  asks a reply eleven questions (ten nouls and the density score), a
+  prose write nine prose nouls plus arguing-with-ghosts, and a code
+  write one. The hooks that run it are registered with a timeout of 10
   s plus the sum of the enabled endpoints' timeouts (30 s each by
   default), because a hung endpoint costs its whole timeout before the
   next is tried.
-- **Calibration.** The thresholds are starting values, chosen before
-  any run against the real models. The flake check
+- **Calibration.** The thresholds of the three checks of the final
+  message were set from runs of elephant-1 over recent sessions,
+  against labels from one rater per check, so they are starting values.
+  The noul thresholds (0.9, 0.5) were not tuned. The flake check
   `claude-tic-check-judge` drives the hooks against a stub server with
   fixed answers, so it tests the plumbing, not the questions.
 

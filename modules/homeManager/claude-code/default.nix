@@ -97,6 +97,8 @@ let
   # read the thresholds from the same file.
   enabledDimensions = lib.filterAttrs (_name: dimension: dimension.enable) cfg.judge.dimensions;
 
+  judgeChecks = import ./lib/judge-checks.nix;
+
   malformedDimensions = lib.attrNames (
     lib.filterAttrs (
       _name: dimension:
@@ -140,6 +142,9 @@ let
       turnScoresAbove
       maxChars
       proseExtensions
+      load
+      coinage
+      references
       ;
   };
 
@@ -875,16 +880,16 @@ in
           reportAbove and every score reach the model with the next prompt
           as context (hooks.tic-check-context). Merged across all modules
           that set it. This module seeds lib/judge-readability.nix (the
-          scores assumed-context and information-density, and the nouls
-          generic-concept-words and unexplained-references, asked of
-          replies and progress messages), and the peer-programmer
-          style's rules that need judgment (lib/judge-dimensions.nix):
-          arguing-with-ghosts (asked of writes only), final-message-recap
-          (asked of finished turns only), count-obsession,
-          staccato-pronouncements, rhetorical-hooks, grading-the-point,
-          self-correction-narration, too-much-at-once (not asked of prose
-          files), selling, fragments, process-narration, and
-          undefined-terms (report only).
+          score information-density, asked of replies and progress
+          messages), and the peer-programmer style's rules that need
+          judgment (lib/judge-dimensions.nix): arguing-with-ghosts (asked
+          of writes only), final-message-recap (asked of finished turns
+          only), count-obsession, staccato-pronouncements,
+          rhetorical-hooks, grading-the-point, self-correction-narration,
+          selling, fragments, process-narration, and undefined-terms
+          (report only). Reading load, coined phrases, and references the
+          reader cannot resolve are separate checks: judge.load,
+          judge.coinage, and judge.references.
         '';
       };
 
@@ -902,6 +907,128 @@ in
           context the model gets with the next prompt, when the Stop hook
           let the message stand. Set to 0 to report every dimension.
         '';
+      };
+
+      load = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Whether the Stop hook scores the reading load of the final message.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 7.15;
+          description = ''
+            Load at or above which the final message is reported with the
+            next prompt. The load is ln(prose words + 1) + the judge's
+            information-density score - 0.25 * ln(words of the prompt that
+            opened the turn + 8), computed by claude-turn-load: each density
+            level multiplies the words a message may spend by e, and a
+            longer request earns a longer answer. At density 2.2 and no
+            request, 7.15 is about 230 words.
+          '';
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 7.6;
+          description = "Load at or above which the final message is a finding of the tic-check cycle.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "say less at once: lead with what the reader needs now, cut what they do not, and leave detail for when it is asked for";
+          description = "Reminder returned with a load finding or report.";
+        };
+      };
+
+      coinage = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the Stop hook and the hooks on durable writes (prose
+            files, commit messages, pull request texts) look for phrases
+            the assistant coined. claude-coinage-check finds "the <word>"
+            phrases at their second use when the assistant used them first,
+            the user has used none of their words in any session, and
+            earlier sessions rarely use them; the judge then scores each
+            candidate's opacity on its own state.
+          '';
+        };
+
+        instructions = lib.mkOption {
+          type = lib.types.str;
+          description = "The score question the judge answers about one candidate phrase.";
+        };
+
+        levels = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          description = "The levels of that score, from an ordinary term to an opaque coined name.";
+        };
+
+        reportAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 1.0;
+          description = "Opacity score (expected level) at or above which a candidate is reported.";
+        };
+
+        pushBackAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 1.2;
+          description = "Opacity score at or above which a candidate is a finding (deny the write, or block the stop).";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "do not coin names from generic words; use the real name (the function, the file, the option) or say plainly what the thing is";
+          description = "Reminder returned with a coinage finding or report.";
+        };
+      };
+
+      references = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Whether the Stop hook looks for references the user cannot
+            resolve. claude-reference-check flags definite references to
+            work the user never saw ("the recording proxy", "their notes")
+            that nothing earlier in the message anchors, and names that
+            appear only in tool calls and output, outside anything the user
+            has typed or been shown, when the judge confirms the reader can
+            neither resolve them nor is expected to know them.
+          '';
+        };
+
+        resolvable = lib.mkOption {
+          type = lib.types.attrs;
+          description = "The noul question whether the reader can tell what a tool-only name refers to.";
+        };
+
+        presupposed = lib.mkOption {
+          type = lib.types.attrs;
+          description = "The noul question whether the message uses a tool-only name as if the reader already knew it.";
+        };
+
+        flagAbove = lib.mkOption {
+          type = lib.types.float;
+          default = 0.44;
+          description = "P(not resolvable) times P(presupposed) at or above which a tool-only name is flagged.";
+        };
+
+        blockAtFlags = lib.mkOption {
+          type = lib.types.int;
+          default = 2;
+          description = "Number of flagged references at which the final message is a finding; fewer are reported with the next prompt.";
+        };
+
+        rule = lib.mkOption {
+          type = lib.types.str;
+          default = "give each reference the few words a reader who did not see the work needs: what the thing is and where it came from";
+          description = "Reminder returned with a reference finding or report.";
+        };
       };
 
       turnScoresAbove = lib.mkOption {
@@ -995,6 +1122,16 @@ in
 
     ch-ai-workbench.claude-code.judge.dimensions =
       import ./lib/judge-dimensions.nix // import ./lib/judge-readability.nix;
+
+    ch-ai-workbench.claude-code.judge.coinage = {
+      instructions = lib.mkDefault judgeChecks.coinage.instructions;
+      levels = lib.mkDefault judgeChecks.coinage.levels;
+    };
+
+    ch-ai-workbench.claude-code.judge.references = {
+      resolvable = lib.mkDefault judgeChecks.references.resolvable;
+      presupposed = lib.mkDefault judgeChecks.references.presupposed;
+    };
 
     # The local GPU first, the cloud when it is not running. The fields
     # are defaults so a consumer can move either endpoint (another port,

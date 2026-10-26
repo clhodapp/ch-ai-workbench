@@ -26,6 +26,7 @@ pkgs.writeShellApplication {
     table=${pkgs.writeText "claude-tic-checks.json" (builtins.toJSON checks)}
     judge=${pkgs.writeText "claude-tic-check-judge.json" (builtins.toJSON judge)}
     ${builtins.readFile ./tic-check-match.sh}
+    ${builtins.readFile ./tic-check-turn-checks.sh}
     ${builtins.readFile ./tic-check-verdict-path.sh}
     ${builtins.readFile ./claude-tic-check-hook.sh}
   '';

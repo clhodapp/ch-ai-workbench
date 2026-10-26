@@ -2,8 +2,8 @@
 """claude-turn-text: print the text of the turn a final assistant message ends.
 
 The final message arrives on stdin, as the Stop hook payload's last_assistant_message.
-`--transcript` names the session transcript. A turn is everything since the user's last typed
-prompt, and its assistant text falls into one message per stretch between tool calls, of which
+`--transcript` names the session transcript. A turn is everything since the last entry that
+started one (a prompt the user typed, or a task notification), and its assistant text falls into one message per stretch between tool calls, of which
 the Stop payload carries only the last. This program prints the earlier messages, each headed
 EARLIER, then the final message headed FINAL. When the transcript already ends with the final
 message, that copy is dropped, so the final message appears once whether or not the CLI has
@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .cli import transcript_entries, typed_prompt
+from .cli import transcript_entries, turn_input
 
 EARLIER = "[earlier message of this turn]"
 FINAL = "[final message]"
@@ -38,11 +38,12 @@ PROGRESS = "[message written in this turn since the last tic-check note]"
 
 
 def earlier_messages(entries: list[dict[str, Any]]) -> list[str]:
-    """The assistant messages since the last typed prompt, oldest first: the text blocks of
+    """The assistant messages since the last turn input (a typed prompt or a task
+    notification), oldest first: the text blocks of
     the assistant entries, split wherever a tool call comes between them."""
     start = 0
     for i, entry in enumerate(entries):
-        if typed_prompt(entry):
+        if turn_input(entry):
             start = i + 1
     messages, current = [], []
     for entry in entries[start:]:

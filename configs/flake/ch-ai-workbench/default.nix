@@ -828,10 +828,9 @@
                     [ -z "$(stop 'The build passed and the branch is pushed.')" ]
                     jq -e '.endpoint == "local" and .model == "elephant-1"' "$stored"
                     tail -n 1 requests.log | jq -e '.model == "elephant-1" and (.questions | has("fragments") and has("count-obsession") and has("undefined-terms") and (has("arguing-with-ghosts") | not))'
-                    tail -n 1 requests.log | jq -e '.questions["assumed-context"].type == "score" and (.questions["assumed-context"].criteria | length) == 4 and (.questions | has("generic-concept-words") and has("unexplained-references"))'
-                    tail -n 1 requests.log | jq -e '.questions["information-density"].criteria[1] | startswith("even")'
+                    tail -n 1 requests.log | jq -e '.questions["information-density"].type == "score" and (.questions["information-density"].criteria[1] | startswith("even"))'
                     ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
-                    grep -q -- '- assumed-context 0 of 3, most likely nothing beyond the subject' <<<"$ctx"
+                    grep -q -- '- information-density 0 of 3, most likely sparse' <<<"$ctx"
                     lacks 'These problems' <<<"$ctx"
                     [ -z "$(prompt)" ]
                     [ ! -e "$stored" ]
@@ -858,7 +857,6 @@
                     grep -q -- '- undefined-terms 0.99: ' <<<"$ctx"
                     grep -q -- '- fragments 0.6: ' <<<"$ctx"
                     grep -q -- '- information-density 2 of 3, most likely dense: several facts per sentence (0.6); aim: ' <<<"$ctx"
-                    [ "$(grep -n -- '- information-density ' <<<"$ctx" | cut -d: -f1)" -lt "$(grep -n -- '- assumed-context ' <<<"$ctx" | cut -d: -f1)" ]
                     [ -z "$(prompt)" ]
 
                     # The rewrite step.
@@ -914,13 +912,12 @@
                       jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "Build green, pushed."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
                     } > progress.jsonl
                     post() { jq -cn --arg s "$session" --arg t "$PWD/progress.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Bash", tool_input: {command: "ls"}, tool_response: {}}' | "$turnhook"; }
-                    answers '{"fragments": 0.6, "assumed-context": [0, 0, 1, 0]}'
+                    answers '{"fragments": 0.6, "information-density": [0, 0, 1, 0]}'
                     ctx=$(post | jq -r .hookSpecificOutput.additionalContext)
                     grep -q '^tic-check: mid-turn verdicts' <<<"$ctx"
                     grep -q 'not from the Bash call: it is not part of the tool' <<<"$ctx"
                     grep -q -- '- fragments 0.6: ' <<<"$ctx"
-                    grep -q -- '- assumed-context 2 of 3, most likely a lot: many names' <<<"$ctx"
-                    lacks 'information-density' <<<"$ctx"
+                    grep -q -- '- information-density 2 of 3, most likely dense' <<<"$ctx"
                     tail -n 1 requests.log | jq -e '(.state.kind | contains("between tool calls")) and (.questions | has("fragments") and (has("final-message-recap") | not) and (has("arguing-with-ghosts") | not))'
                     before=$(wc -l < requests.log)
                     [ -z "$(post)" ]
@@ -941,6 +938,32 @@
                     grep -q -- '- arguing-with-ghosts 0.6: ' <<<"$ctx"
                     [ -z "$(after)" ]
 
+                    # The checks of the final message beside the session:
+                    # its reading load, a phrase the assistant coined, and
+                    # a reference to tool output the user never saw.
+                    export XDG_CACHE_HOME="$TMPDIR/cache"
+                    answers '{"information-density": [0, 0, 0, 1]}'
+                    res=$(stop "$(printf 'The parser now reads every line. %.0s' $(seq 60))")
+                    reason <<<"$res" | grep -q -- '- too-much-at-once (load '
+                    {
+                      jq -cn '{type: "user", origin: {kind: "human"}, message: {role: "user", content: "score the replies"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "text", text: "The ladder has four levels."}, {type: "tool_use", id: "t", name: "Bash", input: {}}]}}'
+                      jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "t", content: "ok"}]}}'
+                    } > coinage.jsonl
+                    answers '{"name-opacity": [0, 0, 1]}'
+                    res=$(jq -cn --arg s "$session" --arg t "$PWD/coinage.jsonl" '{session_id: $s, transcript_path: $t, stop_hook_active: false, last_assistant_message: "Each reply sits on the ladder."}' | "$hook")
+                    reason <<<"$res" | grep -q -- '- coined-phrase "the ladder" (judge 2): '
+                    {
+                      jq -cn '{type: "user", origin: {kind: "human"}, message: {role: "user", content: "record the lockfile"}}'
+                      jq -cn '{type: "assistant", message: {role: "assistant", content: [{type: "tool_use", id: "u", name: "Bash", input: {command: "nix build .#deps"}}]}}'
+                      jq -cn '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "u", content: "starting the recording proxy on :8080"}]}}'
+                    } > references.jsonl
+                    answers '{}'
+                    [ -z "$(jq -cn --arg s "$session" --arg t "$PWD/references.jsonl" '{session_id: $s, transcript_path: $t, stop_hook_active: false, last_assistant_message: "The lockfile failed because the recording proxy bypasses the sandbox."}' | "$hook")" ]
+                    ctx=$(prompt | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q -- '- references the user may not be able to resolve: ' <<<"$ctx"
+                    grep -q -- 'the recording proxy: The lockfile failed' <<<"$ctx"
+
                     # Commit messages, pull request texts, and reviews
                     # written through Bash.
                     msg=${lib.getExe judgeHooks.tic-check-message.package}
@@ -952,7 +975,7 @@
                     res=$(run "git add -A && git commit -m 'Build green, pushed.'")
                     [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.95): '
-                    tail -n 1 requests.log | jq -e '(.state.kind | contains("commit message")) and (.state.text | rtrimstr("\n")) == "Build green, pushed." and (.questions | has("arguing-with-ghosts") and (has("assumed-context") | not))'
+                    tail -n 1 requests.log | jq -e '(.state.kind | contains("commit message")) and (.state.text | rtrimstr("\n")) == "Build green, pushed." and (.questions | has("arguing-with-ghosts") and (has("information-density") | not))'
                     [ -z "$(run "git add -A && git commit -m 'Build green, pushed.'")" ]
                     answers '{"arguing-with-ghosts": 0.95}'
                     res=$(run "gh pr review 59 --comment --body 'Nothing publishes into packages anymore.'")

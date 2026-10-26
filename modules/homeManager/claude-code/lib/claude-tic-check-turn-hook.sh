@@ -58,10 +58,17 @@ if written=$(tic_write_path "$session" "$payload") && [ -f "$written" ]; then
     write_verdict=$(jq -c '.verdict' <<<"$stored" 2>/dev/null) || write_verdict=
     write_kind=$(jq -r '.kind' <<<"$stored" 2>/dev/null) || write_kind=
     lines=$(problems_in "$write_verdict")
+    # Coined phrases the write uses, which the coinage check scored
+    # below the level that stops a write.
+    lines+=$(jq -j --slurpfile c "$judge" '
+      $c[0] as $c
+      | [.coinage // [] | .[] | "\n- coined phrase \"\(.phrase)\" (judge \((.score * 100 | round) / 100)): \($c.coinage.rule)"]
+      | add // empty
+    ' <<<"$stored" 2>/dev/null) || true
     if [ -n "$lines" ]; then
       sections+="
 The text this $tool call wrote, judged as $write_kind before it ran and let through because no problem reached the level that stops a write; probability and rule:$lines"
-      scorer=$(jq -r '"\(.model) at \(.endpoint)"' <<<"$write_verdict" 2>/dev/null) || scorer=
+      scorer=$(jq -r 'if .model then "\(.model) at \(.endpoint)" else empty end' <<<"$write_verdict" 2>/dev/null) || scorer=
     fi
   fi
 fi

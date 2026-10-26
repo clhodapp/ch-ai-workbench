@@ -80,13 +80,27 @@ turn=$(claude-turn-text --transcript "$(field '.transcript_path')" --max-chars "
 
 verdict=$(tic_verdict reply "$turn")
 findings=$(tic_findings "$turn" "$verdict")
+
+# The checks of the final message beside the session: its reading load,
+# phrases the assistant coined, and references the user cannot resolve
+# (tic_turn_checks from tic-check-turn-checks.sh).
+checks=$(tic_turn_checks "$message" "$(field '.transcript_path')" "$verdict")
+findings+=$(jq -r '.findings // ""' <<<"$checks" 2>/dev/null) || true
+report=$(jq -c '.report // {}' <<<"$checks" 2>/dev/null) || report=
+[ -n "$report" ] || report='{}'
+
 store=$(tic_verdict_path "$(field '.session_id')") || store=
 
 if [ -z "$findings" ]; then
-  # No push-back: keep the verdict for claude-tic-check-context-hook,
-  # which hands it to the model with the next prompt.
-  if [ -n "$store" ] && [ -n "$verdict" ]; then
-    { mkdir -p "$(dirname "$store")" && printf '%s\n' "$verdict" > "$store"; } 2>/dev/null || true
+  # No push-back: keep the verdict and the checks' report for
+  # claude-tic-check-context-hook, which hands them to the model with
+  # the next prompt.
+  reported=$(jq -r 'if .load != null or (.coinage // []) != [] or (.references // []) != [] then "yes" else empty end' <<<"$report" 2>/dev/null) || reported=
+  if [ -n "$store" ] && { [ -n "$verdict" ] || [ -n "$reported" ]; }; then
+    kept=$(jq -cn --argjson v "$(tic_json_or_null "$verdict")" --argjson r "$report" '($v // {}) + {checks: $r}' 2>/dev/null) || kept=
+    if [ -n "$kept" ]; then
+      { mkdir -p "$(dirname "$store")" && printf '%s\n' "$kept" > "$store"; } 2>/dev/null || true
+    fi
   fi
   exit 0
 fi
