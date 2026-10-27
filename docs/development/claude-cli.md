@@ -536,14 +536,9 @@ output-style rule that needs judgment (seeded from
   `$XDG_CONFIG_HOME/baseten/api-key`) and sent as `Authorization:
   Api-Key <key>`. While that file is missing, the entry is skipped. When
   no endpoint answers, every hook behaves as it did with the regex
-  table alone. An entry may name a systemd user unit as `wakeUnit`,
-  such as `decision-server.service` from ch-local-llms'
-  `ch-local-llms.decision-server`, which loads the model on demand and
-  exits after an idle hour. The prompt hook and the mid-turn hook start
-  that unit with `systemctl --user start --no-block` and do not wait
-  (`lib/tic-check-wake.sh`). The model takes about 45 s to load, so a
-  turn's own Stop hook usually finds it up, and a request made while it
-  loads is refused at once.
+  table alone. ch-local-llms' home-manager option
+  `ch-local-llms.decision-server` runs that server as a user service
+  started at login.
 - **The whole turn.** In a turn with tool calls, each stretch of
   text between calls is its own assistant message, and the Stop
   payload's `last_assistant_message` holds only the final one. This

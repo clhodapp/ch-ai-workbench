@@ -28,11 +28,6 @@
 # denies.  Everything unexpected resolves to abstention.
 
 payload=$(cat) || exit 0
-# A turn that started without a prompt (a task notification) or ran
-# past the server's idle exit still gets the judge's on-demand server
-# started before the Stop hook asks it (tic_wake_endpoints from
-# tic-check-wake.sh).
-tic_wake_endpoints
 
 field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null || true; }
 
