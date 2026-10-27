@@ -277,7 +277,6 @@
                     ch-ai-workbench.claude-code.enable = true;
                     ch-ai-workbench.claude-code.judge.endpoints = {
                       local.url = "http://127.0.0.1:18731";
-                      local.wakeUnit = "decision-server.service";
                       baseten.enable = false;
                     };
                   }
@@ -772,16 +771,6 @@
                     reason() { jq -r .reason; }
                     lacks() { ! grep -q -- "$1"; }
                     answers() { printf '%s' "$1" > answers.json; }
-
-                    # A prompt starts the endpoint's on-demand unit and
-                    # does not wait for it: a systemctl on PATH records
-                    # its arguments.
-                    mkdir bin
-                    printf '#!/bin/sh\necho "$*" >> %s/systemctl.log\n' "$PWD" > bin/systemctl
-                    chmod +x bin/systemctl
-                    PATH="$PWD/bin:$PATH" prompt > /dev/null
-                    [ "$(cat systemctl.log)" = "--user start --no-block decision-server.service" ]
-                    rm systemctl.log
 
                     # The judge is down: the regex table alone.
                     res=$(stop 'The merge step is yours.')
