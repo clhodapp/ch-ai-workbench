@@ -2,32 +2,32 @@
 # The skills-dir plugin: ceremony skill, the advisory SessionStart hook
 # (staleness/integrity tripwire with auto-sync), and the agent tools (the
 # CLI's MCP server, which prompts through claude-consent). Deployed by the
-# home-manager module into ~/.claude/skills/claude-code-sandbox, where it
-# auto-loads as claude-code-sandbox@skills-dir.
+# home-manager module into ~/.claude/skills/agent-sandbox, where it
+# auto-loads as agent-sandbox@skills-dir.
 #
 # The hook is advisory only: the sandbox design stays correct without it
 # (it always exits 0), and managed policies like allowManagedHooksOnly
 # may suppress it entirely.
 {
-  claude-code-sandbox,
+  agent-sandbox,
   claude-consent,
   lib,
   runCommand,
 }:
-runCommand "claude-code-sandbox-plugin"
+runCommand "agent-sandbox-plugin"
   {
-    ccsTool = claude-code-sandbox;
+    agentSandboxTool = agent-sandbox;
     consentTool = claude-consent;
     meta = {
-      description = "Claude Code skills-dir plugin for claude-code-sandbox";
+      description = "Claude Code skills-dir plugin for agent-sandbox";
       license = lib.licenses.mit;
     };
   }
   ''
     mkdir -p "$out/.claude-plugin" "$out/hooks"
     substitute ${./plugin.json} "$out/.claude-plugin/plugin.json" \
-      --subst-var ccsTool --subst-var consentTool
+      --subst-var agentSandboxTool --subst-var consentTool
     cp -r ${./skills} "$out/skills"
     substitute ${./hooks/hooks.json.in} "$out/hooks/hooks.json" \
-      --subst-var ccsTool
+      --subst-var agentSandboxTool
   ''

@@ -17,8 +17,8 @@ from unittest import mock
 
 from fixtures import WORK, write_registry
 
-from claude_code_sandbox import cli
-from claude_code_sandbox.mcp import TOOLS, Server
+from agent_sandbox import cli
+from agent_sandbox.mcp import TOOLS, Server
 
 GIT = {
     "description": "git over ssh",
@@ -82,15 +82,15 @@ class ToolsTest(unittest.TestCase):
         self.consent_script([])
         self.env = {
             **os.environ,
-            "CLAUDE_CODE_SANDBOX_CONFIG": str(self.config),
+            "AGENT_SANDBOX_CONFIG": str(self.config),
             "CLAUDE_PROJECT_DIR": str(self.repo),
             "CLAUDE_CODE_SESSION_ID": "0123abcd-0000-0000-0000-000000000000",
-            "CLAUDE_CODE_SANDBOX_CONSENT": str(consent),
-            "CLAUDE_CODE_SANDBOX_STATE": str(tmp / "state"),
+            "AGENT_SANDBOX_CONSENT": str(consent),
+            "AGENT_SANDBOX_STATE": str(tmp / "state"),
         }
         patcher = mock.patch.dict(
             os.environ,
-            {"CLAUDE_CODE_SANDBOX_CONFIG": str(self.config), "CLAUDE_CODE_SANDBOX_STATE": str(tmp / "state")},
+            {"AGENT_SANDBOX_CONFIG": str(self.config), "AGENT_SANDBOX_STATE": str(tmp / "state")},
         )
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -104,7 +104,7 @@ class ToolsTest(unittest.TestCase):
         return rc, out.getvalue()
 
     def sidecar(self):
-        return json.loads((self.repo / ".claude" / "claude-code-sandbox.json").read_text())
+        return json.loads((self.repo / ".agent-sandbox" / "binding.json").read_text())
 
     def consent_script(self, results):
         (self.fake / "script.json").write_text(json.dumps(results))
@@ -205,7 +205,7 @@ class ToolsTest(unittest.TestCase):
         self.assertIn("too wide", out)
 
     def test_show_and_describe_name_trusted_executables(self):
-        socket = "/home/u/.local/state/claude-code-sandbox/trusted/gh.sock"
+        socket = "/home/u/.local/state/agent-sandbox/trusted/gh.sock"
         forge = {
             "description": "gh with the user's token",
             "masked": True,

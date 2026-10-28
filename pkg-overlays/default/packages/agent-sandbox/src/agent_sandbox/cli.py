@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-"""claude-code-sandbox: enroll checkouts into compositions of nix-declared
-Claude Code sandbox modules.
+"""agent-sandbox: enroll checkouts into compositions of nix-declared
+sandbox modules.
 
 A sandbox module says what one kind of tooling needs inside the sandbox:
 its executables, domains, sockets and writable paths. A checkout chooses
@@ -8,7 +8,7 @@ the set of modules its work needs. Enrollment composes them into one
 fragment, writes it into the checkout's co-owned
 ``.claude/settings.local.json`` (three-way merge; Claude Code's own keys
 are never touched), and records the chosen set and what was applied in
-the sidecar ``.claude/claude-code-sandbox.json``. A session reads its
+the sidecar ``.agent-sandbox/binding.json``. A session reads its
 sandbox rules at launch, so a change reaches a running session only
 after it is stopped and started again.
 """
@@ -31,7 +31,13 @@ from .files import (
     expiring_checkouts,
     find_repo_root,
     index_expiring,
+    migrate_checkout,
+    migrate_state,
+    old_sidecar_path,
     read_json,
+    remove_if_empty,
+    sandbox_dir,
+    sidecar_path,
     read_sidecar,
     settings_path,
     update_json,
@@ -49,10 +55,12 @@ def _root_or_die(directory: Path) -> Path:
     root = find_repo_root(directory)
     if root is None:
         raise ToolError(f"{directory} is not inside a git repository")
+    migrate_state()
+    migrate_checkout(root)
     return root
 
 
-ROOT_ENV_VAR = "CLAUDE_CODE_SANDBOX_ROOT"
+ROOT_ENV_VAR = "AGENT_SANDBOX_ROOT"
 
 
 def _fragment_for(root: Path, modules: list[str] | None) -> dict[str, Any]:
@@ -155,7 +163,7 @@ def expire_due(root: Path, now: datetime | None = None) -> list[str]:
 def _legacy_message(root: Path, profile: str) -> str:
     return (
         f"{root}: bound to profile '{profile}', which no longer exists; "
-        "enroll it with sandbox modules (claude-code-sandbox list shows them)"
+        "enroll it with sandbox modules (agent-sandbox list shows them)"
     )
 
 
@@ -224,9 +232,12 @@ def _iter_enrolled(roots: list[Path]) -> list[Path]:
         for dirpath, dirnames, _filenames in os.walk(top):
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
             here = Path(dirpath)
-            if (here / ".claude" / "claude-code-sandbox.json").is_file() or (
-                here / ".claude" / "settings.local.json"
-            ).is_file():
+            if (
+                sidecar_path(here).is_file()
+                or old_sidecar_path(here).is_file()
+                or (here / ".claude" / "settings.local.json").is_file()
+            ):
+                migrate_checkout(here)
                 found.append(here)
                 dirnames[:] = []  # do not descend into nested checkouts
     return found
@@ -326,7 +337,9 @@ def cmd_expire(args: argparse.Namespace) -> int:
     Home Manager timer runs this, because a session reads its sandbox
     rules at launch, before its SessionStart hook could drop them."""
     failed = False
+    migrate_state()
     for root in expiring_checkouts():
+        migrate_checkout(root)
         try:
             due = expire_due(root)
         except ToolError as e:
@@ -365,12 +378,14 @@ def refusal_text(name: str, refusal: dict[str, Any]) -> str:
     text = f"Declined for this checkout at {refusal.get('at', 'an unknown time')}"
     if refusal.get("reason"):
         text += f": {refusal['reason']}"
-    return text + f". `claude-code-sandbox undecline {name}` withdraws the refusal."
+    return text + f". `agent-sandbox undecline {name}` withdraws the refusal."
 
 
 def cmd_show(args: argparse.Namespace) -> int:
     registry = load_registry()
     root = find_repo_root(Path(args.directory))
+    if root is not None:
+        migrate_checkout(root)
     state = checkout_state(root, registry) if root is not None else None
     for i, name in enumerate(args.modules):
         if i:
@@ -474,8 +489,11 @@ def _git_dir(root: Path) -> Path | None:
     return Path(out) if out else None
 
 
-SCRATCH_SUBDIR = Path(".claude") / "claude-code-sandbox" / "jobs"
-CREDS_SUBDIR = Path(".claude") / "claude-code-sandbox" / "creds"
+SCRATCH_SUBDIR = Path(".agent-sandbox") / "jobs"
+CREDS_SUBDIR = Path(".agent-sandbox") / "creds"
+# Job scratch of a checkout bound before the rename; live jobs' tmp
+# symlinks still point into it until the pruner has emptied it.
+OLD_SCRATCH_SUBDIR = Path(".claude") / "claude-code-sandbox" / "jobs"
 
 
 def creds_dir(root: Path) -> Path:
@@ -557,7 +575,7 @@ def redirect_job_tmp(root: Path) -> str | None:
     it lives under ~/.claude, which the sandbox keeps write-protected
     regardless of grants, and no static allowWrite can name a per-job
     path. The job's tmp becomes a symlink into the checkout's working
-    tree, under .claude/claude-code-sandbox/jobs/<id>/tmp: a plain
+    tree, under .agent-sandbox/jobs/<id>/tmp: a plain
     directory entry the sandbox resolves into space the checkout
     already owns, so nothing is granted and the isolation unit stays
     the checkout, which is the sandbox's own unit (every session in a
@@ -573,10 +591,14 @@ def redirect_job_tmp(root: Path) -> str | None:
         return None
     jobs_root = Path(job_dir).parent
     scratch_root = root / SCRATCH_SUBDIR
-    if scratch_root.is_dir():
-        for orphan in scratch_root.iterdir():
-            if orphan.is_dir() and not (jobs_root / orphan.name).exists():
-                shutil.rmtree(orphan, ignore_errors=True)
+    for pruned in (scratch_root, root / OLD_SCRATCH_SUBDIR):
+        if pruned.is_dir():
+            for orphan in pruned.iterdir():
+                if orphan.is_dir() and not (jobs_root / orphan.name).exists():
+                    shutil.rmtree(orphan, ignore_errors=True)
+    old_scratch = root / OLD_SCRATCH_SUBDIR
+    remove_if_empty(old_scratch)
+    remove_if_empty(old_scratch.parent)
     tmp = Path(job_dir) / "tmp"
     if tmp.is_symlink() or not tmp.is_dir():
         return None
@@ -598,25 +620,27 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
         root = find_repo_root(Path.cwd())
         if root is None:
             return 0
+        migrate_state()
+        migrate_checkout(root)
         sidecar = read_sidecar(root)
         if sidecar is None:
             return 0
         target = redirect_job_tmp(root)
         if target:
             print(
-                "claude-code-sandbox: $CLAUDE_JOB_DIR/tmp now points into this "
+                "agent-sandbox: $CLAUDE_JOB_DIR/tmp now points into this "
                 f"checkout ({target}) so sandboxed commands can write there"
             )
         creds = provision_creds(root)
         if creds:
             print(
-                "claude-code-sandbox: provisioned owned credential copies "
+                "agent-sandbox: provisioned owned credential copies "
                 f"({', '.join(sorted(creds))}) so sandboxed tools can read them"
             )
         due = expire_due(root)
         if due:
             print(
-                f"claude-code-sandbox: dropped expired [{', '.join(due)}]; this session "
+                f"agent-sandbox: dropped expired [{', '.join(due)}]; this session "
                 "keeps their rules until it is stopped and started again"
             )
             sidecar = read_sidecar(root)
@@ -625,25 +649,25 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
         if attention and sidecar["legacy_profile"] is not None:
             # The checkout keeps the fragment it last applied; choosing
             # its modules is the user's act, so the hook only reports.
-            print(f"claude-code-sandbox: {line}")
+            print(f"agent-sandbox: {line}")
         elif attention:
             try:
                 _apply(root, sidecar["modules"], sidecar["applied"], quiet=True)
                 print(
-                    f"claude-code-sandbox: {line}; synced now. This session keeps "
+                    f"agent-sandbox: {line}; synced now. This session keeps "
                     "its old rules until it is stopped and started again"
                 )
             except ToolError as e:
-                print(f"claude-code-sandbox: {line}; sync failed: {e}")
+                print(f"agent-sandbox: {line}; sync failed: {e}")
     except Exception as e:  # noqa: BLE001 (advisory surface: never block a session)
-        print(f"claude-code-sandbox: hook error (advisory): {e}")
+        print(f"agent-sandbox: hook error (advisory): {e}")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="claude-code-sandbox",
-        description="Enroll checkouts into compositions of nix-declared Claude Code sandbox modules",
+        prog="agent-sandbox",
+        description="Enroll checkouts into compositions of nix-declared sandbox modules",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -728,7 +752,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.fn(args)
     except ToolError as e:
-        print(f"claude-code-sandbox: {e}", file=sys.stderr)
+        print(f"agent-sandbox: {e}", file=sys.stderr)
         return 1
 
 

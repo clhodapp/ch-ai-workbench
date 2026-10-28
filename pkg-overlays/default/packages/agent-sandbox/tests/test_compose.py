@@ -9,8 +9,8 @@ from pathlib import Path
 
 from fixtures import BASE, WORK, WORK_FRAGMENT, write_registry
 
-from claude_code_sandbox.compose import DEVICES_ENV_VAR, SOCKETS_ENV_VAR, compose
-from claude_code_sandbox.files import ToolError, read_json
+from agent_sandbox.compose import DEVICES_ENV_VAR, SOCKETS_ENV_VAR, compose
+from agent_sandbox.files import ToolError, read_json
 
 
 def part(name, **grants):

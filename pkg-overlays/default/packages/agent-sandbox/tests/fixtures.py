@@ -10,7 +10,7 @@ BASE = {
     "pathFirst": ["/nix/store/ssh-wrapper/bin"],
     "pathLast": ["/nix/store/base-farm/bin", "/nix/store/bwrap/bin"],
     "shell": "/nix/store/bash/bin/bash",
-    "socketShell": "/nix/store/ccs-socket-shell",
+    "socketShell": "/nix/store/agent-sandbox-socket-shell",
 }
 
 WORK = {
@@ -35,7 +35,7 @@ WORK_FRAGMENT = {
         "PATH": "/nix/store/ssh-wrapper/bin:/nix/store/work-farm/bin"
         ":/nix/store/base-farm/bin:/nix/store/bwrap/bin",
         "SHELL": "/nix/store/bash/bin/bash",
-        "CLAUDE_CODE_SANDBOX_DEVICES": "",
+        "AGENT_SANDBOX_DEVICES": "",
     },
 }
 

@@ -12,7 +12,7 @@ from unittest import mock
 
 from fixtures import WORK, WORK_FRAGMENT, write_registry
 
-from claude_code_sandbox import cli
+from agent_sandbox import cli
 
 
 class ClobberTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class ClobberTest(unittest.TestCase):
         config = tmp / "config"
         write_registry(config, {"work": WORK})
         patcher = mock.patch.dict(
-            os.environ, {"CLAUDE_CODE_SANDBOX_CONFIG": str(config)}
+            os.environ, {"AGENT_SANDBOX_CONFIG": str(config)}
         )
         patcher.start()
         self.addCleanup(patcher.stop)

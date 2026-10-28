@@ -1,10 +1,10 @@
-# claude-code-sandbox
+# agent-sandbox
 
 Nix-authored per-project configuration for [Claude Code]'s native
-sandbox. The `claude-code-sandbox` Home Manager module declares named
+sandbox. The `agent-sandbox` Home Manager module declares named
 sandbox **modules**, each saying what one kind of tooling (git, nix, a
 language toolchain) needs inside the sandbox: its executables, domains,
-sockets and writable paths. The `claude-code-sandbox` CLI binds each
+sockets and writable paths. The `agent-sandbox` CLI binds each
 checkout to the set of modules its work needs by explicit
 **enrollment**, composing them into native sandbox rules, without
 placing anything in shared repositories.
@@ -15,9 +15,9 @@ Where things live in this repository:
 
 | Piece | Path |
 |---|---|
-| Home Manager module (`ch-ai-workbench.claude-code-sandbox.*`) | `modules/homeManager/claude-code-sandbox/default.nix` |
-| CLI (Python, stdlib only) | `pkg-overlays/default/packages/claude-code-sandbox/` |
-| Skills-dir plugin (enrollment skill, session-start hook, agent tools MCP server) | `pkg-overlays/default/packages/claude-code-sandbox-plugin/` |
+| Home Manager module (`ch-ai-workbench.agent-sandbox.*`) | `modules/homeManager/agent-sandbox/default.nix` |
+| CLI (Python, stdlib only) | `pkg-overlays/default/packages/agent-sandbox/` |
+| Skills-dir plugin (enrollment skill, session-start hook, agent tools MCP server) | `pkg-overlays/default/packages/agent-sandbox-plugin/` |
 | Landlock shim (unix-socket narrowing) | `pkg-overlays/default/packages/landlock-shim/` |
 | `trusted-exec` (trusted-executable stub and service, Rust, std only) | `pkg-overlays/default/packages/trusted-exec/` |
 
@@ -28,9 +28,12 @@ Where things live in this repository:
 - **Enrollment is the user's act.** Nothing is ambient: unenrolled
   repos get only the monotone baseline, and no file ever lands in a
   shared repository.
-- **The checkout is self-describing.** The sidecar carries the binding
-  and the last-applied blob; there is no central inventory to rot when
-  folders move.
+- **The checkout is self-describing.** The sidecar
+  (`.agent-sandbox/binding.json`) carries the binding and the
+  last-applied blob; there is no central inventory to rot when folders
+  move. The same `.agent-sandbox/` directory holds the checkout's owned
+  credential copies (`creds/`) and job scratch (`jobs/`), and the
+  home-manager module ignores it globally in git.
 - **Co-ownership, not ownership.** `.claude/settings.local.json` is
   Claude Code's own writable state (permission saves, MCP consent, the
   /sandbox panel). The three-way merge touches only the paths it
@@ -71,7 +74,7 @@ fragment for Claude Code's built-in sandbox carries:
 - The union of the chosen modules' list grants: read and write paths,
   allowed and denied domains, excluded commands, unix sockets.
 - The union of the `devices` patterns every chosen module lists, in
-  `env.CLAUDE_CODE_SANDBOX_DEVICES`, one pattern per line. The variable
+  `env.AGENT_SANDBOX_DEVICES`, one pattern per line. The variable
   is in every fragment and is empty when no chosen module lists a
   device (see the device-node boundary below).
 - Fail-closed posture: `failIfUnavailable` so a sandbox that cannot
@@ -84,7 +87,7 @@ same environment variable or passthrough setting to different values
 make enrollment fail with both values named; two modules that put the
 same command on PATH resolve to the module whose name sorts first.
 
-Enrolling a checkout (`claude-code-sandbox enroll git nix`) merges the
+Enrolling a checkout (`agent-sandbox enroll git nix`) merges the
 fragment into the repo's own `.claude/settings.local.json`, a file
 co-owned with Claude Code, which saves permission approvals there. The
 merge is three-way with the last-applied blob as base and touches only
@@ -115,7 +118,7 @@ directory, or the one containing `DIR` with `-C DIR`.
 | `mcp` | Serve the agent tools over MCP on stdio (the plugin starts it) |
 
 The CLI is on every enrollment's PATH, so a sandboxed agent can run
-`claude-code-sandbox status` to verify its own enrollment. Inside a
+`agent-sandbox status` to verify its own enrollment. Inside a
 masked enrollment the registry and parts (store symlinks) are
 unreadable, so status there reports the modules and settings integrity
 with freshness marked unknown rather than guessing.
@@ -148,8 +151,8 @@ A session reads its sandbox rules at launch, before its SessionStart
 hook runs. If only the hook dropped expired modules, the first session
 launched after a deadline would run with the expired module until it
 restarted. The CLI therefore keeps a per-user index of the checkouts
-that have a deadline, `$XDG_STATE_HOME/claude-code-sandbox/expiring.json`,
-and a systemd user timer runs `claude-code-sandbox expire` every ten
+that have a deadline, `$XDG_STATE_HOME/agent-sandbox/expiring.json`,
+and a systemd user timer runs `agent-sandbox expire` every ten
 minutes. The index lists checkouts only; the deadlines stay in each
 checkout's sidecar. `expire` drops due modules, re-applies the rest,
 and removes checkouts with no deadline left from the index, including
@@ -175,7 +178,7 @@ An agent inside the sandbox cannot inspect or change its own sandbox
 from Bash: in a masked enrollment the registry and parts are
 unreadable, the settings and sidecar files are write-guarded, and the
 consent spool (`$XDG_RUNTIME_DIR/claude-consent`) is outside the write
-scope. The plugin therefore declares an MCP server, `claude-code-sandbox
+scope. The plugin therefore declares an MCP server, `agent-sandbox
 mcp`, which Claude Code starts outside the Bash sandbox. Its tools act on
 the checkout the session was launched in (`CLAUDE_PROJECT_DIR`), because
 that checkout's `settings.local.json` governs the session's sandbox.
@@ -220,7 +223,7 @@ unanswered for fifteen minutes record nothing. Choosing the module with
 
 The tools go through Claude Code's usual permission check for MCP
 tools, so the first call of each may itself ask for permission, unless
-a permission rule allows `mcp__plugin_claude-code-sandbox_sandbox`.
+a permission rule allows `mcp__plugin_agent-sandbox_sandbox`.
 
 ## Trusted executables
 
@@ -240,7 +243,7 @@ access away with systemd `[Service]` settings.
 
 ```nix
 {
-  ch-ai-workbench.claude-code-sandbox = {
+  ch-ai-workbench.agent-sandbox = {
     trustedExecutables.notify-send = {
       description = "desktop notifications through the session bus";
       program = lib.getExe' pkgs.libnotify "notify-send";
@@ -263,10 +266,10 @@ reach the bus socket under `$XDG_RUNTIME_DIR`, but it cannot see home,
 cannot write the system, and has no network.
 
 Each declaration becomes two systemd user units. The socket unit
-`ccs-trusted-<name>.socket` listens at
-`$XDG_STATE_HOME/claude-code-sandbox/trusted/<name>.sock` (mode 0600)
+`agent-sandbox-trusted-<name>.socket` listens at
+`$XDG_STATE_HOME/agent-sandbox/trusted/<name>.sock` (mode 0600)
 with `Accept=yes`, so systemd starts one instance of the service
-template `ccs-trusted-<name>@.service` per connection, with the
+template `agent-sandbox-trusted-<name>@.service` per connection, with the
 connection as stdin. The instance runs `trusted-exec serve`, which
 starts the program with the settings in `serviceConfig` applied. The
 socket lives under the state directory because composition writes
@@ -348,7 +351,7 @@ by nobody, and tools that check the ownership of their configuration
 
 ```nix
 {
-  ch-ai-workbench.claude-code-sandbox = {
+  ch-ai-workbench.agent-sandbox = {
     enable = true;
     runtime.claudePackage = pkgs.claude-code;
     modules = {
@@ -376,8 +379,8 @@ by nobody, and tools that check the ownership of their configuration
 }
 ```
 
-A Python project on GitHub then runs `claude-code-sandbox enroll github
-python`, and a Nix flake on GitHub runs `claude-code-sandbox enroll
+A Python project on GitHub then runs `agent-sandbox enroll github
+python`, and a Nix flake on GitHub runs `agent-sandbox enroll
 github nix`. The skills-dir plugin ships an enrollment skill and an
 advisory session-start hook (staleness/integrity tripwire with
 auto-sync); the design is correct without it.
@@ -393,7 +396,7 @@ auto-sync); the design is correct without it.
   static `allowWrite` can name a per-job path. The plugin's
   session-start hook therefore replaces the job's `tmp` with a symlink
   into the checkout's working tree, at
-  `.claude/claude-code-sandbox/jobs/<id>/tmp`: writable inside the
+  `.agent-sandbox/jobs/<id>/tmp`: writable inside the
   sandbox, per worktree by construction, alive as long as the checkout,
   and kept out of `git status` through the clone's `.git/info/exclude`.
   Nothing is granted, and the isolation unit stays the checkout, the
@@ -406,7 +409,7 @@ auto-sync); the design is correct without it.
   that narrows `connect()` back to those sockets; abstract-namespace
   sockets from outside the sandbox are denied wholesale. The socket
   shell is built once, so the composed list reaches it through the
-  settings env (`CLAUDE_CODE_SANDBOX_UNIX_SOCKETS`, one path per line).
+  settings env (`AGENT_SANDBOX_UNIX_SOCKETS`, one path per line).
   The settings files are write-guarded, and a Landlock domain only
   narrows once applied, so a command cannot widen the list; an empty
   variable makes the socket shell refuse to run, because the shim reads
@@ -445,7 +448,7 @@ auto-sync); the design is correct without it.
   the sandbox through the base part's `bwrap` wrapper, which every
   enrollment's PATH finds ahead of the real bubblewrap. The wrapper
   reads the composed `devices` patterns from
-  `CLAUDE_CODE_SANDBOX_DEVICES`, expands them as shell globs when each
+  `AGENT_SANDBOX_DEVICES`, expands them as shell globs when each
   sandbox is built, and inserts `--dev-bind-try NODE NODE` for every
   matching character or block device right after the first
   `--dev /dev`. Then it execs the next `bwrap` on PATH. A match that is
@@ -489,7 +492,7 @@ auto-sync); the design is correct without it.
   an `mcpServers` entry in `plugin.json`) as a `runCommand` derivation
   with the CLI and `claude-consent` store paths substituted in. Claude
   Code 2.1.283 registers a skills-dir plugin's MCP server as
-  `plugin:claude-code-sandbox:sandbox`, and starts it with
+  `plugin:agent-sandbox:sandbox`, and starts it with
   `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PROJECT_DIR` set and form
   elicitation advertised (verified 2026-10-22).
 - **MCP server** (`mcp.py`): JSON-RPC over stdio, stdlib only. A reader
@@ -507,34 +510,60 @@ auto-sync); the design is correct without it.
 ## Testing and commands
 
 The CLI's `unittest` suite under
-`pkg-overlays/default/packages/claude-code-sandbox/tests/` runs in the package's
+`pkg-overlays/default/packages/agent-sandbox/tests/` runs in the package's
 `checkPhase`, so building the package is the test run;
-`checks.<system>.claude-code-sandbox` exposes it to `nix flake check`,
+`checks.<system>.agent-sandbox` exposes it to `nix flake check`,
 beside the plugin and shim builds. The merge engine and the composer
 are the correctness core: any change to `merge.py` needs a test for the
 affected rule (domain invariant, ad-hoc persistence, removal asymmetry,
 scalar authority, pruning, idempotence), and any change to `compose.py`
 needs one in `tests/test_compose.py` (unions, masking, PATH order,
 `requires` and `baseModules`, socket narrowing, the device list,
-conflicts, the size limit). `checks.<system>.claude-code-sandbox-compose` runs the CLI
+conflicts, the size limit). `checks.<system>.agent-sandbox-compose` runs the CLI
 against the parts a home-manager configuration really builds.
 
 From this repository's root:
 
 ```zsh
-nix build '.#claude-code-sandbox'
-nix build '.#claude-code-sandbox-plugin'
+nix build '.#agent-sandbox'
+nix build '.#agent-sandbox-plugin'
 nix build '.#landlock-shim'
 nix build '.#trusted-exec'
-nix build '.#checks.x86_64-linux.claude-code-sandbox-compose'
+nix build '.#checks.x86_64-linux.agent-sandbox-compose'
 ```
 
-Fast Python loop, from `pkg-overlays/default/packages/claude-code-sandbox/`:
+Fast Python loop, from `pkg-overlays/default/packages/agent-sandbox/`:
 
 ```zsh
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
 Run the CLI against a scratch registry by pointing
-`CLAUDE_CODE_SANDBOX_CONFIG` at a directory containing a
+`AGENT_SANDBOX_CONFIG` at a directory containing a
 `registry.json` (`tests/fixtures.py` writes one, with its parts).
+
+## Renamed from claude-code-sandbox
+
+This tool was called claude-code-sandbox until 2026-10-28. Nothing
+records which checkouts were enrolled under the old name, so the CLI
+migrates each checkout the first time it touches it: every
+checkout-local verb, the session-start hook, the MCP server, `scan` and
+`expire`. When `.claude/claude-code-sandbox.json` exists and
+`.agent-sandbox/binding.json` does not, the CLI moves the sidecar to the
+new path and removes `.claude/claude-code-sandbox/creds`, which the
+session-start hook regenerates under `.agent-sandbox/creds`. A checkout
+that already has the new binding keeps both files as they are. The
+directory `.claude/claude-code-sandbox/jobs` stays, because the tmp
+symlinks of live background jobs point into it; the job-scratch pruner
+removes the scratch of vanished jobs there as well, and the CLI removes
+`.claude/claude-code-sandbox` once it is empty. The sidecar's applied
+fragment moves with the sidecar and is the base of the next three-way
+merge, so the next `sync` removes the old `CLAUDE_CODE_SANDBOX_*` keys
+from `.claude/settings.local.json` and writes the `AGENT_SANDBOX_*`
+ones. The CLI also moves `$XDG_STATE_HOME/claude-code-sandbox/expiring.json`
+to `$XDG_STATE_HOME/agent-sandbox/expiring.json` unless
+`AGENT_SANDBOX_STATE` is set. The registry directory moves with the
+home-manager switch, from `$XDG_CONFIG_HOME/claude-code-sandbox` to
+`$XDG_CONFIG_HOME/agent-sandbox`. The monotone baseline keeps
+write-guarding `.claude/claude-code-sandbox.json`, because the migration
+would turn a sidecar an agent wrote there into a binding.

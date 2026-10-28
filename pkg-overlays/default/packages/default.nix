@@ -6,8 +6,8 @@
 # leases microvm guests of the user to sessions.
 { callPackage, ... }:
 {
-  claude-code-sandbox = callPackage ./claude-code-sandbox { };
-  claude-code-sandbox-plugin = callPackage ./claude-code-sandbox-plugin { };
+  agent-sandbox = callPackage ./agent-sandbox { };
+  agent-sandbox-plugin = callPackage ./agent-sandbox-plugin { };
   claude-consent = callPackage ./claude-consent { };
   claude-response-judge = callPackage ./claude-response-judge { };
   landlock-shim = callPackage ./landlock-shim { };

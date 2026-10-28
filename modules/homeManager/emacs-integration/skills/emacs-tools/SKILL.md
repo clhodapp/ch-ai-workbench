@@ -207,7 +207,7 @@ Recipes:
 For a buffer you would rather work on with ripgrep, sed, or your
 native file tools than with elisp: `buffer-file (name)` writes the
 buffer's text to a file under your territory at
-`.claude/claude-code-sandbox/mcp-copies/<name>` (writable inside the
+`.agent-sandbox/mcp-copies/<name>` (writable inside the
 sandbox, ignored by git) and returns the path. The text passes through
 betterleaks like every copy; a redacted copy says so, and its secrets
 appear as numbered placeholders that the live Emacs puts back when the

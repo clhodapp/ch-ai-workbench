@@ -16,7 +16,7 @@
       gptel
       claude
       claude-code
-      claude-code-sandbox
+      agent-sandbox
       codex
       emacs-integration
       microvm
@@ -159,7 +159,7 @@
                   "/dev/zer*"
                   "/dev/stdin"
                   "/dev/shm"
-                  "/dev/ccs-absent"
+                  "/dev/agent-sandbox-absent"
                 ];
               };
               baseModules = [ "agent" ];
@@ -182,12 +182,12 @@
               (inputs.home-manager.lib.homeManagerConfiguration {
                 inherit pkgs;
                 modules = [
-                  self.modules.homeManager.claude-code-sandbox
+                  self.modules.homeManager.agent-sandbox
                   {
                     home.username = "tester";
                     home.homeDirectory = "/home/tester";
                     home.stateVersion = "25.05";
-                    ch-ai-workbench.claude-code-sandbox = sandboxModules;
+                    ch-ai-workbench.agent-sandbox = sandboxModules;
                   }
                 ];
               }).config.home-files;
@@ -202,7 +202,7 @@
                 inherit pkgs;
                 modules = [
                   self.modules.homeManager.claude-code
-                  self.modules.homeManager.claude-code-sandbox
+                  self.modules.homeManager.agent-sandbox
                   self.modules.homeManager.microvm
                   {
                     home.username = "tester";
@@ -271,7 +271,7 @@
                 inherit pkgs;
                 modules = [
                   self.modules.homeManager.claude-code
-                  self.modules.homeManager.claude-code-sandbox
+                  self.modules.homeManager.agent-sandbox
                   {
                     home.username = "tester";
                     home.homeDirectory = "/home/tester";
@@ -314,7 +314,7 @@
                 self.modules.homeManager.gptel
                 self.modules.homeManager.claude
                 self.modules.homeManager.claude-code
-                self.modules.homeManager.claude-code-sandbox
+                self.modules.homeManager.agent-sandbox
                 self.modules.homeManager.codex
                 self.modules.homeManager.emacs-integration
                 # Without kinds, the microvm module adds nothing.
@@ -340,7 +340,7 @@
                   };
                   ch-ai-workbench.claude.enable = true;
                   ch-ai-workbench.claude-code.enable = true;
-                  ch-ai-workbench.claude-code-sandbox = sandboxModules;
+                  ch-ai-workbench.agent-sandbox = sandboxModules;
                   # Builds the wrapper that declares the Emacs MCP server.
                   ch-ai-workbench.codex = {
                     enable = true;
@@ -381,8 +381,8 @@
               # tree, and compiling the shim is its build-time test
               # (Landlock cannot be exercised inside the Nix build
               # sandbox).
-              claude-code-sandbox = self.packages.${system}.claude-code-sandbox;
-              claude-code-sandbox-plugin = self.packages.${system}.claude-code-sandbox-plugin;
+              agent-sandbox = self.packages.${system}.agent-sandbox;
+              agent-sandbox-plugin = self.packages.${system}.agent-sandbox-plugin;
               landlock-shim = self.packages.${system}.landlock-shim;
               # Building the judge client runs its unittest suite against
               # stub System One servers.
@@ -418,7 +418,7 @@
                     "${stateRoot}/probe-2/in"
                     "${stateRoot}/probe-2/out"
                   ];
-                  sandboxModulesOf = home: home.ch-ai-workbench.claude-code-sandbox.modules;
+                  sandboxModulesOf = home: home.ch-ai-workbench.agent-sandbox.modules;
                 in
                 assert builtins.attrNames (sandboxModulesOf microvmFullHome) == [ "microvm-probe" ];
                 assert (sandboxModulesOf microvmFullHome).microvm-probe.allowWrite == probeShareDirs;
@@ -489,11 +489,11 @@
               # builds, end to end: the registry and parts come from a
               # real home's files, with the registry's home paths pointed
               # at that tree.
-              claude-code-sandbox-compose =
-                pkgs.runCommand "claude-code-sandbox-compose"
+              agent-sandbox-compose =
+                pkgs.runCommand "agent-sandbox-compose"
                   {
                     nativeBuildInputs = [
-                      self.packages.${system}.claude-code-sandbox
+                      self.packages.${system}.agent-sandbox
                       self.packages.${system}.trusted-exec
                       pkgs.git
                       pkgs.jq
@@ -502,20 +502,20 @@
                   }
                   ''
                     export HOME="$TMPDIR"
-                    export CLAUDE_CODE_SANDBOX_CONFIG="$TMPDIR/config"
-                    mkdir "$CLAUDE_CODE_SANDBOX_CONFIG"
+                    export AGENT_SANDBOX_CONFIG="$TMPDIR/config"
+                    mkdir "$AGENT_SANDBOX_CONFIG"
                     sed 's|/home/tester/.config|${sandboxHomeFiles}/.config|g' \
-                      ${sandboxHomeFiles}/.config/claude-code-sandbox/registry.json \
-                      > "$CLAUDE_CODE_SANDBOX_CONFIG/registry.json"
+                      ${sandboxHomeFiles}/.config/agent-sandbox/registry.json \
+                      > "$AGENT_SANDBOX_CONFIG/registry.json"
 
-                    claude-code-sandbox list | tee list.txt
+                    agent-sandbox list | tee list.txt
                     grep -qx 'agent (in every enrollment)' list.txt
                     grep -qx 'github (requires git)' list.txt
                     grep -qx 'nix (unmasks the store)' list.txt
                     grep -qx 'search: a searcher' list.txt
 
                     git init -q repo
-                    claude-code-sandbox enroll search github -C repo
+                    agent-sandbox enroll search github -C repo
                     settings=repo/.claude/settings.local.json
                     jq -e '.sandbox.failIfUnavailable and (.sandbox.allowUnsandboxedCommands | not)' "$settings"
                     jq -e '.sandbox.filesystem.denyRead == ["/nix/store"]' "$settings"
@@ -524,57 +524,57 @@
                     done
                     jq -e '.sandbox.network.allowedDomains | sort == ["*.anthropic.com", "*.githubusercontent.com", "github.com"]' "$settings"
                     jq -e '.sandbox.network.allowUnixSockets == ["/run/agent.sock"] and .sandbox.network.allowAllUnixSockets' "$settings"
-                    jq -e '.env.CLAUDE_CODE_SANDBOX_UNIX_SOCKETS == "/run/agent.sock"' "$settings"
-                    jq -e '.env.CLAUDE_CODE_SANDBOX_DEVICES == ""' "$settings"
+                    jq -e '.env.AGENT_SANDBOX_UNIX_SOCKETS == "/run/agent.sock"' "$settings"
+                    jq -e '.env.AGENT_SANDBOX_DEVICES == ""' "$settings"
                     shell=$(jq -r .env.SHELL "$settings")
-                    case "$shell" in *ccs-socket-shell) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
-                    for cmd in fd gh git ssh claude-code-sandbox bwrap; do
+                    case "$shell" in *agent-sandbox-socket-shell) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
+                    for cmd in fd gh git ssh agent-sandbox bwrap; do
                       PATH=$(jq -r .env.PATH "$settings") command -v "$cmd"
                     done
-                    claude-code-sandbox status -C repo
+                    agent-sandbox status -C repo
 
                     # The socket shell refuses an empty allowlist inside a
                     # sandbox and runs commands plainly outside one.
-                    if SANDBOX_RUNTIME=1 ${pkgs.coreutils}/bin/env -u CLAUDE_CODE_SANDBOX_UNIX_SOCKETS "$shell" -c true; then
+                    if SANDBOX_RUNTIME=1 ${pkgs.coreutils}/bin/env -u AGENT_SANDBOX_UNIX_SOCKETS "$shell" -c true; then
                       echo "the socket shell ran without an allowlist"; exit 1
                     fi
                     test "$("$shell" -c 'echo outside')" = outside
 
-                    claude-code-sandbox add nix -C repo
+                    agent-sandbox add nix -C repo
                     jq -e '.sandbox.filesystem | has("denyRead") | not' "$settings"
                     jq -e '.sandbox.filesystem.allowWrite == ["/home/tester/.cache/nix"]' "$settings"
                     jq -e '.sandbox.network.allowUnixSockets | sort == ["/nix/var/nix/daemon-socket/socket", "/run/agent.sock"]' "$settings"
 
-                    claude-code-sandbox drop nix github -C repo
+                    agent-sandbox drop nix github -C repo
                     jq -e '.sandbox.network.allowedDomains == ["*.anthropic.com"]' "$settings"
-                    claude-code-sandbox status -C repo
+                    agent-sandbox status -C repo
 
                     # What a module allows, read from the parts the
                     # module builds, and a recorded refusal.
-                    claude-code-sandbox show github -C repo | tee show.txt
+                    agent-sandbox show github -C repo | tee show.txt
                     grep -qx 'Commands put on PATH: gh' show.txt
                     grep -qx 'From packages: ${pkgs.gh.name}' show.txt
                     grep -qx 'Enabling it also enables: git' show.txt
-                    claude-code-sandbox decline nix --reason 'no store here' -C repo
-                    claude-code-sandbox status -C repo | grep -q 'declined \[nix\]'
+                    agent-sandbox decline nix --reason 'no store here' -C repo
+                    agent-sandbox status -C repo | grep -q 'declined \[nix\]'
 
                     # A device list, and the bwrap wrapper applying it. A
                     # bwrap that prints its arguments stands in for the
                     # real one after the wrapper on PATH.
                     git init -q repo3
-                    claude-code-sandbox enroll devices -C repo3
+                    agent-sandbox enroll devices -C repo3
                     settings3=repo3/.claude/settings.local.json
-                    devices=$(jq -r .env.CLAUDE_CODE_SANDBOX_DEVICES "$settings3")
-                    test "$devices" = "$(printf '%s\n' '/dev/zer*' /dev/stdin /dev/shm /dev/ccs-absent)"
-                    claude-code-sandbox show devices -C repo3 \
-                      | grep -qx 'Device nodes openable: /dev/zer\*, /dev/stdin, /dev/shm, /dev/ccs-absent'
+                    devices=$(jq -r .env.AGENT_SANDBOX_DEVICES "$settings3")
+                    test "$devices" = "$(printf '%s\n' '/dev/zer*' /dev/stdin /dev/shm /dev/agent-sandbox-absent)"
+                    agent-sandbox show devices -C repo3 \
+                      | grep -qx 'Device nodes openable: /dev/zer\*, /dev/stdin, /dev/shm, /dev/agent-sandbox-absent'
                     wrapper=$(PATH=$(jq -r .env.PATH "$settings3") command -v bwrap)
                     case "$wrapper" in *-bubblewrap-*) echo "PATH finds $wrapper first"; exit 1 ;; esac
                     mkdir recorder
                     printf '#!${pkgs.bash}/bin/sh\nprintf "%%s\\n" "$@"\n' > recorder/bwrap
                     chmod +x recorder/bwrap
                     wrap() {
-                      CLAUDE_CODE_SANDBOX_DEVICES=$1 PATH="''${wrapper%/*}:$PWD/recorder" "$wrapper" "''${@:2}" < /dev/null
+                      AGENT_SANDBOX_DEVICES=$1 PATH="''${wrapper%/*}:$PWD/recorder" "$wrapper" "''${@:2}" < /dev/null
                     }
                     wrap "$devices" --ro-bind / / --dev /dev --unshare-pid -- sh -c 'echo --dev /dev' \
                       > argv.txt 2> wrapper.err
@@ -583,7 +583,7 @@
                       --unshare-pid -- sh -c 'echo --dev /dev' > want.txt
                     diff want.txt argv.txt
                     grep -q '/dev/shm .*is not a device node' wrapper.err
-                    if grep -q ccs-absent wrapper.err; then
+                    if grep -q agent-sandbox-absent wrapper.err; then
                       echo "the wrapper warned about a path that does not exist"; exit 1
                     fi
                     test "$(wrap "$devices" --version)" = --version
@@ -599,7 +599,7 @@
                       echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list-modules","arguments":{}}}'
                       echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"request-module","arguments":{"module":"nix","reason":"build"}}}'
                       echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"describe-module","arguments":{"module":"search"}}}'
-                    } | CLAUDE_PROJECT_DIR="$PWD/repo" claude-code-sandbox mcp > mcp.jsonl
+                    } | CLAUDE_PROJECT_DIR="$PWD/repo" agent-sandbox mcp > mcp.jsonl
                     jq -s -e 'map(.id) == [1, 2, 3, 4]' mcp.jsonl
                     jq -s -e '.[1].result.content[0].text | fromjson | .modules | map({(.name): .status}) | add
                       == {agent: "enabled (base)", devices: "available", forge: "available", git: "available", github: "available", nix: "declined", search: "enabled"}' mcp.jsonl
@@ -607,35 +607,35 @@
                     jq -s -e '.[3].result.content[0].text | fromjson | .commands == ["fd"]' mcp.jsonl
 
                     # The plugin starts that server with both tools pinned.
-                    manifest=${self.packages.${system}.claude-code-sandbox-plugin}/.claude-plugin/plugin.json
+                    manifest=${self.packages.${system}.agent-sandbox-plugin}/.claude-plugin/plugin.json
                     test -x "$(jq -r .mcpServers.sandbox.command "$manifest")"
-                    test -x "$(jq -r .mcpServers.sandbox.env.CLAUDE_CODE_SANDBOX_CONSENT "$manifest")"
+                    test -x "$(jq -r .mcpServers.sandbox.env.AGENT_SANDBOX_CONSENT "$manifest")"
 
                     # A trusted executable: its socket and per-connection
                     # service, the grant composed into a checkout, the
                     # stub dialling the declared socket, and the service
                     # command of the unit serving a call.
-                    sock=/home/tester/.local/state/claude-code-sandbox/trusted/greet.sock
+                    sock=/home/tester/.local/state/agent-sandbox/trusted/greet.sock
                     units=${sandboxHomeFiles}/.config/systemd/user
-                    grep -qx "ListenStream=$sock" "$units/ccs-trusted-greet.socket"
-                    grep -qx 'Accept=true' "$units/ccs-trusted-greet.socket"
-                    grep -qx 'SocketMode=0600' "$units/ccs-trusted-greet.socket"
-                    grep -qx 'StandardInput=socket' "$units/ccs-trusted-greet@.service"
-                    grep -qx 'NoNewPrivileges=true' "$units/ccs-trusted-greet@.service"
-                    grep -qx 'PrivateTmp=true' "$units/ccs-trusted-greet@.service"
-                    exec_start=$(sed -n 's/^ExecStart=//p' "$units/ccs-trusted-greet@.service")
+                    grep -qx "ListenStream=$sock" "$units/agent-sandbox-trusted-greet.socket"
+                    grep -qx 'Accept=true' "$units/agent-sandbox-trusted-greet.socket"
+                    grep -qx 'SocketMode=0600' "$units/agent-sandbox-trusted-greet.socket"
+                    grep -qx 'StandardInput=socket' "$units/agent-sandbox-trusted-greet@.service"
+                    grep -qx 'NoNewPrivileges=true' "$units/agent-sandbox-trusted-greet@.service"
+                    grep -qx 'PrivateTmp=true' "$units/agent-sandbox-trusted-greet@.service"
+                    exec_start=$(sed -n 's/^ExecStart=//p' "$units/agent-sandbox-trusted-greet@.service")
 
                     git init -q repo2
-                    claude-code-sandbox enroll forge -C repo2
+                    agent-sandbox enroll forge -C repo2
                     settings2=repo2/.claude/settings.local.json
                     jq -e --arg s "$sock" '.sandbox.network.allowUnixSockets | index($s)' "$settings2"
-                    jq -e --arg s "$sock" '.env.CLAUDE_CODE_SANDBOX_UNIX_SOCKETS | split("\n") | index($s)' "$settings2"
+                    jq -e --arg s "$sock" '.env.AGENT_SANDBOX_UNIX_SOCKETS | split("\n") | index($s)' "$settings2"
                     stub=$(PATH=$(jq -r .env.PATH "$settings2") command -v greet)
                     rc=0
                     "$stub" 2> stub.err || rc=$?
                     test "$rc" = 255
                     grep -qF "$sock" stub.err
-                    claude-code-sandbox show forge -C repo2 | grep -q '^Trusted executable greet: runs ${pkgs.bash}/bin/sh '
+                    agent-sandbox show forge -C repo2 | grep -q '^Trusted executable greet: runs ${pkgs.bash}/bin/sh '
 
                     python3 - "$TMPDIR/greet.sock" "$exec_start" <<'EOF' &
                     import shlex, socket, subprocess, sys

@@ -886,7 +886,7 @@ consumed, so landing again is refused."
            (name (buffer-name buffer))
            (path (ch-mcp-server--buffer-file name)))
       (should (string-prefix-p
-               (expand-file-name ".claude/claude-code-sandbox/mcp-copies/"
+               (expand-file-name ".agent-sandbox/mcp-copies/"
                                  (ch-mcp-server--client-territory))
                path))
       (should (equal "alpha\nbeta\n"
@@ -1037,7 +1037,7 @@ exclude file, with the line the sandbox itself writes."
       (unwind-protect
           (progn
             (ch-mcp-server--buffer-file "ch-mcp-tests-scratch-note")
-            (should (member "/.claude/claude-code-sandbox/"
+            (should (member "/.agent-sandbox/"
                             (split-string
                              (with-temp-buffer
                                (insert-file-contents

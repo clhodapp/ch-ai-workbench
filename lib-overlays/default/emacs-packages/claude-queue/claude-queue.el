@@ -186,7 +186,7 @@ is no project."
 (defcustom claude-queue-sandboxed-tools '("Bash" "WebFetch" "WebSearch")
   "Tools lifted from `claude-queue-denied-tools' inside a sandboxed checkout.
 
-A checkout enrolled in claude-code-sandbox (its sidecar
+A checkout enrolled in agent-sandbox (its sidecar
 `claude-queue--sandbox-sidecar' binds a profile other than the
 reserved empty profile \"none\") confines every Bash command at the
 OS level: the profile's closed toolset, filesystem, and network
@@ -437,9 +437,9 @@ line (leaving the session in \"working\" indefinitely).")
 
 ;;; Dispatch
 
-(defconst claude-queue--sandbox-sidecar ".claude/claude-code-sandbox.json"
-  "Checkout-relative path of the claude-code-sandbox enrollment sidecar.
-Written only by the `claude-code-sandbox' CLI; a JSON object whose
+(defconst claude-queue--sandbox-sidecar ".agent-sandbox/binding.json"
+  "Checkout-relative path of the agent-sandbox enrollment sidecar.
+Written only by the `agent-sandbox' CLI; a JSON object whose
 \"profile\" names the bound sandbox profile (\"none\" = abandoned).")
 
 (defun claude-queue--sandbox-profile (root)

@@ -36,13 +36,14 @@ so the module converges instead of overwriting: it renders what you
 declared into a manifest, merges that into the live settings, and leaves
 anything you added by hand alone.
 
-**A sandbox for Claude Code.** Named sandbox modules, each saying what
-one kind of tooling needs (a closed toolset from Nix closures, plus its
-domains, sockets and writable paths). A checkout opts into the set of
-modules its work needs by enrollment, and the set is composed into the
-CLI's native sandbox rules. Enforcement is Claude
-Code's own; Nix authors its configuration. Design and boundaries in
-[`docs/development/claude-code-sandbox.md`](docs/development/claude-code-sandbox.md).
+**agent-sandbox configures Claude Code's sandbox.** It declares named
+sandbox modules, each saying what one kind of tooling needs (a closed
+toolset from Nix closures, plus its domains, sockets and writable
+paths). A checkout opts into the set of modules its work needs by
+enrollment, and the set is composed into the CLI's native sandbox
+rules. Claude Code enforces the rules and Nix authors the
+configuration. The design and boundaries are in
+[`docs/development/agent-sandbox.md`](docs/development/agent-sandbox.md).
 
 **Guests for sessions.** A home declares kinds of microvm guests with
 [ch-microvm](https://github.com/clhodapp/ch-microvm), which runs
@@ -78,7 +79,7 @@ prompt; mermaid blocks render in message display; and the
   #   ch-ai-workbench.gptel.enable = true;     # gptel, plus .backend/.model
   #   ch-ai-workbench.claude.enable = true;    # Claude Code in Emacs; needs .emacs
   #   ch-ai-workbench.claude-code.enable = true;
-  #   ch-ai-workbench.claude-code-sandbox.enable = true;  # plus .runtime.claudePackage and .modules
+  #   ch-ai-workbench.agent-sandbox.enable = true;  # plus .runtime.claudePackage and .modules
   #   ch-ai-workbench.emacs-integration.enable = true;
   #   ch-ai-workbench.opencode.enable = true;  # OpenCode on Baseten and Fireworks; plus .package, .model and .providers
   #   ch-ai-workbench.codex.enable = true;  # Codex, which starts with the Emacs MCP server; set .package too

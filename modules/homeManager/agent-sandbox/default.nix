@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 #
-# Home-manager half of claude-code-sandbox: declares named sandbox
+# Home-manager half of agent-sandbox: declares named sandbox
 # *modules* (what one kind of tooling needs inside Claude Code's native
 # sandbox), compiles each into a part, emits the parts plus a registry
-# under $XDG_CONFIG_HOME/claude-code-sandbox/, and deploys the CLI and
+# under $XDG_CONFIG_HOME/agent-sandbox/, and deploys the CLI and
 # the skills-dir plugin. A checkout chooses the set of modules its work
 # needs; the CLI composes the chosen parts into one settings fragment at
 # enroll time, because no evaluation here knows which combinations
@@ -51,7 +51,7 @@
 #
 # Trusted executables run outside the sandbox as socket-activated
 # systemd user services; a granting module puts a stub on PATH and the
-# socket in the allowlist (docs/development/claude-code-sandbox.md,
+# socket in the allowlist (docs/development/agent-sandbox.md,
 # "Trusted executables").
 #
 # This layer's packages (the CLI, its plugin, the Landlock shim, the
@@ -69,13 +69,13 @@
   ...
 }:
 let
-  cfg = config.ch-ai-workbench.claude-code-sandbox;
+  cfg = config.ch-ai-workbench.agent-sandbox;
 
   # One of this layer's packages, from the evaluation's package set.
   workbenchPackage =
     name:
     pkgs.ch-ai-workbench.${name} or (throw ''
-      ch-ai-workbench.claude-code-sandbox needs pkgs.ch-ai-workbench.${name}:
+      ch-ai-workbench.agent-sandbox needs pkgs.ch-ai-workbench.${name}:
       apply ch-ai-workbench's package overlay (`overlays.default`; a
       caisson consumer lists the flake in `projects`) to the package set
       this home evaluates with.
@@ -85,14 +85,14 @@ let
   # Inside the sandbox, ssh rejects the store-symlinked ~/.ssh/config
   # ("Bad owner or permissions": the userns maps its root owner to
   # nobody). The session-start hook writes an owned copy at the
-  # ENROLLED-CHECKOUT root: <root>/.claude/claude-code-sandbox/creds/
-  # ssh_config, beside the sidecar (.claude/claude-code-sandbox.json).
+  # ENROLLED-CHECKOUT root: <root>/.agent-sandbox/creds/ssh_config,
+  # beside the sidecar (.agent-sandbox/binding.json).
   # This wrapper points ssh at it with -F, then passes through every
   # argument the sandbox's injected GIT_SSH_COMMAND supplies (the CONNECT
   # ProxyCommand included): git invokes `ssh` by bare name and PATH
   # resolves it here.
   #
-  # Finding the enrolled root: prefer CLAUDE_CODE_SANDBOX_ROOT, which the
+  # Finding the enrolled root: prefer AGENT_SANDBOX_ROOT, which the
   # CLI writes into the checkout's settings env, the only channel that
   # reaches a Bash command cwd-independently (hooks can't inject env;
   # CLAUDE_PROJECT_DIR is hook-only). This is authoritative: it names the
@@ -107,18 +107,18 @@ let
   sshWrapper = pkgs.writeShellScriptBin "ssh" ''
     real=${cfg.runtime.opensshPackage}/bin/ssh
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
-      root=''${CLAUDE_CODE_SANDBOX_ROOT:-}
+      root=''${AGENT_SANDBOX_ROOT:-}
       if [ -z "$root" ]; then
         d=$PWD
         while [ "$d" != / ]; do
-          if [ -f "$d/.claude/claude-code-sandbox.json" ]; then
+          if [ -f "$d/.agent-sandbox/binding.json" ]; then
             root=$d
             break
           fi
           d=$(dirname "$d")
         done
       fi
-      cfgfile="$root/.claude/claude-code-sandbox/creds/ssh_config"
+      cfgfile="$root/.agent-sandbox/creds/ssh_config"
       if [ -n "$root" ] && [ -f "$cfgfile" ]; then
         exec "$real" -F "$cfgfile" "$@"
       fi
@@ -132,7 +132,7 @@ let
 
   # The env variable that carries a composed unix-socket allowlist to the
   # socket shell; the CLI's composer writes it (SOCKETS_ENV_VAR there).
-  socketsEnvVar = "CLAUDE_CODE_SANDBOX_UNIX_SOCKETS";
+  socketsEnvVar = "AGENT_SANDBOX_UNIX_SOCKETS";
 
   # The SHELL of every enrollment whose chosen modules declare unix
   # sockets. It narrows connect() back to the composed allowlist with
@@ -160,10 +160,10 @@ let
   # which must keep escaping. Misdetection therefore fails open into
   # exactly the state the fragment already declares upstream, and never
   # into breaking an escape hatch.
-  socketShell = pkgs.writeShellScript "ccs-socket-shell" ''
+  socketShell = pkgs.writeShellScript "agent-sandbox-socket-shell" ''
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
       if [ -z "''${${socketsEnvVar}:-}" ]; then
-        echo "claude-code-sandbox: ${socketsEnvVar} is empty, so the unix-socket allowlist cannot be enforced; refusing to run" >&2
+        echo "agent-sandbox: ${socketsEnvVar} is empty, so the unix-socket allowlist cannot be enforced; refusing to run" >&2
         exit 2
       fi
       allow=()
@@ -181,7 +181,7 @@ let
 
   # The env variable that carries a composed device list to the bwrap
   # wrapper; the CLI's composer writes it (DEVICES_ENV_VAR there).
-  devicesEnvVar = "CLAUDE_CODE_SANDBOX_DEVICES";
+  devicesEnvVar = "AGENT_SANDBOX_DEVICES";
 
   # The `bwrap` that every enrollment's PATH finds ahead of the one in
   # runtime.sandboxTools. Claude Code builds each sandbox with its
@@ -218,7 +218,7 @@ let
       fi
     done
     if [ -z "$real" ]; then
-      echo "claude-code-sandbox: no bwrap on PATH after the device wrapper" >&2
+      echo "agent-sandbox: no bwrap on PATH after the device wrapper" >&2
       exit 127
     fi
     if [ -z "''${${devicesEnvVar}:-}" ]; then
@@ -234,7 +234,7 @@ let
         "") continue ;;
         /dev/*) ;;
         *)
-          echo "claude-code-sandbox: device pattern $pattern is outside /dev; refusing to build the sandbox" >&2
+          echo "agent-sandbox: device pattern $pattern is outside /dev; refusing to build the sandbox" >&2
           exit 2
           ;;
       esac
@@ -250,7 +250,7 @@ let
         if [[ "$node" == /dev/* ]] && { [ -c "$node" ] || [ -b "$node" ]; }; then
           binds+=(--dev-bind-try "$node" "$node")
         else
-          echo "claude-code-sandbox: $match (from device pattern $pattern) is not a device node under /dev; skipping it" >&2
+          echo "agent-sandbox: $match (from device pattern $pattern) is not a device node under /dev; skipping it" >&2
         fi
       done
     done 3<<<"''$${devicesEnvVar}"
@@ -268,7 +268,7 @@ let
   '';
 
   # The floor of every enrollment: the base farm (basic tools and the CLI
-  # itself, so a sandboxed agent can run `claude-code-sandbox status`),
+  # itself, so a sandboxed agent can run `agent-sandbox status`),
   # the ssh wrapper, the shells, and what the sandbox runtime needs.
   #
   # Parts reference farms by exact store path: every enrolled checkout
@@ -277,12 +277,12 @@ let
   # Stable-path indirection here would desynchronize rules and farms in
   # live sessions at switch.
   baseFarm = pkgs.buildEnv {
-    name = "ccs-base";
+    name = "agent-sandbox-base";
     paths = cfg.runtime.basePackages ++ [ cfg.package ];
   };
 
   basePart =
-    pkgs.runCommand "ccs-part-base.json"
+    pkgs.runCommand "agent-sandbox-part-base.json"
       {
         nativeBuildInputs = [ pkgs.python3 ];
         closureFile = pkgs.writeClosure (
@@ -337,7 +337,7 @@ let
       trusted = lib.genAttrs module.trustedExecutables (te: cfg.trustedExecutables.${te});
       stubs = lib.mapAttrsToList trustedStub trusted;
       farm = pkgs.buildEnv {
-        name = "ccs-module-${name}";
+        name = "agent-sandbox-module-${name}";
         paths = module.toolset ++ stubs;
       };
       hasFarm = module.toolset != [ ] || stubs != [ ];
@@ -364,7 +364,7 @@ let
           ;
         masked = !module.allowNix;
         # What the module puts on PATH, for the people and agents that
-        # read a module before enabling it (`claude-code-sandbox show`,
+        # read a module before enabling it (`agent-sandbox show`,
         # the agent tools); the builder adds the farm's command names.
         packages = map (p: p.name) module.toolset;
         path = lib.optional hasFarm "${farm}/bin";
@@ -394,7 +394,7 @@ let
         settings = module.extraSettings;
       };
     in
-    pkgs.runCommand "ccs-part-${name}.json"
+    pkgs.runCommand "agent-sandbox-part-${name}.json"
       {
         nativeBuildInputs = [ pkgs.python3 ];
         closureFile = if hasFarm then pkgs.writeClosure [ farm ] else pkgs.writeText "empty" "";
@@ -435,7 +435,7 @@ let
             ("settings", ["env"]),
             ("env", ["PATH"]),
             ("env", ["SHELL"]),
-            ("env", ["CLAUDE_CODE_SANDBOX_ROOT"]),
+            ("env", ["AGENT_SANDBOX_ROOT"]),
             ("env", ["${socketsEnvVar}"]),
             ("env", ["${devicesEnvVar}"]),
         ]
@@ -452,7 +452,7 @@ let
         ]
         if collisions:
             sys.exit(
-                f"claude-code-sandbox: module {part['name']} may not override "
+                f"agent-sandbox: module {part['name']} may not override "
                 "generated keys through its escape hatches: " + ", ".join(collisions)
             )
 
@@ -475,16 +475,16 @@ let
   # known at evaluation. $XDG_RUNTIME_DIR holds the uid, which a home
   # evaluation does not know, so the sockets live under the state
   # directory instead.
-  trustedSocketDir = "${config.xdg.stateHome}/claude-code-sandbox/trusted";
+  trustedSocketDir = "${config.xdg.stateHome}/agent-sandbox/trusted";
   trustedSocket = name: "${trustedSocketDir}/${name}.sock";
-  trustedUnit = name: "ccs-trusted-${name}";
+  trustedUnit = name: "agent-sandbox-trusted-${name}";
 
   # The stub a sandboxed command runs as `name`: a compiled wrapper, so
   # a call starts no shell, that runs `trusted-exec call` against the
   # socket with the caller's arguments.
   trustedStub =
     name: executable:
-    pkgs.runCommand "ccs-trusted-stub-${name}"
+    pkgs.runCommand "agent-sandbox-trusted-stub-${name}"
       {
         nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
       }
@@ -556,11 +556,11 @@ let
     "StandardError"
   ];
 
-  partXdgPath = name: "claude-code-sandbox/parts/${name}.json";
+  partXdgPath = name: "agent-sandbox/parts/${name}.json";
   partAbsPath = name: "${config.xdg.configHome}/${partXdgPath name}";
   moduleXdgName = name: "module-${name}";
 
-  registry = pkgs.writeText "ccs-registry.json" (
+  registry = pkgs.writeText "agent-sandbox-registry.json" (
     builtins.toJSON {
       base = partAbsPath "base";
       modules = lib.mapAttrs (name: _: partAbsPath (moduleXdgName name)) cfg.modules;
@@ -577,7 +577,12 @@ let
   # The user's index of checkouts that chose a module for a limited time.
   # The expiry timer reads it; an agent that could edit it could keep a
   # module past its deadline.
-  expiringIndex = "${config.xdg.stateHome}/claude-code-sandbox/expiring.json";
+  #
+  # The baseline also guards the sidecar's old place,
+  # .claude/claude-code-sandbox.json: the CLI moves a sidecar found there
+  # into .agent-sandbox/ when the checkout has no binding yet, so a file
+  # an agent wrote there would become a binding.
+  expiringIndex = "${config.xdg.stateHome}/agent-sandbox/expiring.json";
 
   monotoneBaseline = {
     sandbox = {
@@ -585,6 +590,7 @@ let
       filesystem.denyWrite = [
         ".claude/settings.json"
         ".claude/settings.local.json"
+        ".agent-sandbox/binding.json"
         ".claude/claude-code-sandbox.json"
         expiringIndex
       ];
@@ -592,6 +598,7 @@ let
     permissions.deny = [
       "Edit(.claude/settings.json)"
       "Edit(.claude/settings.local.json)"
+      "Edit(.agent-sandbox/binding.json)"
       "Edit(.claude/claude-code-sandbox.json)"
       "Edit(/${expiringIndex})"
     ];
@@ -602,7 +609,7 @@ let
       description = lib.mkOption {
         type = lib.types.str;
         default = "";
-        description = "What the executable does; `claude-code-sandbox show` shows it.";
+        description = "What the executable does; `agent-sandbox show` shows it.";
       };
       program = lib.mkOption {
         type = lib.types.str;
@@ -690,7 +697,7 @@ let
       description = lib.mkOption {
         type = lib.types.str;
         default = "";
-        description = "What using this kind of tooling means; `claude-code-sandbox list` shows it.";
+        description = "What using this kind of tooling means; `agent-sandbox list` shows it.";
       };
       requires = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -856,20 +863,20 @@ let
   };
 in
 {
-  options.ch-ai-workbench.claude-code-sandbox = {
-    enable = lib.mkEnableOption "nix-declared Claude Code sandbox modules";
+  options.ch-ai-workbench.agent-sandbox = {
+    enable = lib.mkEnableOption "nix-declared agent-sandbox modules";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = workbenchPackage "claude-code-sandbox";
-      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.claude-code-sandbox";
-      description = "The claude-code-sandbox CLI.";
+      default = workbenchPackage "agent-sandbox";
+      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.agent-sandbox";
+      description = "The agent-sandbox CLI.";
     };
 
     pluginPackage = lib.mkOption {
       type = lib.types.package;
-      default = workbenchPackage "claude-code-sandbox-plugin";
-      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.claude-code-sandbox-plugin";
+      default = workbenchPackage "agent-sandbox-plugin";
+      defaultText = lib.literalExpression "pkgs.ch-ai-workbench.agent-sandbox-plugin";
       description = "The skills-dir plugin (ceremony skill + advisory hooks).";
     };
 
@@ -922,7 +929,7 @@ in
           /bin/sh and /etc/ssl resolve into the store, so a farm without
           shell, coreutils and cacert is not a Unix. The module's own
           CLI is also in the base farm, so sandboxed agents can run
-          `claude-code-sandbox status`.
+          `agent-sandbox status`.
         '';
       };
       shellPackage = lib.mkOption {
@@ -990,7 +997,7 @@ in
       description = ''
         Named sandbox modules, each saying what one kind of tooling needs
         inside the sandbox. A checkout opts into a set of them with
-        `claude-code-sandbox enroll MODULE...`; the CLI composes the set
+        `agent-sandbox enroll MODULE...`; the CLI composes the set
         (plus baseModules and everything they require) into the
         checkout's sandbox settings.
       '';
@@ -1018,7 +1025,7 @@ in
         Programs a sandboxed command can run outside Claude Code's
         sandbox. Each becomes a socket-activated systemd user service:
         a socket at
-        `$XDG_STATE_HOME/claude-code-sandbox/trusted/<name>.sock`
+        `$XDG_STATE_HOME/agent-sandbox/trusted/<name>.sock`
         (mode 0600) and one service instance per connection, which runs
         the program and streams its stdin, stdout and stderr, forwarded
         signals and exit status over the connection. The program starts
@@ -1083,7 +1090,7 @@ in
       description = ''
         Config/credential files the session-start hook materializes as
         user-owned copies under
-        <checkout>/.claude/claude-code-sandbox/creds/, so sandboxed tools
+        <checkout>/.agent-sandbox/creds/, so sandboxed tools
         can read them. Point tools at a copy with a module `extraEnv`
         entry or a farm wrapper; the credentials dir path is knowable at
         enroll time. Built-ins wire ssh and git below.
@@ -1117,7 +1124,7 @@ in
     plugin.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
-      description = "Deploy the skills-dir plugin to ~/.claude/skills/claude-code-sandbox.";
+      description = "Deploy the skills-dir plugin to ~/.claude/skills/agent-sandbox.";
     };
 
   };
@@ -1132,7 +1139,7 @@ in
         {
           assertion = unknownIn cfg.baseModules == [ ];
           message = ''
-            claude-code-sandbox: baseModules names undeclared modules:
+            agent-sandbox: baseModules names undeclared modules:
             ${lib.concatStringsSep ", " (unknownIn cfg.baseModules)}
           '';
         }
@@ -1140,7 +1147,7 @@ in
       ++ lib.mapAttrsToList (name: module: {
         assertion = unknownIn module.requires == [ ];
         message = ''
-          claude-code-sandbox: module ${name} requires undeclared modules:
+          agent-sandbox: module ${name} requires undeclared modules:
           ${lib.concatStringsSep ", " (unknownIn module.requires)}
         '';
       }) cfg.modules
@@ -1152,7 +1159,7 @@ in
         {
           assertion = unknown == [ ];
           message = ''
-            claude-code-sandbox: module ${name} grants undeclared trusted executables:
+            agent-sandbox: module ${name} grants undeclared trusted executables:
             ${lib.concatStringsSep ", " unknown}
           '';
         }
@@ -1163,7 +1170,7 @@ in
             # The name becomes a unit name, a command name and a file name.
             assertion = builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" name != null;
             message = ''
-              claude-code-sandbox: trusted executable name ${builtins.toJSON name}
+              agent-sandbox: trusted executable name ${builtins.toJSON name}
               must be letters, digits, dots, underscores and dashes.
             '';
           }
@@ -1171,21 +1178,21 @@ in
             # sun_path holds 108 bytes, terminator included.
             assertion = lib.stringLength (trustedSocket name) < 108;
             message = ''
-              claude-code-sandbox: the socket path ${trustedSocket name} of trusted
+              agent-sandbox: the socket path ${trustedSocket name} of trusted
               executable ${name} is too long for a unix socket (107 bytes at most).
             '';
           }
           {
             assertion = lib.hasPrefix "/" executable.program;
             message = ''
-              claude-code-sandbox: trusted executable ${name} needs an absolute
+              agent-sandbox: trusted executable ${name} needs an absolute
               program path, not ${builtins.toJSON executable.program}.
             '';
           }
           {
             assertion = !(lib.any systemdUnsafe (trustedServeCommand executable));
             message = ''
-              claude-code-sandbox: trusted executable ${name} has a program, argument,
+              agent-sandbox: trusted executable ${name} has a program, argument,
               directory or variable name containing a quote, a backslash or a
               newline, which its systemd ExecStart line cannot carry.
             '';
@@ -1194,7 +1201,7 @@ in
             assertion =
               lib.intersectLists trustedOwnedServiceKeys (lib.attrNames executable.serviceConfig) == [ ];
             message = ''
-              claude-code-sandbox: trusted executable ${name} sets
+              agent-sandbox: trusted executable ${name} sets
               ${lib.concatStringsSep ", " (
                 lib.intersectLists trustedOwnedServiceKeys (lib.attrNames executable.serviceConfig)
               )}
@@ -1210,7 +1217,7 @@ in
     systemd.user.sockets = lib.mapAttrs' (
       name: executable:
       lib.nameValuePair (trustedUnit name) {
-        Unit.Description = "claude-code-sandbox trusted executable ${name}";
+        Unit.Description = "agent-sandbox trusted executable ${name}";
         Socket = {
           ListenStream = trustedSocket name;
           Accept = true;
@@ -1225,8 +1232,8 @@ in
     # hook runs, so the hook alone would let the first session after a
     # deadline start with the expired module. The timer drops due modules
     # from every checkout in the expiring index.
-    systemd.user.timers.claude-code-sandbox-expire = {
-      Unit.Description = "Drop expired claude-code-sandbox modules";
+    systemd.user.timers.agent-sandbox-expire = {
+      Unit.Description = "Drop expired agent-sandbox modules";
       Timer = {
         OnCalendar = "*:0/10";
         Persistent = true;
@@ -1235,11 +1242,11 @@ in
     };
 
     systemd.user.services = {
-      claude-code-sandbox-expire = {
-        Unit.Description = "Drop expired claude-code-sandbox modules";
+      agent-sandbox-expire = {
+        Unit.Description = "Drop expired agent-sandbox modules";
         Service = {
           Type = "oneshot";
-          ExecStart = "${lib.getExe' cfg.package "claude-code-sandbox"} expire";
+          ExecStart = "${lib.getExe' cfg.package "agent-sandbox"} expire";
           Environment = [
             "XDG_CONFIG_HOME=${config.xdg.configHome}"
             "XDG_STATE_HOME=${config.xdg.stateHome}"
@@ -1251,7 +1258,7 @@ in
       name: executable:
       lib.nameValuePair "${trustedUnit name}@" {
         Unit = {
-          Description = "claude-code-sandbox trusted executable ${name} (one call)";
+          Description = "agent-sandbox trusted executable ${name} (one call)";
           CollectMode = "inactive-or-failed";
         };
         Service = {
@@ -1277,15 +1284,22 @@ in
     # ownership check under the sandbox userns). The ssh wrapper points
     # -F at the copy. git config is not wired: these machines have no
     # ~/.gitconfig, and the mechanism is here to extend when one appears.
-    ch-ai-workbench.claude-code-sandbox.credentials.ssh-config = {
+    ch-ai-workbench.agent-sandbox.credentials.ssh-config = {
       source = lib.mkDefault "${config.home.homeDirectory}/.ssh/config";
       target = lib.mkDefault "ssh_config";
     };
 
     home.packages = [ cfg.package ];
 
+    # Every enrolled checkout holds an .agent-sandbox/ directory (the
+    # binding, owned credential copies and job scratch). None of it is
+    # repo content, so the exclusion is global rather than one
+    # .gitignore per repo. Only takes effect where programs.git is
+    # enabled; this module does not enable it.
+    programs.git.ignores = [ "**/.agent-sandbox/" ];
+
     xdg.configFile = {
-      "claude-code-sandbox/registry.json".source = registry;
+      "agent-sandbox/registry.json".source = registry;
       ${partXdgPath "base"}.source = basePart;
     }
     // lib.mapAttrs' (
@@ -1295,7 +1309,7 @@ in
 
     home.file =
       lib.optionalAttrs cfg.plugin.enable {
-        ".claude/skills/claude-code-sandbox".source = cfg.pluginPackage;
+        ".claude/skills/agent-sandbox".source = cfg.pluginPackage;
       }
       // lib.optionalAttrs cfg.baseline.install {
         ".claude/settings.json".source = pkgs.writeText "claude-settings-baseline.json" (

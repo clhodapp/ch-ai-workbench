@@ -1,0 +1,14 @@
+{
+  "name": "agent-sandbox",
+  "description": "Nix-declared sandbox modules for coding agents: enrollment ceremony, staleness tripwire, and agent tools for inspecting and requesting modules",
+  "version": "0.3.0",
+  "mcpServers": {
+    "sandbox": {
+      "command": "@agentSandboxTool@/bin/agent-sandbox",
+      "args": ["mcp"],
+      "env": {
+        "AGENT_SANDBOX_CONSENT": "@consentTool@/bin/claude-consent"
+      }
+    }
+  }
+}

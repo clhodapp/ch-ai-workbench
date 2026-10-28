@@ -50,7 +50,7 @@ from typing import Any
 
 from .cli import _status_line, decline_modules, enable_modules, expire_due, refusal_text
 from .compose import check_known
-from .files import ToolError, find_repo_root
+from .files import ToolError, find_repo_root, migrate_checkout, migrate_state
 from .registry import load_registry
 from .report import (
     checkout_state,
@@ -61,9 +61,9 @@ from .report import (
     require_enrolled,
 )
 
-SERVER_INFO = {"name": "claude-code-sandbox", "version": "0.1.0"}
+SERVER_INFO = {"name": "agent-sandbox", "version": "0.1.0"}
 PROTOCOL_VERSION = "2025-06-18"
-CONSENT_ENV = "CLAUDE_CODE_SANDBOX_CONSENT"
+CONSENT_ENV = "AGENT_SANDBOX_CONSENT"
 # How long a prompt waits for the user before the request reports no
 # answer. A forgotten prompt otherwise holds the agent's turn.
 PROMPT_DEADLINE_SECONDS = 15 * 60
@@ -158,6 +158,8 @@ def _checkout(env: dict[str, str]) -> Path:
     root = find_repo_root(start)
     if root is None:
         raise ToolError(f"{start} is not inside a git checkout, so it has no sandbox enrollment")
+    migrate_state()
+    migrate_checkout(root)
     return root
 
 
@@ -215,7 +217,7 @@ class Server:
     def request_client(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Send a request to the client and wait for its response."""
         self.next_id += 1
-        request_id = f"ccs-{self.next_id}"
+        request_id = f"agent-sandbox-{self.next_id}"
         self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         while True:
             msg = self._next()

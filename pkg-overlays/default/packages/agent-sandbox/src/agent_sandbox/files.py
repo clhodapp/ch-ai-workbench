@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -19,8 +20,14 @@ from pathlib import Path
 from typing import Any
 
 SETTINGS_NAME = "settings.local.json"
-SIDECAR_NAME = "claude-code-sandbox.json"
+SANDBOX_DIR_NAME = ".agent-sandbox"
+SIDECAR_NAME = "binding.json"
 EXPIRING_NAME = "expiring.json"
+
+# Where checkouts and the user's state kept these before the tool was
+# renamed from claude-code-sandbox. Only the migration reads them.
+OLD_SIDECAR_NAME = "claude-code-sandbox.json"
+OLD_DIR_NAME = "claude-code-sandbox"
 
 # How long a module chosen for a limited time stays chosen.
 DURATIONS = {"day": timedelta(days=1), "week": timedelta(weeks=1)}
@@ -48,17 +55,85 @@ def settings_path(root: Path) -> Path:
     return claude_dir(root) / SETTINGS_NAME
 
 
+def sandbox_dir(root: Path) -> Path:
+    """The checkout's own directory for this tool: the binding, the
+    credentials and the job scratch."""
+    return root / SANDBOX_DIR_NAME
+
+
 def sidecar_path(root: Path) -> Path:
-    return claude_dir(root) / SIDECAR_NAME
+    return sandbox_dir(root) / SIDECAR_NAME
+
+
+def old_sidecar_path(root: Path) -> Path:
+    return claude_dir(root) / OLD_SIDECAR_NAME
+
+
+def _state_base() -> Path:
+    xdg = os.environ.get("XDG_STATE_HOME")
+    return Path(xdg) if xdg else Path.home() / ".local" / "state"
 
 
 def state_dir() -> Path:
-    override = os.environ.get("CLAUDE_CODE_SANDBOX_STATE")
+    override = os.environ.get("AGENT_SANDBOX_STATE")
     if override:
         return Path(override)
-    xdg = os.environ.get("XDG_STATE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
-    return base / "claude-code-sandbox"
+    return _state_base() / "agent-sandbox"
+
+
+def migrate_checkout(root: Path) -> bool:
+    """Move a checkout bound under the tool's old name to the new layout.
+
+    When ``.claude/claude-code-sandbox.json`` exists and
+    ``.agent-sandbox/binding.json`` does not, the sidecar moves to the
+    new place and the old credentials directory is removed (it is
+    regenerated). The old jobs directory stays, because live jobs' tmp
+    symlinks point into it; the scratch pruner empties it, and the old
+    directory goes when it is empty. A checkout that has the new binding
+    is left alone. Returns True when the sidecar moved."""
+    old = old_sidecar_path(root)
+    new = sidecar_path(root)
+    old_dir = claude_dir(root) / OLD_DIR_NAME
+    moved = False
+    try:
+        if old.is_file() and not new.exists():
+            new.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(old, new)
+            moved = True
+            shutil.rmtree(old_dir / "creds", ignore_errors=True)
+        if moved or not old.exists():
+            remove_if_empty(old_dir)
+    except OSError:
+        return False
+    return moved
+
+
+def remove_if_empty(directory: Path) -> None:
+    """Remove ``directory`` when nothing is in it."""
+    try:
+        directory.rmdir()
+    except OSError:
+        pass
+
+
+def migrate_state() -> bool:
+    """Move the user's index of expiring checkouts from the old state
+    directory to the new one. An ``AGENT_SANDBOX_STATE`` override names
+    a directory chosen by the caller, so it migrates nothing."""
+    if os.environ.get("AGENT_SANDBOX_STATE"):
+        return False
+    old_dir = _state_base() / OLD_DIR_NAME
+    old = old_dir / EXPIRING_NAME
+    new = expiring_path()
+    try:
+        if not old.is_file() or new.exists():
+            return False
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(old, new)
+    except OSError:
+        return False
+    remove_if_empty(old_dir)
+    return True
 
 
 def expiring_path() -> Path:

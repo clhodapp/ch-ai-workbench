@@ -15,7 +15,7 @@ from unittest import mock
 
 from fixtures import WORK, WORK_FRAGMENT, write_registry
 
-from claude_code_sandbox import cli
+from agent_sandbox import cli
 
 TOOLS = {
     "description": "more tools",
@@ -29,7 +29,7 @@ TOOLS = {
 def with_root(fragment, root):
     """``fragment`` as applied to the checkout at ``root``: the CLI names
     the enrolled root in the env."""
-    return {**fragment, "env": {**fragment["env"], "CLAUDE_CODE_SANDBOX_ROOT": str(root)}}
+    return {**fragment, "env": {**fragment["env"], "AGENT_SANDBOX_ROOT": str(root)}}
 
 
 class CliTest(unittest.TestCase):
@@ -47,8 +47,8 @@ class CliTest(unittest.TestCase):
         patcher = mock.patch.dict(
             os.environ,
             {
-                "CLAUDE_CODE_SANDBOX_CONFIG": str(self.config),
-                "CLAUDE_CODE_SANDBOX_STATE": str(self.state),
+                "AGENT_SANDBOX_CONFIG": str(self.config),
+                "AGENT_SANDBOX_STATE": str(self.state),
             },
         )
         patcher.start()
@@ -59,7 +59,7 @@ class CliTest(unittest.TestCase):
         return json.loads(path.read_text()) if path.exists() else None
 
     def sidecar(self):
-        return json.loads((self.repo / ".claude" / "claude-code-sandbox.json").read_text())
+        return json.loads((self.repo / ".agent-sandbox" / "binding.json").read_text())
 
     def run_cli(self, *argv):
         return cli.main(list(argv))
@@ -80,7 +80,7 @@ class CliTest(unittest.TestCase):
         expected = with_root(WORK_FRAGMENT, self.repo)
         self.assertEqual(self.settings(), expected)
         self.assertEqual(
-            self.settings()["env"]["CLAUDE_CODE_SANDBOX_ROOT"], str(self.repo)
+            self.settings()["env"]["AGENT_SANDBOX_ROOT"], str(self.repo)
         )
         self.assertEqual(self.sidecar(), {"modules": ["work"], "applied": expected})
 
@@ -167,7 +167,7 @@ class CliTest(unittest.TestCase):
     def test_expire_prunes_checkouts_that_are_gone(self):
         self.enroll("work")
         self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
-        shutil.rmtree(self.repo / ".claude")
+        shutil.rmtree(self.repo / ".agent-sandbox")
         self.assertEqual(self.run_cli("expire"), 0)
         self.assertEqual(self.expiring(), [])
 
@@ -209,9 +209,9 @@ class CliTest(unittest.TestCase):
     def test_size_check_covers_the_checkout_root(self):
         # A fragment just under the limit before the root is added must
         # still be refused once the root makes it the fragment applied.
-        from claude_code_sandbox.compose import FRAGMENT_LIMIT
+        from agent_sandbox.compose import FRAGMENT_LIMIT
 
-        root_entry = len(f',\n    "CLAUDE_CODE_SANDBOX_ROOT": "{self.repo}"')
+        root_entry = len(f',\n    "AGENT_SANDBOX_ROOT": "{self.repo}"')
         base_size = len(json.dumps(cli.compose(cli.load_registry(), ["work"]), indent=2))
         pad = FRAGMENT_LIMIT - base_size - root_entry // 2
         padded = {**WORK, "env": {"PAD": "x" * pad}}
@@ -260,9 +260,9 @@ class CliTest(unittest.TestCase):
         self.assertIn("abandoned, current", out)
 
     def test_profile_era_none_sidecar_reads_as_abandoned(self):
-        claude_dir = self.repo / ".claude"
-        claude_dir.mkdir()
-        (claude_dir / "claude-code-sandbox.json").write_text(
+        sandbox_dir = self.repo / ".agent-sandbox"
+        sandbox_dir.mkdir()
+        (sandbox_dir / "binding.json").write_text(
             json.dumps({"profile": "none", "applied": {}})
         )
         rc, out = self.output_of("status", "-C", str(self.repo))
@@ -282,7 +282,8 @@ class CliTest(unittest.TestCase):
         (claude_dir / "settings.local.json").write_text(
             json.dumps({**old, "permissions": {"allow": ["x"]}})
         )
-        (claude_dir / "claude-code-sandbox.json").write_text(
+        (self.repo / ".agent-sandbox").mkdir()
+        (self.repo / ".agent-sandbox" / "binding.json").write_text(
             json.dumps({"profile": "nix", "applied": old})
         )
         rc, out = self.output_of("status", "-C", str(self.repo))
@@ -324,7 +325,7 @@ class CliTest(unittest.TestCase):
         )
         written = cli.provision_creds(self.repo)
         self.assertEqual(written, ["ssh_config"])
-        dest = self.repo / ".claude" / "claude-code-sandbox" / "creds" / "ssh_config"
+        dest = self.repo / ".agent-sandbox" / "creds" / "ssh_config"
         self.assertEqual(dest.read_text(), "Host example\n  User me\n")
         self.assertEqual(dest.stat().st_mode & 0o777, 0o600)
         # Idempotent: a second run rewrites the same content, no error.
@@ -336,7 +337,7 @@ class CliTest(unittest.TestCase):
             {"ssh-config": {"source": "/no/such/file", "target": "ssh_config"}}
         )
         self.assertEqual(cli.provision_creds(self.repo), [])
-        dest = self.repo / ".claude" / "claude-code-sandbox" / "creds" / "ssh_config"
+        dest = self.repo / ".agent-sandbox" / "creds" / "ssh_config"
         self.assertFalse(dest.exists())
 
     def test_provision_creds_null_source_is_empty_droppoint(self):
@@ -344,7 +345,7 @@ class CliTest(unittest.TestCase):
             {"token": {"source": None, "target": "token"}}
         )
         self.assertEqual(cli.provision_creds(self.repo), ["token"])
-        dest = self.repo / ".claude" / "claude-code-sandbox" / "creds" / "token"
+        dest = self.repo / ".agent-sandbox" / "creds" / "token"
         self.assertTrue(dest.exists())
         self.assertEqual(dest.read_text(), "")
         # A provisioner fills it; a later hook run must not clobber it.
@@ -403,7 +404,7 @@ class CliTest(unittest.TestCase):
         job = tmp / "jobs" / "abc123"
         (job / "tmp").mkdir(parents=True)
         (job / "tmp" / "keep.txt").write_text("x")
-        scratch = self.repo / ".claude" / "claude-code-sandbox" / "jobs"
+        scratch = self.repo / ".agent-sandbox" / "jobs"
         (scratch / "gone-job" / "tmp").mkdir(parents=True)  # its job dir does not exist
         cwd = os.getcwd()
         os.chdir(self.repo)
@@ -420,7 +421,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual((link / "keep.txt").read_text(), "x")
         self.assertFalse((scratch / "gone-job").exists())
         exclude = (self.repo / ".git" / "info" / "exclude").read_text()
-        self.assertEqual(exclude.count("/.claude/claude-code-sandbox/"), 1)
+        self.assertEqual(exclude.count("/.agent-sandbox/"), 1)
 
     def test_hook_leaves_job_tmp_alone_without_job_dir(self):
         self._git_init_repo()
@@ -433,7 +434,7 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(self.run_cli("hook-session-start"), 0)
         finally:
             os.chdir(cwd)
-        self.assertFalse((self.repo / ".claude" / "claude-code-sandbox").exists())
+        self.assertFalse((self.repo / ".agent-sandbox" / "jobs").exists())
 
     def test_hook_drops_expired_modules(self):
         self.enroll("work")
@@ -468,7 +469,8 @@ class CliTest(unittest.TestCase):
         claude_dir = self.repo / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.local.json").write_text(json.dumps(old))
-        (claude_dir / "claude-code-sandbox.json").write_text(
+        (self.repo / ".agent-sandbox").mkdir()
+        (self.repo / ".agent-sandbox" / "binding.json").write_text(
             json.dumps({"profile": "nix", "applied": old})
         )
         cwd = os.getcwd()

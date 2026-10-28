@@ -5,7 +5,7 @@
   git,
 }:
 python3Packages.buildPythonApplication {
-  pname = "claude-code-sandbox";
+  pname = "agent-sandbox";
   version = "0.1.0";
   pyproject = true;
 
@@ -26,6 +26,6 @@ python3Packages.buildPythonApplication {
   meta = {
     description = "Nix-authored per-project configuration for Claude Code's native sandbox";
     license = lib.licenses.mit;
-    mainProgram = "claude-code-sandbox";
+    mainProgram = "agent-sandbox";
   };
 }

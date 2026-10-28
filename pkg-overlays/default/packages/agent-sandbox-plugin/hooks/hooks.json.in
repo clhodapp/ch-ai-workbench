@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "@ccsTool@/bin/claude-code-sandbox hook-session-start"
+            "command": "@agentSandboxTool@/bin/agent-sandbox hook-session-start"
           }
         ]
       }

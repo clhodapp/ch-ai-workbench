@@ -4,7 +4,7 @@
 import unittest
 from typing import Any
 
-from claude_code_sandbox.merge import adhoc_additions, merge
+from agent_sandbox.merge import adhoc_additions, merge
 
 FRAG_A: dict[str, Any] = {
     "sandbox": {

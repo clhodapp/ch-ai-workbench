@@ -211,10 +211,10 @@ def require_enrolled(state: dict[str, Any]) -> list[str]:
     if enrollment == "not enrolled":
         raise ToolError(
             f"{root} is not enrolled in the sandbox; enrolling is the user's act "
-            "(claude-code-sandbox enroll MODULE...)"
+            "(agent-sandbox enroll MODULE...)"
         )
     if enrollment == "abandoned":
-        raise ToolError(f"{root} is abandoned; the user re-enrolls it with claude-code-sandbox enroll")
+        raise ToolError(f"{root} is abandoned; the user re-enrolls it with agent-sandbox enroll")
     if enrollment == "legacy profile":
         raise ToolError(
             f"{root} is bound to the retired profile '{state['profile']}'; the user "

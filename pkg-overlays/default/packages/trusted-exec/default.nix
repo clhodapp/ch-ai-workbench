@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Both sides of a claude-code-sandbox trusted executable: the stub side
+# Both sides of a agent-sandbox trusted executable: the stub side
 # (`call`) and the service side (`serve`). The home-manager module wires
 # both: a stub per granted executable on a sandboxed PATH, and a
 # socket-activated systemd user service per declared executable. See

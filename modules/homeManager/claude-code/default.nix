@@ -70,7 +70,7 @@ let
   # mutates at runtime and a person may hand-edit, so they are
   # converged in at activation by a merge (lib/claude-hooks-register.nix)
   # rather than rendered as a store symlink.  Ownership follows the
-  # claude-code-sandbox model: the declaration is a store manifest,
+  # agent-sandbox model: the declaration is a store manifest,
   # a sidecar under the XDG state dir records what was last applied,
   # and only entries in one of those two are ever touched -- so a
   # hook deleted from Nix is pruned, and a hand-added hook survives.
@@ -274,7 +274,7 @@ let
   # A hook whose package this module installs is registered through the
   # home-manager profile's bin directory rather than by bare name. The
   # path is the same string in every generation, and it does not depend
-  # on PATH: a checkout enrolled in claude-code-sandbox sets the Claude
+  # on PATH: a checkout enrolled in agent-sandbox sets the Claude
   # Code process's PATH to its sandbox farms, which hooks inherit.
   hooksManifest = pkgs.writeText "claude-hooks-manifest.json" (
     builtins.toJSON {
@@ -536,7 +536,7 @@ in
         User-level (global) Claude Code hooks, converged into
         ~/.claude/settings.json at activation (the CLI rewrites that
         file at runtime, so it cannot be a store symlink). Ownership
-        follows the claude-code-sandbox model: the enabled entries are
+        follows the agent-sandbox model: the enabled entries are
         rendered into a store manifest, a sidecar under
         $XDG_STATE_HOME/claude-hooks-register/ records what the last
         activation applied, and the merge touches only entries found

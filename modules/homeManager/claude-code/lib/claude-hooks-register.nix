@@ -6,7 +6,7 @@
 # ~/.claude/settings.json is runtime-mutable state (the CLI rewrites
 # it for theme/model toggles, and a person may hand-add entries), so
 # it can never be a store symlink; the module's entries are converged
-# in by a merge that follows the claude-code-sandbox model for
+# in by a merge that follows the agent-sandbox model for
 # co-owned settings files: <manifest> is the store-rendered
 # declaration (the "new" fragment: {hooks: [{event, matcher|null,
 # command, timeout|null}], permissions: {deny: [rule]}}), <sidecar>
