@@ -293,6 +293,7 @@ let
             devicesBwrap
             cfg.runtime.claudePackage
             cfg.runtime.shellPackage
+            pkgs.util-linux
           ]
           ++ cfg.runtime.sandboxTools
         );
@@ -313,6 +314,12 @@ let
           ++ map (p: "${p}/bin") cfg.runtime.sandboxTools;
           shell = runtimeShell;
           socketShell = "${socketShell}";
+          # For agents that run whole inside the sandbox: the setsid that
+          # gives the agent its pseudo-terminal as controlling terminal,
+          # and the bwrap sandbox-runtime builds sandboxes with, which
+          # binds the composed devices.
+          setsid = "${pkgs.util-linux}/bin/setsid";
+          bwrap = "${devicesBwrap}/bin/bwrap";
         };
       }
       ''
@@ -362,7 +369,7 @@ let
           allowAllUnixSockets
           devices
           ;
-        masked = !module.allowNix;
+        masked = !(module.allowNix || module.readStore);
         # What the module puts on PATH, for the people and agents that
         # read a module before enabling it (`agent-sandbox show`,
         # the agent tools); the builder adds the farm's command names.
@@ -571,6 +578,17 @@ let
       credentials = lib.mapAttrs (_: c: {
         inherit (c) source target;
       }) cfg.credentials;
+      # What `agent-sandbox run` needs for an agent that runs whole
+      # inside the sandbox: the agents, the srt that enforces the rules,
+      # and the paths the baseline write-guards, which a whole agent
+      # could otherwise write.
+      inherit (cfg) agents;
+      srt =
+        if cfg.runtime.sandboxRuntimePackage == null then
+          null
+        else
+          lib.getExe' cfg.runtime.sandboxRuntimePackage "srt";
+      guards = monotoneBaseline.sandbox.filesystem.denyWrite;
     }
   );
 
@@ -726,6 +744,19 @@ let
           restriction for all its modules, because an unmasked store
           makes every installed tool reachable. PATH still comes from
           the farms, so the module must list `nix` in its toolset.
+        '';
+      };
+      readStore = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Leave the store readable without the daemon socket and the
+          nix cache that `allowNix` grants. A checkout that chooses this
+          module loses the closure restriction for all its modules, as
+          with `allowNix`. The modules of agents that run whole inside
+          the sandbox set it: such an agent reads its skills and
+          instructions through home-manager links into the store, which
+          no module's closure can list.
         '';
       };
       extraAllowRead = lib.mkOption {
@@ -895,6 +926,16 @@ in
           without it every sandboxed command fails closed.
         '';
       };
+      sandboxRuntimePackage = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = null;
+        example = lib.literalExpression "llm-agents.packages.\${system}.sandbox-runtime";
+        description = ''
+          Anthropic's sandbox-runtime, whose `srt` runs a whole agent
+          under the composed rules (`agent-sandbox run`). Needed when
+          `agents` declares any agent.
+        '';
+      };
       sandboxTools = lib.mkOption {
         type = lib.types.listOf lib.types.package;
         default = [
@@ -1056,6 +1097,49 @@ in
       '';
     };
 
+    agents = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            modules = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = ''
+                Sandbox modules this agent always adds to the checkout's
+                set: what running the agent itself needs, such as its
+                package, its state directories and its API hosts.
+              '';
+            };
+            args = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = ''
+                Arguments inserted after the agent's program when it
+                runs inside the sandbox, such as one that turns off a
+                sandbox of the agent's own.
+              '';
+            };
+            env = lib.mkOption {
+              type = lib.types.attrsOf lib.types.str;
+              default = { };
+              description = "Environment variables set when the agent runs inside the sandbox.";
+            };
+          };
+        }
+      );
+      default = { };
+      description = ''
+        Agents that run whole inside a checkout's sandbox through
+        `agent-sandbox run AGENT -- COMMAND`, which sandbox-runtime
+        enforces, unlike Claude Code, which applies the rules to each
+        Bash command itself. In a checkout enrolled with modules, the
+        agent runs under the composition of the checkout's modules,
+        `baseModules` and the agent's `modules`, with write access to
+        the checkout and a scratch directory. Elsewhere the command runs
+        unchanged. The codex and opencode modules declare their agents.
+      '';
+    };
+
     credentials = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule (
@@ -1143,7 +1227,21 @@ in
             ${lib.concatStringsSep ", " (unknownIn cfg.baseModules)}
           '';
         }
+        {
+          assertion = cfg.agents == { } || cfg.runtime.sandboxRuntimePackage != null;
+          message = ''
+            agent-sandbox: agents (${lib.concatStringsSep ", " (lib.attrNames cfg.agents)}) run under
+            sandbox-runtime; set runtime.sandboxRuntimePackage.
+          '';
+        }
       ]
+      ++ lib.mapAttrsToList (name: agent: {
+        assertion = unknownIn agent.modules == [ ];
+        message = ''
+          agent-sandbox: agent ${name} adds undeclared modules:
+          ${lib.concatStringsSep ", " (unknownIn agent.modules)}
+        '';
+      }) cfg.agents
       ++ lib.mapAttrsToList (name: module: {
         assertion = unknownIn module.requires == [ ];
         message = ''

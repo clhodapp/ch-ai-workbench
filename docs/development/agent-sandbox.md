@@ -116,6 +116,7 @@ directory, or the one containing `DIR` with `-C DIR`.
 | `decline MODULE... [--reason TEXT]` | Record that this checkout should not get these modules |
 | `undecline MODULE...` | Withdraw a recorded refusal |
 | `mcp` | Serve the agent tools over MCP on stdio (the plugin starts it) |
+| `run AGENT -- COMMAND` | Run a whole agent in this checkout's sandbox, or unchanged when the checkout is not enrolled (see "Whole agents") |
 
 The CLI is on every enrollment's PATH, so a sandboxed agent can run
 `agent-sandbox status` to verify its own enrollment. Inside a
@@ -224,6 +225,78 @@ unanswered for fifteen minutes record nothing. Choosing the module with
 The tools go through Claude Code's usual permission check for MCP
 tools, so the first call of each may itself ask for permission, unless
 a permission rule allows `mcp__plugin_agent-sandbox_sandbox`.
+
+## Whole agents: Codex and OpenCode
+
+Claude Code applies a checkout's rules itself, to each Bash command it
+runs. Codex and OpenCode have no such mechanism, so they run whole
+inside the checkout's sandbox: `agent-sandbox run AGENT -- COMMAND`
+runs the command under sandbox-runtime (`srt`, from
+`runtime.sandboxRuntimePackage`), the sandbox engine Claude Code's own
+rules are written for. In a checkout that is not enrolled with modules,
+and outside every checkout, the command runs unchanged.
+
+The home-manager option `agents.<name>` declares an agent: the sandbox
+modules it always adds to the checkout's set, arguments inserted after
+its program, and variables set for it. The codex and opencode modules
+declare their agents whenever this module is enabled, and route the
+`codex` and `opencode` commands and their Agent Client Protocol
+commands for agent-shell through `agent-sandbox run`:
+
+| Agent | Module it adds | Inside the sandbox |
+|---|---|---|
+| `codex` | `codex`: the package, CODEX_HOME, OpenAI's API and sign-in hosts | `-c sandbox_mode="danger-full-access"`, so Codex leaves command sandboxing to the outer sandbox |
+| `codex-acp` | `codex` | `CODEX_PATH` names a codex with the same setting |
+| `opencode` | `opencode`: the package, its XDG directories, models.dev, the npm registry, and each provider's `hosts` | nothing more |
+
+Codex runs its own commands in a bubblewrap sandbox of its own, which
+would need user namespaces that the outer sandbox does not grant, so
+inside it Codex runs them without one. Its approval policy still
+applies.
+
+The run composes the checkout's chosen modules, `baseModules` and the
+agent's modules at each launch, so a whole agent never runs stale
+rules. From that composition it writes an srt settings file under
+`$XDG_RUNTIME_DIR/agent-sandbox/run-<pid>/`, with these differences from
+the Claude Code fragment:
+
+- srt grants no write access that is not listed. The checkout root and
+  the run's scratch directory, which becomes `TMPDIR`, join
+  `allowWrite`.
+- The baseline's write guards (the checkout's settings files and
+  sidecar, the old sidecar path, the index of expiring checkouts) go to
+  `denyWrite`, because a whole agent writes files with its own tools,
+  which no permission rule governs.
+- The composed `PATH`, `SHELL` and `AGENT_SANDBOX_*` variables are set
+  in the agent's environment. With a socket allowlist, the agent itself
+  starts through the socket shell, so the agent process is narrowed and
+  not only the commands it runs.
+- `bwrapPath` names the device wrapper, so modules that list devices
+  work for whole agents too.
+
+An agent reads its skills and instructions through home-manager links
+into the store, which no part's closure can list without a dependency
+cycle (the parts are home-manager files themselves). The agents'
+modules therefore set `readStore`, which leaves the store readable
+without the daemon socket and cache `allowNix` grants. A checkout that
+runs a whole agent consequently runs its other modules unmasked as
+well.
+
+srt starts bubblewrap with `--new-session`, so a sandboxed process has
+no controlling terminal and a terminal UI is never told about a window
+resize. When stdin and stdout are a terminal, `run` therefore gives the
+agent a pseudo-terminal it owns outside the sandbox: inside, `setsid -c`
+makes that pseudo-terminal the agent's controlling terminal, and `run`
+relays bytes and copies each resize of the real terminal onto it. Text
+the agent pushes into its terminal's input lands in that pseudo-terminal
+only. Over pipes, as agent-shell runs the ACP commands, srt runs the
+agent directly.
+
+The `agent-sandbox-compose` check runs `run` against the parts a
+home-manager configuration builds, with a stand-in srt that records its
+settings. The interactive relay and the agents' behaviour under the real
+srt need a person at a terminal on a host where nested user namespaces
+work, so the build sandbox cannot run them.
 
 ## Trusted executables
 

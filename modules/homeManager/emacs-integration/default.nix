@@ -110,27 +110,29 @@ let
 
   agentEnabled = name: options.ch-ai-workbench ? ${name} && config.ch-ai-workbench.${name}.enable;
 
-  # The ACP command agent-shell starts each enabled agent with, by exact
-  # store path, so a session in Emacs runs the build this home installs
-  # and reads the same declared configuration as the agent's own
-  # command. The opencode command is the wrapped one, which names the
-  # declared settings layer.
+  # The ACP command agent-shell starts each enabled agent with, as the
+  # agent's module builds it: by exact store path, so a session in Emacs
+  # runs the build this home installs, reads the same declared
+  # configuration as the agent's own command, and runs inside a
+  # checkout's sandbox the same way.
   acpCommands =
-    lib.optional (agentEnabled "claude-code" && config.ch-ai-workbench.claude-code.acpPackage != null) {
-      variable = "agent-shell-anthropic-claude-acp-command";
-      command = [ (lib.getExe config.ch-ai-workbench.claude-code.acpPackage) ];
-    }
-    ++ lib.optional (agentEnabled "codex" && config.ch-ai-workbench.codex.acpPackage != null) {
-      variable = "agent-shell-openai-codex-acp-command";
-      command = [ (lib.getExe config.ch-ai-workbench.codex.acpPackage) ];
-    }
-    ++ lib.optional (agentEnabled "opencode") {
-      variable = "agent-shell-opencode-acp-command";
-      command = [
-        (lib.getExe config.programs.opencode.package)
-        "acp"
-      ];
-    };
+    lib.filter (entry: agentEnabled entry.agent && entry.command != null && entry.command != [ ])
+      (
+        map (entry: entry // { command = config.ch-ai-workbench.${entry.agent}.acpCommand or null; }) [
+          {
+            agent = "claude-code";
+            variable = "agent-shell-anthropic-claude-acp-command";
+          }
+          {
+            agent = "codex";
+            variable = "agent-shell-openai-codex-acp-command";
+          }
+          {
+            agent = "opencode";
+            variable = "agent-shell-opencode-acp-command";
+          }
+        ]
+      );
 
   # Appended to the agent-shell bundle's own init. The `defvar`s declare
   # the variables to the byte compiler, which compiles the init before

@@ -128,6 +128,21 @@
             sandboxModules = {
               enable = true;
               runtime.claudePackage = pkgs.hello;
+              # An srt that records how `agent-sandbox run` called it: its
+              # arguments, its settings file, and one variable of the
+              # agent's environment.
+              runtime.sandboxRuntimePackage = pkgs.writeShellScriptBin "srt" ''
+                printf '%s\n' "$@" > "$SRT_PROBE/args"
+                cp "$2" "$SRT_PROBE/settings.json"
+                printf '%s\n' "$PROBE_AGENT" > "$SRT_PROBE/env"
+              '';
+              # An agent that runs whole inside the sandbox, adding the
+              # searcher to the checkout's modules.
+              agents.probe = {
+                modules = [ "search" ];
+                args = [ "--inside" ];
+                env.PROBE_AGENT = "set";
+              };
               modules = {
                 search = {
                   description = "a searcher";
@@ -555,6 +570,26 @@
                     agent-sandbox drop nix github -C repo
                     jq -e '.sandbox.network.allowedDomains == ["*.anthropic.com"]' "$settings"
                     agent-sandbox status -C repo
+
+                    # A whole agent in the enrolled checkout runs under srt,
+                    # with the checkout's modules and its own (the
+                    # searcher), write access to the checkout, and the
+                    # baseline's write guards; outside a checkout it runs
+                    # unchanged.
+                    export XDG_RUNTIME_DIR="$TMPDIR/run" SRT_PROBE="$TMPDIR/probe"
+                    mkdir -p "$SRT_PROBE"
+                    agent-sandbox run -C repo probe -- /bin/agent work < /dev/null
+                    tail -n 3 "$SRT_PROBE/args" | tr '\n' ' ' | grep -qx -- '/bin/agent --inside work '
+                    test "$(cat "$SRT_PROBE/env")" = set
+                    srt_settings="$SRT_PROBE/settings.json"
+                    jq -e '.filesystem.denyRead == ["/nix/store"]' "$srt_settings"
+                    jq -e --arg p ${pkgs.fd} '.filesystem.allowRead | index($p)' "$srt_settings"
+                    jq -e --arg r "$PWD/repo" '.filesystem.allowWrite[0] == $r' "$srt_settings"
+                    jq -e --arg r "$PWD/repo" '.filesystem.denyWrite | index($r + "/.agent-sandbox/binding.json")' "$srt_settings"
+                    jq -e '.network.allowedDomains == ["*.anthropic.com"]' "$srt_settings"
+                    jq -e '.network.allowUnixSockets == ["/run/agent.sock"]' "$srt_settings"
+                    jq -e '.bwrapPath | endswith("/bin/bwrap")' "$srt_settings"
+                    test "$(cd / && agent-sandbox run probe -- ${pkgs.coreutils}/bin/echo outside)" = outside
 
                     # What a module allows, read from the parts the
                     # module builds, and a recorded refusal.

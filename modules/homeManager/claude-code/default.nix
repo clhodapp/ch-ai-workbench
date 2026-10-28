@@ -675,6 +675,17 @@ in
       '';
     };
 
+    acpCommand = lib.mkOption {
+      type = lib.types.nullOr (lib.types.listOf lib.types.str);
+      readOnly = true;
+      internal = true;
+      description = ''
+        The command that starts `acpPackage`. Claude Code applies the
+        sandbox rules of a checkout itself, so it runs as it is. The
+        emacs-integration module hands it to agent-shell.
+      '';
+    };
+
     instructions = lib.mkOption {
       type = lib.types.nullOr lib.types.lines;
       default = null;
@@ -1310,6 +1321,9 @@ in
     ];
 
     ch-ai-workbench.claude-code.skills.ch-lsp.source = lspPlugin;
+
+    ch-ai-workbench.claude-code.acpCommand =
+      if cfg.acpPackage == null then null else [ (lib.getExe cfg.acpPackage) ];
 
     # Voice presets, selectable per session with /output-style. The
     # bodies are plain markdown files (no frontmatter; the module

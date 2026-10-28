@@ -664,6 +664,15 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    from .run import run
+
+    command = args.agent_command
+    if command and command[0] == "--":
+        command = command[1:]
+    return run(args.agent, command, Path(args.directory))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-sandbox",
@@ -741,6 +750,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="walk the given directory and report every checkout under it",
     )
     p.add_argument("directory")
+
+    p = add(
+        "run",
+        cmd_run,
+        help="run an agent's command in this checkout's sandbox (unchanged when not enrolled)",
+    )
+    p.add_argument("agent", metavar="AGENT")
+    p.add_argument("agent_command", nargs=argparse.REMAINDER, metavar="-- COMMAND")
 
     add("hook-session-start", cmd_hook_session_start, checkout=False, help=argparse.SUPPRESS)
 

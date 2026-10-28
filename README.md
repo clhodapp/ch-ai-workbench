@@ -52,7 +52,9 @@ toolset from Nix closures, plus its domains, sockets and writable
 paths). A checkout opts into the set of modules its work needs by
 enrollment, and the set is composed into the CLI's native sandbox
 rules. Claude Code enforces the rules and Nix authors the
-configuration. The design and boundaries are in
+configuration. Codex and OpenCode, which have no such hook, run whole
+inside an enrolled checkout's sandbox under sandbox-runtime, with the
+same modules plus their own. The design and boundaries are in
 [`docs/development/agent-sandbox.md`](docs/development/agent-sandbox.md).
 
 **Guests for sessions.** A home declares kinds of microvm guests with

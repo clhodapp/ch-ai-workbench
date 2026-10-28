@@ -40,9 +40,12 @@ WORK_FRAGMENT = {
 }
 
 
-def write_registry(config: Path, modules: dict, base_modules=(), base=BASE, credentials=None):
+def write_registry(
+    config: Path, modules: dict, base_modules=(), base=BASE, credentials=None, extra=None
+):
     """Write each part and the registry under ``config``; returns the
-    part paths by module name, for tests that change a part later."""
+    part paths by module name, for tests that change a part later.
+    ``extra`` adds top-level registry keys (agents, srt, guards)."""
     parts = config / "parts"
     parts.mkdir(parents=True, exist_ok=True)
     base_path = parts / "base.json"
@@ -58,6 +61,7 @@ def write_registry(config: Path, modules: dict, base_modules=(), base=BASE, cred
     }
     if credentials is not None:
         registry["credentials"] = credentials
+    registry.update(extra or {})
     (config / "registry.json").write_text(json.dumps(registry))
     paths["base"] = base_path
     return paths

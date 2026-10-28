@@ -18,6 +18,7 @@
 { closure-lib, ... }:
 {
   config,
+  options,
   lib,
   pkgs,
   ...
@@ -30,7 +31,48 @@ let
   # CODEX_HOME in the first case, which activation does not see, so the
   # merge names the directory itself.
   codexHome =
-    if config.home.preferXdgDirectories then "${config.xdg.configHome}/codex" else "$HOME/.codex";
+    if config.home.preferXdgDirectories then
+      "${config.xdg.configHome}/codex"
+    else
+      "${config.home.homeDirectory}/.codex";
+
+  # With agent-sandbox enabled in this home, Codex runs whole inside a
+  # checkout's sandbox when the checkout is enrolled (`agent-sandbox run`),
+  # and as it is elsewhere. Inside, the sandbox confines every command, so
+  # Codex runs its commands without a sandbox of its own: its bubblewrap
+  # sandbox would need user namespaces the outer sandbox does not grant.
+  sandboxed = options.ch-ai-workbench ? agent-sandbox && config.ch-ai-workbench.agent-sandbox.enable;
+  sandboxCli = lib.getExe config.ch-ai-workbench.agent-sandbox.package;
+  noInnerSandbox = [
+    "-c"
+    ''sandbox_mode="danger-full-access"''
+  ];
+
+  # The codex that codex-acp starts inside the sandbox, through
+  # CODEX_PATH: the same Codex, without a sandbox of its own.
+  codexInSandbox = pkgs.writeShellScriptBin "codex-in-sandbox" ''
+    exec ${lib.getExe cfg.package} ${lib.escapeShellArgs noInnerSandbox} "$@"
+  '';
+
+  # The codex command. The name keeps the version and passthru stays,
+  # because Home Manager's codex module reads the version from the
+  # package to pick the configuration features it writes.
+  command =
+    if !sandboxed then
+      cfg.package
+    else
+      pkgs.symlinkJoin {
+        name = "${lib.getName cfg.package}-sandboxed-${lib.getVersion cfg.package}";
+        paths = [ cfg.package ];
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        postBuild = ''
+          rm $out/bin/${cfg.package.meta.mainProgram}
+          makeWrapper ${sandboxCli} $out/bin/${cfg.package.meta.mainProgram} \
+            --add-flags ${lib.escapeShellArg "run codex -- ${lib.getExe cfg.package}"}
+        '';
+        inherit (cfg.package) meta;
+        passthru = cfg.package.passthru or { };
+      };
 
   mcpServers = lib.mapAttrs (
     _name: server:
@@ -68,6 +110,17 @@ in
         ch-ai-workbench.emacs-integration enabled, agent-shell starts
         Codex sessions through it. Null leaves agent-shell to find
         `codex-acp` on PATH.
+      '';
+    };
+
+    acpCommand = lib.mkOption {
+      type = lib.types.nullOr (lib.types.listOf lib.types.str);
+      readOnly = true;
+      internal = true;
+      description = ''
+        The command that starts `acpPackage`, through agent-sandbox when
+        this home enables it. The emacs-integration module hands it to
+        agent-shell.
       '';
     };
 
@@ -130,34 +183,78 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    assertions = [
+  config = lib.mkIf cfg.enable (
+    lib.mkMerge [
+      (lib.optionalAttrs (options.ch-ai-workbench ? agent-sandbox) {
+        # What Codex itself needs inside a checkout's sandbox: its
+        # package, CODEX_HOME (its sessions, logs and config.toml), OpenAI's
+        # hosts for the API and for ChatGPT sign-in, and the store, where
+        # its skills and AGENTS.md are linked.
+        ch-ai-workbench.agent-sandbox = lib.mkIf config.ch-ai-workbench.agent-sandbox.enable {
+          modules.codex = {
+            description = "Codex itself: its package, CODEX_HOME and OpenAI's hosts";
+            toolset = [ cfg.package ];
+            readStore = true;
+            allowWrite = [ codexHome ];
+            allowedDomains = [
+              "api.openai.com"
+              "auth.openai.com"
+              "chatgpt.com"
+              "*.chatgpt.com"
+            ];
+          };
+          agents.codex = {
+            modules = [ "codex" ];
+            args = noInnerSandbox;
+          };
+          agents.codex-acp = {
+            modules = [ "codex" ];
+            env.CODEX_PATH = lib.getExe codexInSandbox;
+          };
+        };
+      })
       {
-        assertion = !(cfg.settings ? mcp_servers);
-        message = ''
-          ch-ai-workbench.codex.settings may not set `mcp_servers`:
-          declare servers through ch-ai-workbench.codex.mcpServers.
-        '';
+        assertions = [
+          {
+            assertion = !(cfg.settings ? mcp_servers);
+            message = ''
+              ch-ai-workbench.codex.settings may not set `mcp_servers`:
+              declare servers through ch-ai-workbench.codex.mcpServers.
+            '';
+          }
+        ];
+
+        ch-ai-workbench.codex.acpCommand =
+          if cfg.acpPackage == null then
+            null
+          else
+            lib.optionals sandboxed [
+              sandboxCli
+              "run"
+              "codex-acp"
+              "--"
+            ]
+            ++ [ (lib.getExe cfg.acpPackage) ];
+
+        programs.codex = {
+          enable = true;
+          package = command;
+          skills = lib.mkIf (cfg.skills != { }) cfg.skills;
+          context = lib.mkIf (cfg.instructions != null) cfg.instructions;
+        };
+
+        home.activation.codexSettings = closure-lib.ch-ai-workbench.mkAgentConfigActivation {
+          inherit
+            lib
+            pkgs
+            config
+            settings
+            ;
+          name = "codex-settings";
+          format = "toml";
+          target = "${codexHome}/config.toml";
+        };
       }
-    ];
-
-    programs.codex = {
-      enable = true;
-      inherit (cfg) package;
-      skills = lib.mkIf (cfg.skills != { }) cfg.skills;
-      context = lib.mkIf (cfg.instructions != null) cfg.instructions;
-    };
-
-    home.activation.codexSettings = closure-lib.ch-ai-workbench.mkAgentConfigActivation {
-      inherit
-        lib
-        pkgs
-        config
-        settings
-        ;
-      name = "codex-settings";
-      format = "toml";
-      target = "${codexHome}/config.toml";
-    };
-  };
+    ]
+  );
 }
