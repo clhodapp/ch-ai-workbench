@@ -17,6 +17,7 @@
       claude
       claude-code
       claude-code-sandbox
+      codex
       emacs-integration
       microvm
       opencode
@@ -302,6 +303,76 @@
               inherit pkgs;
               claude-consent = claudeConsent;
             };
+
+            # A home of `tester` with every module of this layer and the
+            # editor's Emacs module.
+            workbenchHome = inputs.home-manager.lib.homeManagerConfiguration {
+              inherit pkgs;
+              modules = [
+                inputs.ch-emacs-config.modules.homeManager.emacs
+                self.modules.homeManager.emacs
+                self.modules.homeManager.gptel
+                self.modules.homeManager.claude
+                self.modules.homeManager.claude-code
+                self.modules.homeManager.claude-code-sandbox
+                self.modules.homeManager.codex
+                self.modules.homeManager.emacs-integration
+                # Without kinds, the microvm module adds nothing.
+                self.modules.homeManager.microvm
+                self.modules.homeManager.opencode
+                {
+                  home.username = "tester";
+                  home.homeDirectory = "/home/tester";
+                  home.stateVersion = "25.05";
+                  programs.emacs.enable = true;
+                  # The claude-code module contributes global git
+                  # excludes; with git enabled the check evaluates
+                  # that file too.
+                  programs.git.enable = true;
+                  ch-emacs-config.emacs.enable = true;
+                  ch-ai-workbench.emacs.enable = true;
+                  # Forces the gptel option types and the init append
+                  # through evaluation and the byte compiler.
+                  ch-ai-workbench.gptel = {
+                    enable = true;
+                    backend = "fireworks";
+                    model = "accounts/fireworks/models/deepseek-v4-flash";
+                  };
+                  ch-ai-workbench.claude.enable = true;
+                  ch-ai-workbench.claude-code.enable = true;
+                  ch-ai-workbench.claude-code-sandbox = sandboxModules;
+                  # Builds the wrapper that declares the Emacs MCP server.
+                  ch-ai-workbench.codex = {
+                    enable = true;
+                    package = pkgs.codex;
+                  };
+                  ch-ai-workbench.emacs-integration.enable = true;
+                  # Builds the wrapper that reads the Baseten key.
+                  ch-ai-workbench.opencode = {
+                    enable = true;
+                    package = pkgs.opencode;
+                  };
+                }
+              ];
+            };
+
+            # A home of `tester` that selects the codex module alone.
+            codexBareHome =
+              (inputs.home-manager.lib.homeManagerConfiguration {
+                inherit pkgs;
+                modules = [
+                  self.modules.homeManager.codex
+                  {
+                    home.username = "tester";
+                    home.homeDirectory = "/home/tester";
+                    home.stateVersion = "25.05";
+                    ch-ai-workbench.codex = {
+                      enable = true;
+                      package = pkgs.codex;
+                    };
+                  }
+                ];
+              }).config;
           in
           {
             checks = {
@@ -586,50 +657,32 @@
               # that this layer composes with the editor: the bundles
               # merge into one init, the packages build against one Emacs
               # package set, and the whole activation resolves.
-              home-manager-module =
-                (inputs.home-manager.lib.homeManagerConfiguration {
-                  inherit pkgs;
-                  modules = [
-                    inputs.ch-emacs-config.modules.homeManager.emacs
-                    self.modules.homeManager.emacs
-                    self.modules.homeManager.gptel
-                    self.modules.homeManager.claude
-                    self.modules.homeManager.claude-code
-                    self.modules.homeManager.claude-code-sandbox
-                    self.modules.homeManager.emacs-integration
-                    # Without kinds, the microvm module adds nothing.
-                    self.modules.homeManager.microvm
-                    self.modules.homeManager.opencode
-                    {
-                      home.username = "tester";
-                      home.homeDirectory = "/home/tester";
-                      home.stateVersion = "25.05";
-                      programs.emacs.enable = true;
-                      # The claude-code module contributes global git
-                      # excludes; with git enabled the check evaluates
-                      # that file too.
-                      programs.git.enable = true;
-                      ch-emacs-config.emacs.enable = true;
-                      ch-ai-workbench.emacs.enable = true;
-                      # Forces the gptel option types and the init append
-                      # through evaluation and the byte compiler.
-                      ch-ai-workbench.gptel = {
-                        enable = true;
-                        backend = "fireworks";
-                        model = "accounts/fireworks/models/deepseek-v4-flash";
-                      };
-                      ch-ai-workbench.claude.enable = true;
-                      ch-ai-workbench.claude-code.enable = true;
-                      ch-ai-workbench.claude-code-sandbox = sandboxModules;
-                      ch-ai-workbench.emacs-integration.enable = true;
-                      # Builds the wrapper that reads the Baseten key.
-                      ch-ai-workbench.opencode = {
-                        enable = true;
-                        package = pkgs.opencode;
-                      };
-                    }
-                  ];
-                }).activationPackage;
+              home-manager-module = workbenchHome.activationPackage;
+
+              # The codex command of the full home declares the MCP server
+              # `emacs`, which runs the bridge from the home-manager
+              # profile. The home that selects the codex module alone
+              # installs the package unwrapped.
+              codex-home-module =
+                assert codexBareHome.programs.codex.package == pkgs.codex;
+                pkgs.runCommand "codex-home-module"
+                  {
+                    codex = lib.getExe workbenchHome.config.programs.codex.package;
+                  }
+                  ''
+                    export CODEX_HOME="$TMPDIR/codex"
+                    mkdir "$CODEX_HOME"
+                    "$codex" mcp get emacs --json > emacs.json
+                    ${lib.getExe pkgs.jq} -e '.transport == {
+                      type: "stdio",
+                      command: "/home/tester/.nix-profile/bin/emacs-mcp-stdio",
+                      args: [],
+                      env: null,
+                      env_vars: [],
+                      cwd: null
+                    }' emacs.json
+                    touch $out
+                  '';
 
               ai-commit-ert = pkgs.runCommand "ai-commit-ert" { } ''
                 export HOME="$TMPDIR"

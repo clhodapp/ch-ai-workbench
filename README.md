@@ -81,6 +81,7 @@ prompt; mermaid blocks render in message display; and the
   #   ch-ai-workbench.claude-code-sandbox.enable = true;  # plus .runtime.claudePackage and .modules
   #   ch-ai-workbench.emacs-integration.enable = true;
   #   ch-ai-workbench.opencode.enable = true;  # OpenCode on Baseten and Fireworks; plus .package, .model and .providers
+  #   ch-ai-workbench.codex.enable = true;  # Codex, which starts with the Emacs MCP server; set .package too
 }
 ```
 
