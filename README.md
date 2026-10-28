@@ -80,7 +80,7 @@ prompt; mermaid blocks render in message display; and the
   #   ch-ai-workbench.claude-code.enable = true;
   #   ch-ai-workbench.claude-code-sandbox.enable = true;  # plus .runtime.claudePackage and .modules
   #   ch-ai-workbench.emacs-integration.enable = true;
-  #   ch-ai-workbench.opencode.enable = true;  # OpenCode on Baseten; plus .package, .model and .baseten.apiKeyFile
+  #   ch-ai-workbench.opencode.enable = true;  # OpenCode on Baseten and Fireworks; plus .package, .model and .providers
 }
 ```
 
