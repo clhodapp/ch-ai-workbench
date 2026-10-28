@@ -9,7 +9,7 @@
 # contributed to ch-emacs-config's own options, so a configuration
 # importing both gets one Emacs with both layers' bundles rather than
 # two configurations fighting.
-{ closure-inputs, closure-lib, ... }:
+{ closure-sources, closure-lib, ... }:
 {
   config,
   lib,
@@ -19,7 +19,7 @@
 let
   cfg = config.ch-ai-workbench.emacs;
 
-  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
+  merman = closure-sources.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
 
   # The bundle spec and the local packages come from this layer's
   # library, so the modules and the checks read one definition.
@@ -36,7 +36,7 @@ in
     # composes this after its own overrides, so they build against the
     # same Emacs as everything else here.
     ch-emacs-config.emacs.extraOverrides = [
-      (workbench.mkEmacsPackageOverrides { inherit (closure-inputs) collab-comments parenting; })
+      (workbench.mkEmacsPackageOverrides { inherit (closure-sources) collab-comments parenting; })
     ];
 
     ch-emacs-config.emacs.localPackageOverlays = workbench.localPackageOverlays.emacs;

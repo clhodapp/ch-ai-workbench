@@ -12,7 +12,7 @@
 # The Claude Code CLI itself (hooks, skills, the LSP plugin) is the
 # claude-code module; the hooks and skill that let a session drive this
 # Emacs are emacs-integration.
-{ closure-inputs, closure-lib, ... }:
+{ closure-sources, closure-lib, ... }:
 {
   config,
   lib,
@@ -22,7 +22,7 @@
 let
   cfg = config.ch-ai-workbench.claude;
 
-  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
+  merman = closure-sources.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
 
   # The bundle spec and the local packages come from this layer's
   # library, so the modules and the checks read one definition.

@@ -4,7 +4,7 @@
 # bundles, and the choice of backend and model they start on. Stands on
 # the editor alone; it does not need the vendor-neutral module beside
 # it.
-{ closure-inputs, closure-lib, ... }:
+{ closure-sources, closure-lib, ... }:
 {
   config,
   lib,
@@ -14,7 +14,7 @@
 let
   cfg = config.ch-ai-workbench.gptel;
 
-  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
+  merman = closure-sources.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
 
   # The bundle spec comes from this layer's library, so the modules and
   # the checks read one definition.

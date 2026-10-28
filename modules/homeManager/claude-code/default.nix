@@ -3,7 +3,7 @@
 # The agent half of the workbench: the hooks, skills, output styles and
 # permissions a Claude Code session runs under, and the LSP plugin
 # manifest it reads.
-{ closure-inputs, closure-lib, ... }:
+{ closure-sources, closure-lib, ... }:
 {
   config,
   lib,
@@ -18,7 +18,7 @@ let
   # Claude Code's lspServers shape, and the editor's eglot renders the
   # same table, so the two cannot disagree about how to spawn a server.
   languageServers = closure-lib.ch-emacs-config.languageServers pkgs {
-    merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
+    merman = closure-sources.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
   };
 
   # A personal-scope skills-directory plugin: any folder under
