@@ -2,9 +2,21 @@
 #
 # OpenCode against hosted providers (Baseten and Fireworks by default):
 # the consumer's opencode package, installed through Home Manager's
-# programs.opencode, with each provider's key delivered from a file and
-# a Baseten model as the default.
-{ ... }:
+# programs.opencode, with each provider's key delivered from a file,
+# a Baseten model as the default, and its user configuration declared
+# here.
+#
+# OpenCode reads a configuration file named by OPENCODE_CONFIG on top of
+# the global opencode.json, merging the two (objects key by key, lists
+# concatenated) and letting a project's configuration override both. The
+# declared settings and MCP servers are rendered into that file, which
+# the opencode command names, so opencode.json stays a file OpenCode and
+# its users write. programs.opencode.settings is left empty, because
+# Home Manager links a non-empty one from the store as opencode.json.
+#
+# The instructions file and the skills are plain links, through
+# programs.opencode.context and programs.opencode.skills.
+{ closure-lib, ... }:
 {
   config,
   lib,
@@ -34,27 +46,46 @@ let
       fi
     '';
 
+  mcp = lib.mapAttrs (_name: server: {
+    type = "local";
+    command = [ server.command ] ++ server.args;
+    enabled = true;
+    environment = server.env;
+  }) cfg.mcpServers;
+
+  # The declared layer, named by OPENCODE_CONFIG.
+  layer = pkgs.writeText "opencode-workbench.json" (
+    builtins.toJSON (
+      {
+        "$schema" = "https://opencode.ai/config.json";
+      }
+      // cfg.settings
+      // lib.optionalAttrs (mcp != { }) { inherit mcp; }
+    )
+  );
+
   # The name keeps the version and passthru stays, because Home
   # Manager's module reads both from the package (the version to pick a
   # configuration shape, passthru.jsonschema to validate the file).
-  wrapped =
-    if keyed == { } then
-      cfg.package
-    else
-      pkgs.symlinkJoin {
-        name = "${lib.getName cfg.package}-keyed-${lib.getVersion cfg.package}";
-        paths = [ cfg.package ];
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-        postBuild = ''
-          wrapProgram $out/bin/${cfg.package.meta.mainProgram} ${
-            lib.concatMapStringsSep " " (provider: "--run ${lib.escapeShellArg (readKey provider)}") (
-              lib.attrValues keyed
-            )
-          }
-        '';
-        inherit (cfg.package) meta;
-        passthru = cfg.package.passthru or { };
-      };
+  # A launch that sets OPENCODE_CONFIG itself names its own file, and
+  # gets none of the declared settings.
+  wrapped = pkgs.symlinkJoin {
+    name = "${lib.getName cfg.package}-workbench-${lib.getVersion cfg.package}";
+    paths = [ cfg.package ];
+    nativeBuildInputs = [ pkgs.makeWrapper ];
+    postBuild = ''
+      wrapProgram $out/bin/${cfg.package.meta.mainProgram} \
+        --set-default OPENCODE_CONFIG ${layer} \
+        ${lib.optionalString (!cfg.claudeCodeCompat) "--set OPENCODE_DISABLE_CLAUDE_CODE 1"} \
+        ${lib.concatMapStringsSep " " (provider: "--run ${lib.escapeShellArg (readKey provider)}") (
+          lib.attrValues keyed
+        )}
+    '';
+    inherit (cfg.package) meta;
+    passthru = (cfg.package.passthru or { }) // {
+      workbenchLayer = layer;
+    };
+  };
 in
 {
   options.ch-ai-workbench.opencode = {
@@ -71,14 +102,73 @@ in
       '';
     };
 
-    model = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = "baseten/zai-org/GLM-5.3";
-      example = "fireworks-ai/accounts/fireworks/models/kimi-k3";
+    settings = lib.mkOption {
+      type = (pkgs.formats.json { }).type;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          model = "fireworks-ai/accounts/fireworks/models/kimi-k3";
+          permission.bash."git push*" = "ask";
+          share = "disabled";
+        }
+      '';
       description = ''
-        The model OpenCode starts on, as `<provider>/<model>`. The
-        default is a model of Baseten's Model APIs. Null leaves the
-        choice to OpenCode.
+        OpenCode settings, in the shape of opencode.json, rendered into
+        the file the opencode command names in OPENCODE_CONFIG. OpenCode
+        merges it over the global opencode.json, so a key set here wins
+        over the same key there, and a project's configuration wins over
+        both. The module sets `model` to a model of Baseten's Model APIs
+        by default, as `<provider>/<model>`. `mcp` comes from the
+        `mcpServers` option.
+      '';
+    };
+
+    mcpServers = lib.mkOption {
+      type = lib.types.attrsOf (closure-lib.ch-ai-workbench.mcpServerType lib);
+      default = { };
+      example = lib.literalExpression ''
+        {
+          emacs.command = "''${config.home.profileDirectory}/bin/emacs-mcp-stdio";
+        }
+      '';
+      description = ''
+        Stdio MCP servers, keyed by name, rendered into `mcp` of the
+        declared settings as local servers. Servers in opencode.json stay
+        beside them. Merged across all modules that set it.
+      '';
+    };
+
+    instructions = lib.mkOption {
+      type = lib.types.nullOr lib.types.lines;
+      default = null;
+      description = ''
+        $XDG_CONFIG_HOME/opencode/AGENTS.md, the instructions OpenCode
+        loads into every session, through programs.opencode.context.
+        Null leaves the file alone.
+      '';
+    };
+
+    skills = lib.mkOption {
+      type = lib.types.attrsOf lib.types.path;
+      default = { };
+      example = lib.literalExpression "{ deploy-runbook = ./skills/deploy-runbook; }";
+      description = ''
+        Skill directories (SKILL.md inside) installed as
+        $XDG_CONFIG_HOME/opencode/skills/<name>, through
+        programs.opencode.skills.
+      '';
+    };
+
+    claudeCodeCompat = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether OpenCode also reads Claude Code's files: the skills
+        under ~/.claude/skills and CLAUDE.md as instructions. Off by
+        default, so each agent reads only what is declared for it. A
+        skill written for Claude Code can name tools only Claude Code
+        has, such as the tools of the agent-sandbox plugin. Off sets
+        OPENCODE_DISABLE_CLAUDE_CODE in the opencode command.
       '';
     };
 
@@ -150,10 +240,23 @@ in
       };
     };
 
+    assertions = [
+      {
+        assertion = !(cfg.settings ? mcp);
+        message = ''
+          ch-ai-workbench.opencode.settings may not set `mcp`: declare
+          servers through ch-ai-workbench.opencode.mcpServers.
+        '';
+      }
+    ];
+
+    ch-ai-workbench.opencode.settings.model = lib.mkDefault "baseten/zai-org/GLM-5.3";
+
     programs.opencode = {
       enable = true;
       package = wrapped;
-      settings = lib.optionalAttrs (cfg.model != null) { inherit (cfg) model; };
+      skills = lib.mkIf (cfg.skills != { }) cfg.skills;
+      context = lib.mkIf (cfg.instructions != null) cfg.instructions;
     };
   };
 }

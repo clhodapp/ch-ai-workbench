@@ -339,15 +339,21 @@
                     model = "accounts/fireworks/models/deepseek-v4-flash";
                   };
                   ch-ai-workbench.claude.enable = true;
-                  ch-ai-workbench.claude-code.enable = true;
+                  # Stand-ins for the ACP adapters: the check reads the
+                  # commands agent-shell gets, and runs neither.
+                  ch-ai-workbench.claude-code = {
+                    enable = true;
+                    acpPackage = pkgs.writeShellScriptBin "claude-agent-acp" "exit 1";
+                    settings.env.WORKBENCH_CHECK = "1";
+                  };
                   ch-ai-workbench.agent-sandbox = sandboxModules;
-                  # Builds the wrapper that declares the Emacs MCP server.
                   ch-ai-workbench.codex = {
                     enable = true;
                     package = pkgs.codex;
+                    acpPackage = pkgs.writeShellScriptBin "codex-acp" "exit 1";
+                    settings.tui.notifications = true;
                   };
                   ch-ai-workbench.emacs-integration.enable = true;
-                  # Builds the wrapper that reads the Baseten key.
                   ch-ai-workbench.opencode = {
                     enable = true;
                     package = pkgs.opencode;
@@ -356,23 +362,24 @@
               ];
             };
 
-            # A home of `tester` that selects the codex module alone.
-            codexBareHome =
-              (inputs.home-manager.lib.homeManagerConfiguration {
-                inherit pkgs;
-                modules = [
-                  self.modules.homeManager.codex
-                  {
-                    home.username = "tester";
-                    home.homeDirectory = "/home/tester";
-                    home.stateVersion = "25.05";
-                    ch-ai-workbench.codex = {
-                      enable = true;
-                      package = pkgs.codex;
-                    };
-                  }
+            # The activation entries that merge the declared settings into
+            # the agents' own files, rewritten from the test home's
+            # directory to $HOME, which a build can write.
+            agentConfigActivation =
+              lib.concatMapStrings
+                (
+                  name:
+                  builtins.replaceStrings [ "/home/tester" ] [ "$HOME" ]
+                    workbenchHome.config.home.activation.${name}.data
+                  + "\n"
+                )
+                [
+                  "claudeCodeSettings"
+                  "claudeCodeMcpServers"
+                  "codexSettings"
                 ];
-              }).config;
+
+            agentShellInit = workbenchHome.config.ch-emacs-config.emacs.bundles.agent-shell.init;
           in
           {
             checks = {
@@ -663,24 +670,57 @@
               # `emacs`, which runs the bridge from the home-manager
               # profile. The home that selects the codex module alone
               # installs the package unwrapped.
-              codex-home-module =
-                assert codexBareHome.programs.codex.package == pkgs.codex;
-                pkgs.runCommand "codex-home-module"
+              # The declared configuration of the three agents, as each
+              # agent reads it. The full home's activation entries merge
+              # into files an agent and a person already wrote, which keep
+              # what they hold; Codex and OpenCode then report the MCP
+              # server `emacs` that emacs-integration declares for them,
+              # and agent-shell starts each agent by store path.
+              agent-config-home =
+                assert lib.hasInfix "agent-shell-anthropic-claude-acp-command" agentShellInit;
+                assert lib.hasInfix "agent-shell-openai-codex-acp-command" agentShellInit;
+                assert lib.hasInfix ''/bin/opencode" "acp"'' agentShellInit;
+                pkgs.runCommand "agent-config-home"
                   {
+                    nativeBuildInputs = [ pkgs.jq ];
                     codex = lib.getExe workbenchHome.config.programs.codex.package;
+                    opencode = lib.getExe workbenchHome.config.programs.opencode.package;
                   }
                   ''
-                    export CODEX_HOME="$TMPDIR/codex"
-                    mkdir "$CODEX_HOME"
-                    "$codex" mcp get emacs --json > emacs.json
-                    ${lib.getExe pkgs.jq} -e '.transport == {
-                      type: "stdio",
-                      command: "/home/tester/.nix-profile/bin/emacs-mcp-stdio",
-                      args: [],
-                      env: null,
-                      env_vars: [],
-                      cwd: null
-                    }' emacs.json
+                    export HOME="$TMPDIR/home"
+                    export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+                    export XDG_STATE_HOME="$HOME/.local/state" XDG_CACHE_HOME="$HOME/.cache"
+                    mkdir -p "$HOME/.codex" "$HOME/.claude" "$HOME/work"
+                    printf '# chosen with /model\nmodel = "o3"\n\n[projects."/home/tester/work"]\ntrust_level = "trusted"\n' \
+                      > "$HOME/.codex/config.toml"
+                    echo '{"numStartups": 3, "mcpServers": {"added": {"type": "stdio", "command": "x"}}}' \
+                      > "$HOME/.claude.json"
+                    echo '{"theme": "dark"}' > "$HOME/.claude/settings.json"
+
+                    run() { "$@"; }
+                    ${agentConfigActivation}
+
+                    grep -q '^# chosen with /model$' "$HOME/.codex/config.toml"
+                    grep -q '^trust_level = "trusted"$' "$HOME/.codex/config.toml"
+                    CODEX_HOME="$HOME/.codex" "$codex" mcp get emacs --json \
+                      | jq -e '.transport.command == "/home/tester/.nix-profile/bin/emacs-mcp-stdio"'
+
+                    jq -e '.numStartups == 3 and .mcpServers.added.command == "x"
+                      and .mcpServers.emacs == {type: "stdio", command: "/home/tester/.nix-profile/bin/emacs-mcp-stdio"}' \
+                      "$HOME/.claude.json"
+                    jq -e '.theme == "dark" and .env.WORKBENCH_CHECK == "1"' "$HOME/.claude/settings.json"
+
+                    # OpenCode 1 prints the resolved configuration; OpenCode
+                    # 2 lists the documents it loaded, each in its own
+                    # shape (the model as provider and model, the servers
+                    # under `mcp.servers`).
+                    cd "$HOME/work"
+                    timeout 120 "$opencode" debug config > opencode.json
+                    jq -e '
+                      (if type == "array" then map(select(.type == "document")) | .[0].info else . end) as $c
+                      | ($c.mcp.servers // $c.mcp).emacs.command == ["/home/tester/.nix-profile/bin/emacs-mcp-stdio"]
+                        and ($c.model == "baseten/zai-org/GLM-5.3"
+                             or $c.model == {providerID: "baseten", model: "zai-org/GLM-5.3"})' opencode.json
                     touch $out
                   '';
 

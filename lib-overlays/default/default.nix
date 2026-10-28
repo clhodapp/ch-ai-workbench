@@ -58,6 +58,17 @@
       mkClaudeRedactHook = import ./hooks/claude-redact-hook.nix;
       mkClaudeRevealHook = import ./hooks/claude-reveal-hook.nix;
       mkEmacsClaudeConsentHook = import ./hooks/emacs-claude-consent-hook.nix;
+
+      # The home-manager activation entry that merges declared settings
+      # into a config file an agent also writes, through
+      # `agent-config apply`. The claude-code, codex and opencode modules
+      # each call it per file.
+      mkAgentConfigActivation = import ./agent-config-activation.nix;
+
+      # The type of the `mcpServers` entries of those three modules: a
+      # stdio server as `command`, `args` and `env`, which each module
+      # renders into its agent's shape. Takes `lib`.
+      mcpServerType = import ./mcp-server-type.nix;
     };
   };
 

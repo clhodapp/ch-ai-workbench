@@ -36,6 +36,16 @@ so the module converges instead of overwriting: it renders what you
 declared into a manifest, merges that into the live settings, and leaves
 anything you added by hand alone.
 
+**Codex and OpenCode, declared the same way.** The `claude-code`,
+`codex` and `opencode` modules each take `settings`, `mcpServers`,
+`instructions` and `skills`. Settings for Claude Code and Codex are
+merged at activation into the files each agent rewrites at runtime
+(`~/.claude/settings.json` and `~/.claude.json`, Codex's
+`config.toml`) by `agent-config`, which changes only what was declared
+and keeps comments and hand edits. OpenCode reads them as an extra
+configuration layer named by `OPENCODE_CONFIG`, so its own
+`opencode.json` stays untouched.
+
 **agent-sandbox configures Claude Code's sandbox.** It declares named
 sandbox modules, each saying what one kind of tooling needs (a closed
 toolset from Nix closures, plus its domains, sockets and writable
@@ -66,6 +76,8 @@ where Emacs answers from a menu, a terminal can answer instead
 plain allow/deny with nobody attached falls back to the CLI's own
 prompt; mermaid blocks render in message display; and the
 `emacs-tools` skill documents the MCP tools for the agent reading them.
+Codex and OpenCode get the same MCP server and skills, and agent-shell
+starts all three agents over the Agent Client Protocol by store path.
 
 ## Use it
 
@@ -78,11 +90,11 @@ prompt; mermaid blocks render in message display; and the
   #   ch-ai-workbench.emacs.enable = true;     # vendor-neutral bundles
   #   ch-ai-workbench.gptel.enable = true;     # gptel, plus .backend/.model
   #   ch-ai-workbench.claude.enable = true;    # Claude Code in Emacs; needs .emacs
-  #   ch-ai-workbench.claude-code.enable = true;
+  #   ch-ai-workbench.claude-code.enable = true;  # plus .settings, .mcpServers, .acpPackage
   #   ch-ai-workbench.agent-sandbox.enable = true;  # plus .runtime.claudePackage and .modules
-  #   ch-ai-workbench.emacs-integration.enable = true;
-  #   ch-ai-workbench.opencode.enable = true;  # OpenCode on Baseten and Fireworks; plus .package, .model and .providers
-  #   ch-ai-workbench.codex.enable = true;  # Codex, which starts with the Emacs MCP server; set .package too
+  #   ch-ai-workbench.emacs-integration.enable = true;  # the Emacs MCP server, skills and agent-shell for every agent
+  #   ch-ai-workbench.opencode.enable = true;  # OpenCode on Baseten and Fireworks; plus .package, .settings and .providers
+  #   ch-ai-workbench.codex.enable = true;  # set .package, and .acpPackage for agent-shell
 }
 ```
 
