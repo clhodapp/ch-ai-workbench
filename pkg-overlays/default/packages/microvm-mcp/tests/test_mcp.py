@@ -40,6 +40,8 @@ class FakeGuest:
         self.received: list[dict[str, Any]] = []
         self.release = threading.Event()
         self.lock = threading.Lock()
+
+    def start(self) -> None:
         threading.Thread(target=self.serve, daemon=True).start()
 
     def send(self, msg: dict[str, Any]) -> None:
@@ -146,7 +148,11 @@ class ServerCase(Fixture):
 
     def accept(self, instance: str, guest_end: socket.socket, port: int) -> None:
         self.connects.append((instance, port))
-        self.guests[instance] = FakeGuest(guest_end, self.guest_tools[instance])
+        # Registered before it serves: once the guest answers, the server
+        # can finish `microvm_up`, and the test reads the guest from here.
+        guest = FakeGuest(guest_end, self.guest_tools[instance])
+        self.guests[instance] = guest
+        guest.start()
 
     def send(self, method: str, params: dict[str, Any] | None = None) -> int:
         self.next_id += 1
