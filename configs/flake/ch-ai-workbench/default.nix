@@ -19,6 +19,7 @@
       claude-code-sandbox
       emacs-integration
       microvm
+      opencode
       zsh
       ;
   };
@@ -598,6 +599,7 @@
                     self.modules.homeManager.emacs-integration
                     # Without kinds, the microvm module adds nothing.
                     self.modules.homeManager.microvm
+                    self.modules.homeManager.opencode
                     {
                       home.username = "tester";
                       home.homeDirectory = "/home/tester";
@@ -620,6 +622,11 @@
                       ch-ai-workbench.claude-code.enable = true;
                       ch-ai-workbench.claude-code-sandbox = sandboxModules;
                       ch-ai-workbench.emacs-integration.enable = true;
+                      # Builds the wrapper that reads the Baseten key.
+                      ch-ai-workbench.opencode = {
+                        enable = true;
+                        package = pkgs.opencode;
+                      };
                     }
                   ];
                 }).activationPackage;
