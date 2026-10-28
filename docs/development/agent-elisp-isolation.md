@@ -76,7 +76,7 @@ per request under the two contracts below.
 "What runs where"), without sharing the child's filesystem view: a
 buffer's inert text is written as a file into the calling client's
 territory, under the directory the CLI's own sandbox uses as
-per-checkout scratch (`.claude/claude-code-sandbox/`, which sandboxed
+per-checkout scratch (`.agent-sandbox/`, which sandboxed
 commands can write and the clone's exclude file keeps out of `git
 status`), and the agent edits it with its ordinary command-line tools
 (ripgrep, sed, its own ranged reads and writes) with no Emacs

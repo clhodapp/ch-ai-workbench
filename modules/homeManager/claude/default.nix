@@ -34,11 +34,11 @@ let
   editorScope = config.ch-emacs-config.emacs.build.packageScope;
 
   # The MCP stdio bridge: a stable command MCP clients register through
-  # the home-manager profile, for example
-  # `claude mcp add -s user emacs -- ~/.nix-profile/bin/emacs-mcp-stdio`
-  # (the directory is home.profileDirectory). The profile path keeps
+  # the home-manager profile, ~/.nix-profile/bin/emacs-mcp-stdio (the
+  # directory is home.profileDirectory). The emacs-integration module
+  # registers it with each agent this home configures. The profile path keeps
   # working across package updates, and unlike a bare name it does not
-  # depend on PATH: a checkout enrolled in claude-code-sandbox sets the
+  # depend on PATH: a checkout enrolled in agent-sandbox sets the
   # Claude Code process's PATH to its sandbox farms. Defaults target the "emacs" server
   # the mcp-server bundle registers; explicit flags win, since the
   # bridge's argument parser is last-match.

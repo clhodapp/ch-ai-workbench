@@ -2478,7 +2478,7 @@ The printing happens in the child, so a value with no readable form
 ;; runs where"): the agent asks for a buffer as a file, edits it with
 ;; its own command-line tools, and asks for the text to land.  The file
 ;; lives in the calling client's territory under
-;; .claude/claude-code-sandbox/, the directory the CLI's sandbox already
+;; .agent-sandbox/, the directory the agent-sandbox CLI already
 ;; uses as per-checkout scratch: sandboxed commands can write the
 ;; checkout and nothing else, and that directory is kept out of `git
 ;; status' through the clone's exclude file, which this writes too where
@@ -2497,7 +2497,7 @@ in it; :spans, the placeholder-to-original alist put back when the
 file lands.")
 
 (defconst ch-mcp-server--cli-copy-subdirectory
-  ".claude/claude-code-sandbox/mcp-copies"
+  ".agent-sandbox/mcp-copies"
   "Where, under the client's territory, the CLI transform's files live.
 Under the directory the CLI's sandbox uses for per-checkout scratch, so
 the exclude-file line the sandbox writes covers it.")
@@ -2514,7 +2514,7 @@ without a git directory, or git failing, changes nothing."
                                                  "info/exclude"))
                          (expand-file-name (string-trim (buffer-string)) root)))
                    (error nil)))
-        (line "/.claude/claude-code-sandbox/"))
+        (line "/.agent-sandbox/"))
     (when exclude
       (condition-case nil
           (let ((existing (if (file-exists-p exclude)
@@ -2542,7 +2542,7 @@ every copy, so a recognized secret arrives as [REDACTED:<rule>] and
 such a file cannot be landed.  Editing the file changes nothing in
 Emacs; call land-buffer-file with the same name to land its text,
 which is refused if the buffer changed meanwhile.  The file lives under
-the client's territory in .claude/claude-code-sandbox/mcp-copies/, which
+the client's territory in .agent-sandbox/mcp-copies/, which
 the CLI's sandbox can write and git ignores.
 
 MCP Parameters:
@@ -2897,7 +2897,7 @@ the others."
     (list #'ch-mcp-server--buffer-file
           :id "buffer-file"
           :description
-          "A plain-text copy of a buffer as a file under this session's territory (.claude/claude-code-sandbox/mcp-copies/), for reading or editing with your own tools; secrets appear as numbered placeholders that are put back when the text lands; land the edited text with land-buffer-file")
+          "A plain-text copy of a buffer as a file under this session's territory (.agent-sandbox/mcp-copies/), for reading or editing with your own tools; secrets appear as numbered placeholders that are put back when the text lands; land the edited text with land-buffer-file")
     (list #'ch-mcp-server--land-buffer-file
           :id "land-buffer-file"
           :description

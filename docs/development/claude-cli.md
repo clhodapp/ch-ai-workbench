@@ -162,8 +162,8 @@ on the command line:
   bare directory lifts nothing.
 - **Lifted inside a sandboxed checkout** (`claude-queue-sandboxed-tools`,
   default `Bash`, `WebFetch`, `WebSearch`): when the dispatch root
-  carries a claude-code-sandbox sidecar
-  (`.claude/claude-code-sandbox.json`) binding a profile other than
+  carries an agent-sandbox sidecar file
+  (`.agent-sandbox/binding.json`) that binds a profile other than
   the reserved empty `none`, shell and network are dropped from the
   deny floor before rendering, so the session keeps them under the
   profile's OS-level confinement (closed toolset, filesystem,

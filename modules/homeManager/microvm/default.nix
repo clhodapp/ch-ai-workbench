@@ -15,13 +15,13 @@
 # agents use a kind selects that module as well.
 #
 # For each kind that agents may use and that has shares, the module
-# declares the claude-code-sandbox module `microvm-<kind>`. It grants
+# declares the agent-sandbox module `microvm-<kind>`. It grants
 # Bash commands read and write access to the share directories of every
 # instance of the kind in its default directory, as
 # `ch-microvm.instances` lists them. A checkout that chooses it can put
 # targets into the `in` share of an instance and read its `out` share.
 # The module declares these sandbox modules when the home also selects
-# the claude-code-sandbox module of this layer.
+# the agent-sandbox module of this layer.
 #
 # docs/development/microvm-guests.md describes the whole mechanism.
 { closure-lib, ... }:
@@ -54,7 +54,7 @@ let
         description = ''
           Whether agents may use the kind. The MCP server `microvm`
           offers only the kinds that set this. When the kind has shares
-          and the home selects the claude-code-sandbox module of this
+          and the home selects the agent-sandbox module of this
           layer, the sandbox module `microvm-<kind>` grants read and
           write access to the share directories that
           `ch-microvm.instances.<kind>` lists. The Bash commands of a
@@ -227,8 +227,8 @@ in
 
         ch-ai-workbench.claude-code.skills.microvm.source = plugin;
       })
-      (lib.optionalAttrs (options ? ch-ai-workbench.claude-code-sandbox) {
-        ch-ai-workbench.claude-code-sandbox.modules = sandboxModules;
+      (lib.optionalAttrs (options ? ch-ai-workbench.agent-sandbox) {
+        ch-ai-workbench.agent-sandbox.modules = sandboxModules;
       })
     ]
   );

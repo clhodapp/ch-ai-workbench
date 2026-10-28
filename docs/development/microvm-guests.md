@@ -74,7 +74,7 @@ holder is `Claude Code session <CLAUDE_CODE_SESSION_ID>`, so
 
 The server speaks MCP over stdio, one JSON-RPC message per line, with
 the protocol version `2025-06-18`, as the agent tools of
-claude-code-sandbox do. Its tools are:
+agent-sandbox do. Its tools are:
 
 - `microvm_up` with `kind` and an optional `directory`: leases an
   instance of the kind to the session, starts it and waits until it
@@ -98,11 +98,11 @@ calls to other guests. The server starts a guest only when
 Claude Code's sandbox of Bash lets a command write only the checkout
 and the temporary directory of the session. The share directories of
 an instance lie outside both. For each kind that sets `agents` and has
-shares, the module therefore declares the claude-code-sandbox module
+shares, the module therefore declares the agent-sandbox module
 `microvm-<kind>`. It lists the share directories that
 `ch-microvm.instances.<kind>` gives for every instance of the kind, in
 both `extraAllowRead` and `allowWrite`. A checkout that chooses it,
-with `claude-code-sandbox add microvm-<kind>`, can copy a target into
+with `agent-sandbox add microvm-<kind>`, can copy a target into
 the `in` share of an instance from Bash and read what the guest writes
 to its `out` share.
 
@@ -120,7 +120,7 @@ checkout. The result of `microvm_up` says which of the two applies.
 There is one sandbox module per kind, so a checkout that works with
 one kind reaches the share directories of that kind and of no other.
 The module declares the sandbox modules only when the home also
-selects the claude-code-sandbox module of this layer, since the option
+selects the agent-sandbox module of this layer, since the option
 they go in comes from that module.
 
 ### Guests that serve MCP
@@ -183,7 +183,7 @@ ch-microvm needs, as its documentation describes, and then:
   `ch-microvm.kinds.<kind>` for each guest, and sets
   `ch-ai-workbench.microvm.kinds.<kind>` with `agents = true` and `mcp`
   for a kind whose guests serve MCP;
-- selects `claude-code-sandbox` in that home as well when the Bash
+- selects `agent-sandbox` in that home as well when the Bash
   commands of agents should reach the share directories, and chooses
   `microvm-<kind>` in the checkouts that work with the kind.
 

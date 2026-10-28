@@ -70,7 +70,7 @@ let
   # mutates at runtime and a person may hand-edit, so they are
   # converged in at activation by a merge (lib/claude-hooks-register.nix)
   # rather than rendered as a store symlink.  Ownership follows the
-  # claude-code-sandbox model: the declaration is a store manifest,
+  # agent-sandbox model: the declaration is a store manifest,
   # a sidecar under the XDG state dir records what was last applied,
   # and only entries in one of those two are ever touched -- so a
   # hook deleted from Nix is pruned, and a hand-added hook survives.
@@ -274,7 +274,7 @@ let
   # A hook whose package this module installs is registered through the
   # home-manager profile's bin directory rather than by bare name. The
   # path is the same string in every generation, and it does not depend
-  # on PATH: a checkout enrolled in claude-code-sandbox sets the Claude
+  # on PATH: a checkout enrolled in agent-sandbox sets the Claude
   # Code process's PATH to its sandbox farms, which hooks inherit.
   hooksManifest = pkgs.writeText "claude-hooks-manifest.json" (
     builtins.toJSON {
@@ -536,7 +536,7 @@ in
         User-level (global) Claude Code hooks, converged into
         ~/.claude/settings.json at activation (the CLI rewrites that
         file at runtime, so it cannot be a store symlink). Ownership
-        follows the claude-code-sandbox model: the enabled entries are
+        follows the agent-sandbox model: the enabled entries are
         rendered into a store manifest, a sidecar under
         $XDG_STATE_HOME/claude-hooks-register/ records what the last
         activation applied, and the merge touches only entries found
@@ -614,6 +614,87 @@ in
         cannot be retracted by a project, so it is the one kind of rule
         that is safe to declare globally. Merged across all modules that
         set it.
+      '';
+    };
+
+    settings = lib.mkOption {
+      type = lib.types.attrsOf (pkgs.formats.json { }).type;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          model = "opus";
+          permissions.allow = [ "mcp__emacs__diagnostics" ];
+          env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE = "1";
+        }
+      '';
+      description = ''
+        User settings merged into ~/.claude/settings.json at activation
+        by `agent-config apply`. Claude Code rewrites that file at
+        runtime (permission answers, /model, /config), so it stays a
+        regular file. The merge changes only the keys declared here now
+        or at the previous activation, and keeps every other key. A list
+        keeps the entries someone added to it by hand, after the
+        declared ones. A declared scalar replaces a value changed by
+        hand, and the activation reports it. `hooks` and
+        `permissions.deny` come from the `hooks` and `permissions.deny`
+        options, which keep their own merge, so this option may not set
+        them.
+      '';
+    };
+
+    mcpServers = lib.mkOption {
+      type = lib.types.attrsOf (closure-lib.ch-ai-workbench.mcpServerType lib);
+      default = { };
+      example = lib.literalExpression ''
+        {
+          emacs.command = "''${config.home.profileDirectory}/bin/emacs-mcp-stdio";
+        }
+      '';
+      description = ''
+        Stdio MCP servers of user scope, keyed by name. Claude Code reads user-scope
+        servers from `mcpServers` in ~/.claude.json, a file it rewrites
+        constantly, so the servers are merged into that key at
+        activation by `agent-config apply`. Servers added with
+        `claude mcp add -s user` stay beside them. A server removed here
+        is removed from the file at the next activation, unless someone
+        changed it by hand. Merged across all modules that set it.
+      '';
+    };
+
+    acpPackage = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = null;
+      example = lib.literalExpression "llm-agents.packages.\${system}.claude-agent-acp";
+      description = ''
+        The claude-agent-acp adapter, which serves Claude Code over the
+        Agent Client Protocol to clients such as Emacs's agent-shell.
+        It reads the same ~/.claude settings as the claude command. With
+        ch-ai-workbench.emacs-integration enabled, agent-shell starts
+        Claude Code sessions through it. Null leaves agent-shell to find
+        `claude-agent-acp` on PATH.
+      '';
+    };
+
+    acpCommand = lib.mkOption {
+      type = lib.types.nullOr (lib.types.listOf lib.types.str);
+      readOnly = true;
+      internal = true;
+      description = ''
+        The command that starts `acpPackage`. Claude Code applies the
+        sandbox rules of a checkout itself, so it runs as it is. The
+        emacs-integration module hands it to agent-shell.
+      '';
+    };
+
+    instructions = lib.mkOption {
+      type = lib.types.nullOr lib.types.lines;
+      default = null;
+      description = ''
+        The user memory file ~/.claude/CLAUDE.md, which Claude Code
+        loads into every session. Null leaves the file alone. Set, it
+        becomes a link into the store, so Claude Code's `/memory` and
+        the `#` shortcut can no longer write to it. Merged across all
+        modules that set it, in module order.
       '';
     };
 
@@ -1211,6 +1292,15 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
+        assertion = !(cfg.settings ? hooks) && !(cfg.settings.permissions or { } ? deny);
+        message = ''
+          ch-ai-workbench.claude-code.settings may not set `hooks` or
+          `permissions.deny`: declare them through the `hooks` and
+          `permissions.deny` options, whose merge owns those keys of
+          ~/.claude/settings.json.
+        '';
+      }
+      {
         assertion = unknownServerNames == [ ];
         message = "ch-ai-workbench.lspServers names not in the language-server table: ${lib.concatStringsSep ", " unknownServerNames}";
       }
@@ -1231,6 +1321,9 @@ in
     ];
 
     ch-ai-workbench.claude-code.skills.ch-lsp.source = lspPlugin;
+
+    ch-ai-workbench.claude-code.acpCommand =
+      if cfg.acpPackage == null then null else [ (lib.getExe cfg.acpPackage) ];
 
     # Voice presets, selectable per session with /output-style. The
     # bodies are plain markdown files (no frontmatter; the module
@@ -1367,6 +1460,35 @@ in
         ${hooksManifest} ${lib.escapeShellArg hooksSidecar}
     '';
 
+    # The declared settings and user-scope MCP servers, merged into the
+    # two files Claude Code rewrites at runtime. The settings merge
+    # never touches `hooks` or `permissions.deny` (asserted above), so
+    # it and the hooks register above each keep their own keys.
+    home.activation.claudeCodeSettings = closure-lib.ch-ai-workbench.mkAgentConfigActivation {
+      inherit lib pkgs config;
+      name = "claude-code-settings";
+      format = "json";
+      target = "$HOME/.claude/settings.json";
+      inherit (cfg) settings;
+    };
+    home.activation.claudeCodeMcpServers = closure-lib.ch-ai-workbench.mkAgentConfigActivation {
+      inherit lib pkgs config;
+      name = "claude-code-mcp-servers";
+      format = "json";
+      target = "$HOME/.claude.json";
+      settings = lib.optionalAttrs (cfg.mcpServers != { }) {
+        mcpServers = lib.mapAttrs (
+          _name: server:
+          {
+            type = "stdio";
+            inherit (server) command;
+          }
+          // lib.optionalAttrs (server.args != [ ]) { inherit (server) args; }
+          // lib.optionalAttrs (server.env != { }) { inherit (server) env; }
+        ) cfg.mcpServers;
+      };
+    };
+
     # Claude Code writes per-checkout state under .claude/ inside the
     # checkout (agent worktrees, checkpoints, the per-machine settings
     # overlay, scheduler state). None of it is repo content, and it
@@ -1400,6 +1522,9 @@ in
           inherit (style) enable;
           source = renderOutputStyle name style;
         }
-      ) cfg.outputStyles;
+      ) cfg.outputStyles
+      // lib.optionalAttrs (cfg.instructions != null) {
+        ".claude/CLAUDE.md".text = cfg.instructions;
+      };
   };
 }

@@ -6,7 +6,7 @@
 //!   trusted-exec call --name NAME --socket PATH [--pass-env VAR]... -- [ARG]...
 //!   trusted-exec serve [--cwd DIR] [--pass-env VAR]... -- PROGRAM [ARG]...
 //!
-//! The home-manager module of claude-code-sandbox declares each trusted
+//! The home-manager module of agent-sandbox declares each trusted
 //! executable as a systemd user socket with `Accept=yes`, whose service
 //! runs `serve` with the connection as stdin. A sandbox module that
 //! grants the executable puts a stub on PATH that runs `call`, and adds

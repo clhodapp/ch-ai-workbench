@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "@agentSandboxTool@/bin/agent-sandbox hook-session-start"
+          }
+        ]
+      }
+    ]
+  }
+}
