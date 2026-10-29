@@ -5,18 +5,27 @@ It answers Codex's Responses API (POST .../responses) and the
 OpenAI-compatible chat completions API (POST .../chat/completions), both
 streamed as server-sent events. A request that offers a tool whose name
 contains TOOL (default `mark`) and carries no tool result yet gets a
-call to that tool; any other request gets a short text answer. Every
-request body is appended to the log file, one JSON object per line.
+call to that tool. OpenCode 2 offers the tools of MCP servers only
+inside its Code Mode tool `execute`; a request that offers `execute`
+and no TOOL gets an `execute` call whose code calls TOOL of the MCP
+server SERVER (default `emacs`). Any other request gets a short text
+answer. Every request body is appended to the log file, one JSON
+object per line.
 
-usage: mock-inference.py HOST PORT LOG [TOOL]
+usage: mock-inference.py HOST PORT LOG [TOOL [SERVER]]
 """
 
+import itertools
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST, PORT, LOG = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 TOOL = sys.argv[4] if len(sys.argv) > 4 else "mark"
+SERVER = sys.argv[5] if len(sys.argv) > 5 else "emacs"
+# Tool call IDs, unique across the run.
+CALLS = itertools.count(1)
 
 
 def tool_names(body):
@@ -33,17 +42,36 @@ def tool_names(body):
     return names
 
 
-def has_tool_result(body):
+def tool_results(body):
+    """The text of every tool result the request carries."""
+    results = []
     for item in body.get("input") or []:
         if isinstance(item, dict) and item.get("type") == "function_call_output":
-            return True
-    return any(message.get("role") == "tool" for message in body.get("messages") or [])
+            results.append(json.dumps(item.get("output")))
+    for message in body.get("messages") or []:
+        if message.get("role") == "tool":
+            results.append(json.dumps(message.get("content")))
+    return results
 
 
 def mark_tool(body):
-    if has_tool_result(body):
+    """The tool to call as (namespace, name, arguments), or None.
+
+    OpenCode 2 connects MCP servers while the session already runs, so
+    a server's tools may be missing from the first step; an `execute`
+    call is therefore repeated, up to four times, until a result shows
+    that the tool ran."""
+    results = tool_results(body)
+    if any("marked" in result for result in results):
         return None
-    return next((pair for pair in tool_names(body) if TOOL in pair[1]), None)
+    names = tool_names(body)
+    found = next((pair for pair in names if TOOL in pair[1]), None)
+    if found and not results:
+        return (*found, "{}")
+    if any(name == "execute" for _, name in names) and len(results) < 4:
+        code = os.environ.get("MOCK_CODE") or f'return await tools[{json.dumps(SERVER)}][{json.dumps(TOOL)}]({{}})'
+        return (None, "execute", json.dumps({"code": code}))
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -89,13 +117,13 @@ def sse(event, data):
 
 def responses(tool):
     if tool:
-        namespace, name = tool
+        namespace, name, arguments = tool
         item = {
             "type": "function_call",
             "id": "fc_1",
-            "call_id": "call_1",
+            "call_id": f"call_{next(CALLS)}",
             "name": name,
-            "arguments": "{}",
+            "arguments": arguments,
             "status": "completed",
         }
         if namespace:
@@ -139,7 +167,7 @@ def chunk(delta, finish=None):
 
 def chat(tool):
     if tool:
-        call = {"index": 0, "id": "call_1", "type": "function", "function": {"name": tool[1], "arguments": "{}"}}
+        call = {"index": 0, "id": f"call_{next(CALLS)}", "type": "function", "function": {"name": tool[1], "arguments": tool[2]}}
         body = [chunk({"role": "assistant", "tool_calls": [call]}), chunk({}, "tool_calls")]
     else:
         body = [chunk({"role": "assistant", "content": "done"}), chunk({}, "stop")]

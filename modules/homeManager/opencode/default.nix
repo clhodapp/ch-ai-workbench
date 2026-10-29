@@ -146,7 +146,12 @@ in
       description = ''
         Stdio MCP servers, keyed by name, rendered into `mcp` of the
         declared settings as local servers. Servers in opencode.json stay
-        beside them. Merged across all modules that set it.
+        beside them. OpenCode 1 offers their tools to the model directly
+        (`emacs_list-buffers`). OpenCode 2 offers them only inside its
+        Code Mode tool `execute` (`tools.emacs["list-buffers"]`), and
+        connects them while a session already runs, so a server's tools
+        can be missing from the first step after it starts. Merged across
+        all modules that set it.
       '';
     };
 

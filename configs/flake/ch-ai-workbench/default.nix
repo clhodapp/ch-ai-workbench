@@ -872,6 +872,8 @@
                     ];
                     codex = lib.getExe agentsHome.config.programs.codex.package;
                     opencode = lib.getExe agentsHome.config.programs.opencode.package;
+                    opencode2 = lib.getExe llmAgents.opencode2;
+                    opencodeLayer = agentsHome.config.programs.opencode.package.workbenchLayer;
                     codexSettings = agentsHome.config.home.activation.codexSettings.data;
                     agentSandboxConfig = "${agentsHome.config.home-files}/.config/agent-sandbox";
                   }
@@ -913,6 +915,14 @@
                     timeout 300 "$opencode" run 'Call the tool mark.' < /dev/null
                     test "$(cat "$FAKE_MCP_MARKS")" = "$root"
                     jq -e -s 'map(select(.path | endswith("/chat/completions"))) | length >= 2' "$TMPDIR/requests.jsonl"
+
+                    # OpenCode 2, with the same declared settings, reaches the
+                    # MCP server through its Code Mode tool `execute`, once
+                    # the server has connected (the mock retries).
+                    rm "$FAKE_MCP_MARKS"
+                    OPENCODE_CONFIG="$opencodeLayer" OPENCODE_DISABLE_CLAUDE_CODE=1 timeout 300 \
+                      agent-sandbox run opencode -- "$opencode2" run --auto 'Call the tool mark.' < /dev/null
+                    test "$(cat "$FAKE_MCP_MARKS")" = "$root"
                     touch $out
                   '';
 
