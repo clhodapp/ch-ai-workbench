@@ -916,6 +916,28 @@
                     touch $out
                   '';
 
+              # A graphical Emacs in a VM drives OpenCode, sandboxed, through
+              # agent-shell, and OpenCode calls back into that Emacs over the
+              # MCP server; a terminal resize reaches a sandboxed command.
+              agent-shell-vm = import "${self}/tests/agent-shell-vm.nix" {
+                inherit
+                  pkgs
+                  lib
+                  self
+                  llmAgents
+                  ;
+                inherit (inputs) home-manager;
+                homeModules = [
+                  inputs.ch-emacs-config.modules.homeManager.emacs
+                  self.modules.homeManager.emacs
+                  self.modules.homeManager.claude
+                  self.modules.homeManager.claude-code
+                  self.modules.homeManager.agent-sandbox
+                  self.modules.homeManager.emacs-integration
+                  self.modules.homeManager.opencode
+                ];
+              };
+
               ai-commit-ert = pkgs.runCommand "ai-commit-ert" { } ''
                 export HOME="$TMPDIR"
                 ${emacs}/bin/emacs --batch \

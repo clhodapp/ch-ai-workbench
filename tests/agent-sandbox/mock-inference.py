@@ -4,11 +4,11 @@
 It answers Codex's Responses API (POST .../responses) and the
 OpenAI-compatible chat completions API (POST .../chat/completions), both
 streamed as server-sent events. A request that offers a tool whose name
-contains `mark` and carries no tool result yet gets a call to that tool;
-any other request gets a short text answer. Every request body is
-appended to the log file, one JSON object per line.
+contains TOOL (default `mark`) and carries no tool result yet gets a
+call to that tool; any other request gets a short text answer. Every
+request body is appended to the log file, one JSON object per line.
 
-usage: mock-inference.py HOST PORT LOG
+usage: mock-inference.py HOST PORT LOG [TOOL]
 """
 
 import json
@@ -16,6 +16,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST, PORT, LOG = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+TOOL = sys.argv[4] if len(sys.argv) > 4 else "mark"
 
 
 def tool_names(body):
@@ -42,7 +43,7 @@ def has_tool_result(body):
 def mark_tool(body):
     if has_tool_result(body):
         return None
-    return next((pair for pair in tool_names(body) if "mark" in pair[1]), None)
+    return next((pair for pair in tool_names(body) if TOOL in pair[1]), None)
 
 
 class Handler(BaseHTTPRequestHandler):
