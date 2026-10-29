@@ -14,7 +14,10 @@ pair.
 ## What it adds to the editor
 
 **Agent sessions in Emacs.** `claude-queue` runs and tracks sessions,
-following a session's working directory as it moves. `agent-shell` and
+following a session's working directory as it moves. It queues tasks
+for Claude Code, Codex and OpenCode alike: a Codex or OpenCode task runs
+the agent's headless command from Emacs, with its event stream as the
+transcript and its session resumable in a terminal. `agent-shell` and
 `acp` speak to agents over their own protocols. `parenting` spawns and
 supervises child Emacs instances.
 
@@ -79,7 +82,12 @@ plain allow/deny with nobody attached falls back to the CLI's own
 prompt; mermaid blocks render in message display; and the
 `emacs-tools` skill documents the MCP tools for the agent reading them.
 Codex and OpenCode get the same MCP server and skills, and agent-shell
-starts all three agents over the Agent Client Protocol by store path.
+starts all three agents over the Agent Client Protocol by store path and
+shows the mermaid diagrams of their replies as images. A queued Codex or
+OpenCode task asks through the same spool before it writes outside its
+checkout: Codex through a `PermissionRequest` hook, OpenCode through a
+plugin. Each agent's part is switched on its own with
+`emacs-integration.agents.<agent>.enable`.
 
 ## Use it
 

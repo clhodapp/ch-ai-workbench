@@ -92,6 +92,11 @@ let
         ${lib.concatMapStringsSep " " (provider: "--run ${lib.escapeShellArg (readKey provider)}") (
           lib.attrValues keyed
         )}
+      # The OpenCode this home runs is `opencode`, whatever its package
+      # names the command (llm-agents' OpenCode 2 is `opencode2`).
+      if [ ! -e $out/bin/opencode ]; then
+        ln -s ${cfg.package.meta.mainProgram} $out/bin/opencode
+      fi
     '';
     inherit (cfg.package) meta;
     passthru = (cfg.package.passthru or { }) // {
@@ -173,6 +178,18 @@ in
         Skill directories (SKILL.md inside) installed as
         $XDG_CONFIG_HOME/opencode/skills/<name>, through
         programs.opencode.skills.
+      '';
+    };
+
+    plugins = lib.mkOption {
+      type = lib.types.attrsOf lib.types.path;
+      default = { };
+      example = lib.literalExpression "{ notify = ./plugins/notify.js; }";
+      description = ''
+        Plugin files installed as $XDG_CONFIG_HOME/opencode/plugin/<name>.js,
+        the directory both OpenCode 1 and OpenCode 2 load user plugins
+        from. A plugin is written for one major version: the two have
+        different plugin interfaces.
       '';
     };
 
@@ -335,6 +352,10 @@ in
           skills = lib.mkIf (cfg.skills != { }) cfg.skills;
           context = lib.mkIf (cfg.instructions != null) cfg.instructions;
         };
+
+        xdg.configFile = lib.mapAttrs' (
+          name: source: lib.nameValuePair "opencode/plugin/${name}.js" { inherit source; }
+        ) cfg.plugins;
       }
     ]
   );

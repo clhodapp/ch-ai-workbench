@@ -7,7 +7,8 @@
 # setup; the Emacs side needs no knowledge of any agent, which is why
 # this module lives here rather than there.
 #
-# For every enabled agent module (claude-code, codex, opencode):
+# For every enabled agent module (claude-code, codex, opencode) whose
+# switch under `agents` is on (it is by default):
 #   - the MCP server `emacs`, through the emacs-mcp-stdio bridge of the
 #     claude module, and the emacs-tools and ghostel-terminals skills;
 #   - the agent-shell command that starts the agent over the Agent
@@ -64,11 +65,17 @@ let
     '';
   };
 
+  # The prompt API every consent hook and plugin asks through: the
+  # package the claude-code module names, or the package of this layer
+  # when the home leaves that module out.
+  claudeConsent =
+    config.ch-ai-workbench.claude-code.consentPackage or pkgs.ch-ai-workbench.claude-consent;
+
   # The consent hook comes from this layer's library, so the checks
   # drive the same package this module installs.
   consentHook = closure-lib.ch-ai-workbench.mkEmacsClaudeConsentHook {
     inherit pkgs;
-    claude-consent = config.ch-ai-workbench.claude-code.consentPackage;
+    claude-consent = claudeConsent;
   };
 
   # Renders mermaid blocks as Claude displays them. merman supplies the
@@ -118,13 +125,17 @@ let
 
   agentEnabled = name: options.ch-ai-workbench ? ${name} && config.ch-ai-workbench.${name}.enable;
 
+  # Whether this module wires the agent NAME into Emacs: the agent is
+  # enabled and its integration switch is on.
+  integrated = name: agentEnabled name && cfg.agents.${name}.enable;
+
   # The ACP command agent-shell starts each enabled agent with, as the
   # agent's module builds it: by exact store path, so a session in Emacs
   # runs the build this home installs, reads the same declared
   # configuration as the agent's own command, and runs inside a
   # checkout's sandbox the same way.
   acpCommands =
-    lib.filter (entry: agentEnabled entry.agent && entry.command != null && entry.command != [ ])
+    lib.filter (entry: integrated entry.agent && entry.command != null && entry.command != [ ])
       (
         map (entry: entry // { command = config.ch-ai-workbench.${entry.agent}.acpCommand or null; }) [
           {
@@ -150,6 +161,54 @@ let
     (defvar ${entry.variable})
     (setq ${entry.variable} '(${lib.concatMapStringsSep " " builtins.toJSON entry.command}))
   '') acpCommands;
+
+  # The consent hook for queued Codex tasks, from this layer's library
+  # like the Claude one, asking through the same claude-consent.
+  codexConsentHook = closure-lib.ch-ai-workbench.mkCodexConsentHook {
+    inherit pkgs;
+    claude-consent = claudeConsent;
+  };
+  codexConsent = cfg.sessionHooks.enable && integrated "codex";
+
+  # The OpenCode counterpart, a plugin for the major version this home
+  # runs. OpenCode 2 runs a queued task as its own server
+  # (--standalone): a run on the shared background server would have
+  # its plugins run in that server's environment, which does not name
+  # the task.
+  opencodeVersion = lib.getVersion config.ch-ai-workbench.opencode.package;
+  opencodeConsent = cfg.sessionHooks.enable && integrated "opencode";
+  opencodeConsentPlugin = closure-lib.ch-ai-workbench.mkOpencodeConsentPlugin {
+    inherit pkgs lib;
+    claude-consent = claudeConsent;
+    version = opencodeVersion;
+  };
+
+  # Appended to the claude-queue bundle's init: queued Codex and
+  # OpenCode tasks run the commands this home installs, by store path,
+  # and Codex tasks may ask to leave their sandbox where the consent
+  # hook is installed to answer.
+  queueInit = lib.concatStrings (
+    lib.optional (integrated "codex") ''
+      (defvar claude-queue-codex-program)
+      (setq claude-queue-codex-program ${builtins.toJSON (lib.getExe config.programs.codex.package)})
+    ''
+    ++ lib.optional (integrated "opencode") ''
+      (defvar claude-queue-opencode-program)
+      (setq claude-queue-opencode-program ${builtins.toJSON (lib.getExe config.programs.opencode.package)})
+    ''
+    ++ lib.optional codexConsent ''
+      (defvar claude-queue-codex-consent)
+      (setq claude-queue-codex-consent t)
+    ''
+    ++ lib.optional opencodeConsent ''
+      (defvar claude-queue-opencode-consent)
+      (setq claude-queue-opencode-consent t)
+    ''
+    ++ lib.optional (integrated "opencode" && lib.versionAtLeast opencodeVersion "2") ''
+      (defvar claude-queue-opencode-standalone)
+      (setq claude-queue-opencode-standalone t)
+    ''
+  );
 in
 {
   options.ch-ai-workbench.emacs-integration = {
@@ -189,6 +248,28 @@ in
       // {
         default = true;
       };
+
+    # One switch per agent module of this layer. An agent whose module is
+    # absent or disabled is never wired, whatever its switch says.
+    agents = lib.genAttrs [ "claude-code" "codex" "opencode" ] (
+      name:
+      lib.mkOption {
+        type = lib.types.submodule {
+          options.enable = lib.mkOption {
+            type = lib.types.bool;
+            default = agentEnabled name;
+            defaultText = lib.literalExpression "config.ch-ai-workbench.${name}.enable";
+            description = ''
+              Whether to wire ${name} into Emacs: the MCP server `emacs`,
+              the skills, the agent-shell command, and the hooks and
+              consent prompts of the queued tasks.
+            '';
+          };
+        };
+        default = { };
+        description = "The Emacs integration of ${name}.";
+      }
+    );
   };
 
   config = lib.mkIf cfg.enable (
@@ -202,14 +283,33 @@ in
         ];
       })
       (lib.optionalAttrs (options.ch-ai-workbench ? emacs) {
-        ch-emacs-config.emacs.bundles = lib.mkIf (config.ch-ai-workbench.emacs.enable && acpInit != "") {
-          agent-shell.init = lib.mkAfter acpInit;
+        ch-emacs-config.emacs.bundles = lib.mkIf config.ch-ai-workbench.emacs.enable (
+          lib.optionalAttrs (acpInit != "") { agent-shell.init = lib.mkAfter acpInit; }
+          // lib.optionalAttrs (queueInit != "" && (config.ch-ai-workbench.claude.enable or false)) {
+            claude-queue.init = lib.mkAfter queueInit;
+          }
+        );
+      })
+      (lib.optionalAttrs (options.ch-ai-workbench ? codex) {
+        # Codex asks this hook when a queued task's call would leave its
+        # sandbox; the timeout stays above the longest deadline the hook
+        # waits for an answer (3500s).
+        ch-ai-workbench.codex.hooks.PermissionRequest = lib.mkIf codexConsent [
+          {
+            command = lib.getExe codexConsentHook;
+            timeout = 3600;
+          }
+        ];
+      })
+      (lib.optionalAttrs (options.ch-ai-workbench ? opencode) {
+        ch-ai-workbench.opencode.plugins = lib.mkIf opencodeConsent {
+          workbench-consent = opencodeConsentPlugin;
         };
       })
       {
         ch-ai-workbench = lib.genAttrs otherAgents (
           name:
-          lib.mkIf (cfg.skill.enable && config.ch-ai-workbench.${name}.enable) {
+          lib.mkIf (cfg.skill.enable && integrated name) {
             mcpServers = emacsServer;
             skills = emacsSkills;
           }
@@ -240,17 +340,20 @@ in
             '';
           }
         ];
-
+      }
+      (lib.optionalAttrs (options.ch-ai-workbench ? claude-code) {
         # The MCP server the skills document, through the stdio bridge the
         # claude module installs in the profile. It is a user-scope server,
         # merged into ~/.claude.json at activation.
-        ch-ai-workbench.claude-code.mcpServers = lib.mkIf cfg.skill.enable emacsServer;
+        ch-ai-workbench.claude-code.mcpServers = lib.mkIf (
+          cfg.skill.enable && integrated "claude-code"
+        ) emacsServer;
 
-        ch-ai-workbench.claude-code.skills = lib.mkIf cfg.skill.enable (
+        ch-ai-workbench.claude-code.skills = lib.mkIf (cfg.skill.enable && integrated "claude-code") (
           lib.mapAttrs (_name: source: { inherit source; }) emacsSkills
         );
 
-        ch-ai-workbench.claude-code.hooks =
+        ch-ai-workbench.claude-code.hooks = lib.mkIf (integrated "claude-code") (
           # The consent hook's timeout is a liveness backstop only, kept
           # above the longest deadline the hook manages internally (it
           # self-denies before 3500s); a framework-cancelled hook yields no
@@ -282,7 +385,8 @@ in
               command = "claude-mermaid-display-hook";
               package = mermaidDisplayHook;
             };
-          };
+          }
+        );
 
         # One Edit rule only: the CLI's file permission checks match
         # Edit(path) rules against every file-editing tool (Write included)
@@ -290,10 +394,12 @@ in
         # (2.1.241). The spool path is rendered concretely from the
         # activation environment's runtime dir by the register, not left as
         # a wildcard pattern.
-        ch-ai-workbench.claude-code.permissions.deny = lib.mkIf cfg.sessionHooks.enable [
-          "Edit(/\${XDG_RUNTIME_DIR}/claude-consent/**)"
-        ];
-      }
+        ch-ai-workbench.claude-code.permissions.deny =
+          lib.mkIf (cfg.sessionHooks.enable && integrated "claude-code")
+            [
+              "Edit(/\${XDG_RUNTIME_DIR}/claude-consent/**)"
+            ];
+      })
     ]
   );
 }

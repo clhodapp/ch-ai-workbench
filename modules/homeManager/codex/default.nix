@@ -84,7 +84,70 @@ let
     // lib.optionalAttrs (server.envVars != [ ]) { env_vars = server.envVars; }
   ) cfg.mcpServers;
 
-  settings = cfg.settings // lib.optionalAttrs (mcpServers != { }) { mcp_servers = mcpServers; };
+  # Hooks go into config.toml, one matcher group per hook, each with the
+  # trust entry Codex requires before it runs a user hook. The entry is
+  # keyed by the file, the event (snake_case), the group and the hook
+  # index, and holds a SHA-256 of the hook's identity as sorted, compact
+  # JSON with Codex's defaults filled in (timeout 600, async false);
+  # builtins.toJSON writes that form.
+  snakeEvent =
+    event:
+    lib.toLower (
+      lib.concatImapStrings (
+        position: c: if position > 1 && builtins.match "[A-Z]" c != null then "_" + c else c
+      ) (lib.stringToCharacters event)
+    );
+  hookGroup =
+    hook:
+    lib.optionalAttrs (hook.matcher != null) { inherit (hook) matcher; }
+    // {
+      hooks = [
+        (
+          {
+            type = "command";
+            inherit (hook) command;
+          }
+          // lib.optionalAttrs (hook.timeout != null) { inherit (hook) timeout; }
+        )
+      ];
+    };
+  hookTrust =
+    event: hook:
+    "sha256:"
+    + builtins.hashString "sha256" (
+      builtins.toJSON (
+        {
+          event_name = snakeEvent event;
+          hooks = [
+            {
+              type = "command";
+              inherit (hook) command;
+              timeout = if hook.timeout == null then 600 else hook.timeout;
+              async = false;
+            }
+          ];
+        }
+        // lib.optionalAttrs (hook.matcher != null) { inherit (hook) matcher; }
+      )
+    );
+  hookSettings = lib.optionalAttrs (cfg.hooks != { }) {
+    hooks = lib.mapAttrs (_event: map hookGroup) cfg.hooks // {
+      state = lib.listToAttrs (
+        lib.concatLists (
+          lib.mapAttrsToList (
+            event: hooks:
+            lib.imap0 (index: hook: {
+              name = "${codexHome}/config.toml:${snakeEvent event}:${toString index}:0";
+              value.trusted_hash = hookTrust event hook;
+            }) hooks
+          ) cfg.hooks
+        )
+      );
+    };
+  };
+
+  settings =
+    cfg.settings // lib.optionalAttrs (mcpServers != { }) { mcp_servers = mcpServers; } // hookSettings;
 in
 {
   options.ch-ai-workbench.codex = {
@@ -163,6 +226,43 @@ in
       '';
     };
 
+    hooks = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.listOf (
+          lib.types.submodule {
+            options = {
+              command = lib.mkOption {
+                type = lib.types.str;
+                description = "The command Codex runs, with the event's JSON payload on stdin.";
+              };
+              matcher = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Tool-name pattern the hook applies to; null for every call.";
+              };
+              timeout = lib.mkOption {
+                type = lib.types.nullOr lib.types.ints.positive;
+                default = null;
+                description = "Seconds before Codex cancels the hook; null for Codex's default (600).";
+              };
+            };
+          }
+        )
+      );
+      default = { };
+      example = lib.literalExpression ''
+        { PermissionRequest = [ { command = "''${pkgs.my-hook}/bin/my-hook"; } ]; }
+      '';
+      description = ''
+        Codex hooks by event name (`PreToolUse`, `PermissionRequest`, ...),
+        merged into `hooks` of CODEX_HOME/config.toml with the settings.
+        Codex runs a user hook only when config.toml marks it trusted,
+        so each declared hook also gets its trust entry under
+        `hooks.state`. Hooks added by hand to config.toml come after the
+        declared ones and need their own trust.
+      '';
+    };
+
     instructions = lib.mkOption {
       type = lib.types.nullOr lib.types.lines;
       default = null;
@@ -221,6 +321,14 @@ in
             message = ''
               ch-ai-workbench.codex.settings may not set `mcp_servers`:
               declare servers through ch-ai-workbench.codex.mcpServers.
+            '';
+          }
+          {
+            assertion = cfg.hooks == { } || !(cfg.settings ? hooks);
+            message = ''
+              ch-ai-workbench.codex.settings may not set `hooks` while
+              ch-ai-workbench.codex.hooks declares hooks: declare them
+              all through ch-ai-workbench.codex.hooks.
             '';
           }
         ];

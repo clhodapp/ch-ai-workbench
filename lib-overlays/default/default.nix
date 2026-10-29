@@ -58,6 +58,12 @@
       mkClaudeRedactHook = import ./hooks/claude-redact-hook.nix;
       mkClaudeRevealHook = import ./hooks/claude-reveal-hook.nix;
       mkEmacsClaudeConsentHook = import ./hooks/emacs-claude-consent-hook.nix;
+      # The Codex hook that asks consent for a queued Codex task's call
+      # that would leave its sandbox.
+      mkCodexConsentHook = import ./hooks/codex-consent-hook.nix;
+      # The OpenCode plugin doing the same for a queued OpenCode task's
+      # file writes, for the OpenCode `version` it is given.
+      mkOpencodeConsentPlugin = import ./opencode-plugins/consent.nix;
 
       # The home-manager activation entry that merges declared settings
       # into a config file an agent also writes, through

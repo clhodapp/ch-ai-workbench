@@ -1111,5 +1111,318 @@ a session id cannot be keyed and drop out."
                                  (claude-queue--registry)))))
       (delete-file file))))
 
+;;; Codex and OpenCode tasks
+
+(ert-deftest claude-queue-compose-managed-conduct ()
+  "A Codex or OpenCode task ends when its process exits, so its prompt
+carries the conduct without the result: line."
+  (let ((prompt (claude-queue--compose-prompt
+                 "Rename this function" claude-queue-ert--capture 'codex)))
+    (should (string-suffix-p (concat "\n" claude-queue--managed-conduct "\n")
+                             prompt))
+    (should-not (string-match-p "\"result:\"" prompt))))
+
+(defun claude-queue-ert--managed-argv (agent root &optional model)
+  "Command line and added environment for an AGENT task rooted at ROOT."
+  (let* ((claude-queue-codex-program "codex")
+         (claude-queue-opencode-program "opencode")
+         (item (list :id "t-1" :agent agent :model model :name "N" :prompt "-P"
+                     :root root)))
+    (cons (claude-queue--managed-command item)
+          (claude-queue--managed-environment item))))
+
+(defun claude-queue-ert--env (run name)
+  "Value of environment variable NAME that RUN adds, or nil."
+  (when-let* ((entry (seq-find (lambda (entry)
+                                 (string-prefix-p (concat name "=") entry))
+                               (cdr run))))
+    (string-remove-prefix (concat name "=") entry)))
+
+(ert-deftest claude-queue-codex-command-confinement ()
+  "Codex runs under its own workspace-write sandbox in a project, under
+read-only without the Emacs disk writers on a bare root, and with
+neither inside agent-sandbox; the prompt follows `--'."
+  (claude-queue-ert--with-checkout
+   nil
+   (lambda (root)
+     (should (equal '("codex" "exec" "--json" "--skip-git-repo-check"
+                      "--sandbox" "workspace-write" "--model" "o3" "--" "-P")
+                    (car (claude-queue-ert--managed-argv 'codex root "o3"))))))
+  (claude-queue-ert--with-checkout
+   "{\"modules\": [], \"applied\": {}}"
+   (lambda (root)
+     (should (equal '("codex" "exec" "--json" "--skip-git-repo-check" "--" "-P")
+                    (car (claude-queue-ert--managed-argv 'codex root))))))
+  (claude-queue-ert--with-checkout
+   nil
+   (lambda (root)
+     (let ((argv (car (claude-queue-ert--managed-argv 'codex root))))
+       (should (equal "read-only" (cadr (member "--sandbox" argv))))
+       (should (string-match-p "disabled_tools=\\[\"edit-file\",\"transform\"\\]"
+                               (cadr (member "-c" argv))))))
+   t))
+
+(ert-deftest claude-queue-opencode-command-confinement ()
+  "Inside agent-sandbox OpenCode approves its own questions; elsewhere
+inline configuration denies the shell and web tools, and on a bare
+root the edit tools too."
+  (claude-queue-ert--with-checkout
+   "{\"modules\": [\"git\"], \"applied\": {}}"
+   (lambda (root)
+     (let ((run (claude-queue-ert--managed-argv 'opencode root)))
+       (should (equal '("opencode" "run" "--format" "json" "--title" "N"
+                        "--auto" "--" "-P")
+                      (car run)))
+       (should (equal "t-1" (claude-queue-ert--env run "CLAUDE_QUEUE_TASK")))
+       (should-not (claude-queue-ert--env run "OPENCODE_CONFIG_CONTENT")))))
+  (claude-queue-ert--with-checkout
+   nil
+   (lambda (root)
+     (let* ((run (claude-queue-ert--managed-argv 'opencode root "mock/m"))
+            (config (json-parse-string
+                     (claude-queue-ert--env run "OPENCODE_CONFIG_CONTENT")
+                     :object-type 'alist)))
+       (should-not (member "--auto" (car run)))
+       (should (equal "mock/m" (cadr (member "--model" (car run)))))
+       (should (equal '((bash . "deny") (webfetch . "deny") (websearch . "deny")
+                        (external_directory . "deny"))
+                      (alist-get 'permission config))))
+     ;; With the consent plugin, writes outside the root reach it, and
+     ;; OpenCode 2 runs the task as its own server.
+     (let* ((claude-queue-opencode-consent t)
+          (claude-queue-opencode-standalone t)
+          (run (claude-queue-ert--managed-argv 'opencode root)))
+     (should (member "--standalone" (car run)))
+     (should (equal "allow"
+                    (alist-get 'external_directory
+                               (alist-get 'permission
+                                          (json-parse-string
+                                           (claude-queue-ert--env run "OPENCODE_CONFIG_CONTENT")
+                                           :object-type 'alist))))))))
+  (claude-queue-ert--with-checkout
+   nil
+   (lambda (root)
+     (let ((permission (alist-get 'permission
+                                  (json-parse-string
+                                   (claude-queue-ert--env
+                                    (claude-queue-ert--managed-argv 'opencode root)
+                                    "OPENCODE_CONFIG_CONTENT")
+                                   :object-type 'alist))))
+       (should (equal "deny" (alist-get 'edit permission)))
+       (should (equal "deny" (alist-get 'emacs_edit-file permission)))))
+   t))
+
+(defconst claude-queue-ert--codex-events
+  (concat
+   "{\"type\":\"thread.started\",\"thread_id\":\"01a18656-6173-7bc1-ab92-87b819eeae43\"}\n"
+   "{\"type\":\"turn.started\"}\n"
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"mcp_tool_call\",\"server\":\"emacs\",\"tool\":\"mark\",\"arguments\":{},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"marked\"}],\"structured_content\":null},\"error\":null,\"status\":\"completed\"}}\n"
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"command_execution\",\"command\":\"make test\",\"aggregated_output\":\"ok\\n\",\"exit_code\":0,\"status\":\"completed\"}}\n"
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_3\",\"type\":\"file_change\",\"changes\":[{\"path\":\"/w/a.el\",\"kind\":\"update\"}],\"status\":\"completed\"}}\n"
+   "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_4\",\"type\":\"agent_message\",\"text\":\"done\"}}\n"
+   "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":2}}\n")
+  "Event stream of `codex exec --json', as Codex 0.163 writes it.")
+
+(defconst claude-queue-ert--opencode-events
+  (concat
+   "{\"type\":\"step_start\",\"sessionID\":\"ses_e79a97f25ffeCnzrBgRHZBbpIB\",\"part\":{\"type\":\"step-start\"}}\n"
+   "{\"type\":\"tool_use\",\"sessionID\":\"ses_e79a97f25ffeCnzrBgRHZBbpIB\",\"part\":{\"type\":\"tool\",\"tool\":\"execute\",\"state\":{\"status\":\"completed\",\"input\":{\"code\":\"return await tools.emacs.mark({})\"},\"output\":\"marked\"}}}\n"
+   "{\"type\":\"text\",\"sessionID\":\"ses_e79a97f25ffeCnzrBgRHZBbpIB\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}\n"
+   "{\"type\":\"error\",\"sessionID\":\"ses_e79a97f25ffeCnzrBgRHZBbpIB\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"rate limited\"}}}\n")
+  "Event stream of `opencode run --format json', as OpenCode 1 and 2 write it.")
+
+(defun claude-queue-ert--with-registry (fn)
+  "Call FN with an empty registry, log directory and process table."
+  (let* ((dir (make-temp-file "claude-queue-ert-state-" t))
+         (claude-queue-registry-file (expand-file-name "registry.eld" dir))
+         (claude-queue-log-directory (expand-file-name "logs/" dir))
+         (claude-consent-directory (expand-file-name "consent/" dir))
+         (claude-queue--registry nil)
+         (claude-queue--pending nil)
+         (claude-queue--session-ids nil)
+         (claude-queue--managed-processes (make-hash-table :test #'equal))
+         (claude-queue-max-concurrent nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'claude-queue--redraw) #'ignore)
+                  ((symbol-function 'claude-queue--pump) #'ignore))
+          (funcall fn dir))
+      (maphash (lambda (_id process) (ignore-errors (delete-process process)))
+               claude-queue--managed-processes)
+      (delete-directory dir t))))
+
+(defun claude-queue-ert--fake-agent (dir events &optional exit-code sleep)
+  "Write a stand-in agent program into DIR and return its file name.
+It records its arguments, working directory and inline OpenCode
+configuration in DIR/argv, prints EVENTS on stdout and a line on
+stderr, sleeps SLEEP seconds when given, and exits with EXIT-CODE."
+  (let ((events-file (expand-file-name "events" dir))
+        (program (expand-file-name "agent" dir)))
+    (with-temp-file events-file (insert events))
+    (with-temp-file program
+      (insert "#!/bin/sh\n"
+              (format "printf '%%s\\n' \"$PWD\" \"$OPENCODE_CONFIG_CONTENT\" \"$@\" > %s\n"
+                      (shell-quote-argument (expand-file-name "argv" dir)))
+              (format "cat %s\n" (shell-quote-argument events-file))
+              "echo 'agent stderr' >&2\n"
+              (if sleep (format "sleep %d\n" sleep) "")
+              (format "exit %d\n" (or exit-code 0))))
+    (set-file-modes program #o755)
+    program))
+
+(defun claude-queue-ert--start (agent root)
+  "Start an AGENT task rooted at ROOT; return its registry entry."
+  (claude-queue--managed-start
+   (list :status 'queued :agent agent :instruction "Mark it" :prompt "Mark it"
+         :name "thing.el: Mark it" :model nil :root root :time 1000.0))
+  (car (claude-queue--registry)))
+
+(defun claude-queue-ert--wait (entry)
+  "Wait until the process of task ENTRY has exited and been recorded."
+  (with-timeout (20 (error "Task %s did not finish" (plist-get entry :id)))
+    (while (gethash (plist-get entry :id) claude-queue--managed-processes)
+      (accept-process-output nil 0.05))))
+
+(ert-deftest claude-queue-managed-lifecycle-codex ()
+  "A Codex task runs from its root, logs its events, learns its
+session, ends done, and reads back as a row, a transcript, and a
+resume command."
+  (claude-queue-ert--with-registry
+   (lambda (dir)
+     (claude-queue-ert--with-checkout
+      nil
+      (lambda (root)
+        (let* ((claude-queue-codex-program
+                (claude-queue-ert--fake-agent dir claude-queue-ert--codex-events))
+               (entry (claude-queue-ert--start 'codex root)))
+          (should (string-match-p "\\`cx-[0-9a-f]\\{8\\}\\'" (plist-get entry :id)))
+          ;; The territory record names the task root before the agent runs.
+          (should (equal (vector (directory-file-name root))
+                         (alist-get 'roots
+                                    (json-read-file
+                                     (expand-file-name
+                                      (concat "territory/" (plist-get entry :id) ".json")
+                                      claude-consent-directory)))))
+          (should (equal "working" (claude-queue--managed-state entry)))
+          (should (= 1 (claude-queue--session-working-count nil)))
+          (claude-queue-ert--wait entry)
+          (should (equal "done" (claude-queue--managed-state entry)))
+          (should (equal "01a18656-6173-7bc1-ab92-87b819eeae43"
+                         (plist-get entry :session)))
+          (should-not (plist-get entry :error))
+          (let ((argv (split-string (with-temp-buffer
+                                      (insert-file-contents
+                                       (expand-file-name "argv" dir))
+                                      (buffer-string))
+                                    "\n")))
+            (should (equal (directory-file-name root)
+                           (directory-file-name (car argv))))
+            (should (member "workspace-write" argv)))
+          (should (equal claude-queue-ert--codex-events
+                         (with-temp-buffer
+                           (insert-file-contents (plist-get entry :log))
+                           (buffer-string))))
+          ;; The registry on disk holds the session for a later Emacs.
+          (should (equal "01a18656-6173-7bc1-ab92-87b819eeae43"
+                         (plist-get (car (claude-queue--registry-read
+                                          claude-queue-registry-file))
+                                    :session)))
+          (let ((row (cadr (car (claude-queue--list-entries
+                                 nil (claude-queue--registry) nil)))))
+            (should (equal "done" (aref row 1)))
+            (should (equal "codex" (aref row 2)))
+            (should (equal "thing.el: Mark it" (aref row 3))))
+          (should (equal '(("User" . "Mark it")
+                           ("Tool" . "emacs.mark {}\nmarked")
+                           ("Command" . "make test (exit 0)\nok\n")
+                           ("Changed" . "update /w/a.el")
+                           ("Assistant" . "done"))
+                         (claude-queue--managed-turns entry)))
+          (should (equal (list claude-queue-codex-program "resume"
+                               "01a18656-6173-7bc1-ab92-87b819eeae43")
+                         (claude-queue--managed-resume-command entry)))
+          (should (equal (file-name-as-directory root)
+                         (claude-queue--agent-cwd (plist-get entry :id))))))))))
+
+(ert-deftest claude-queue-managed-lifecycle-opencode-failure ()
+  "An OpenCode task that exits non-zero ends failed, with its error
+output and the stream's error event in the transcript."
+  (claude-queue-ert--with-registry
+   (lambda (dir)
+     (claude-queue-ert--with-checkout
+      nil
+      (lambda (root)
+        (let* ((claude-queue-opencode-program
+                (claude-queue-ert--fake-agent dir claude-queue-ert--opencode-events 3))
+               (entry (claude-queue-ert--start 'opencode root)))
+          (claude-queue-ert--wait entry)
+          (should (equal "failed" (claude-queue--managed-state entry)))
+          (should (= 3 (plist-get entry :exit)))
+          (should (equal "agent stderr" (plist-get entry :error)))
+          (should (equal "ses_e79a97f25ffeCnzrBgRHZBbpIB" (plist-get entry :session)))
+          (should (string-match-p
+                   "\"bash\":\"deny\""
+                   (nth 1 (split-string (with-temp-buffer
+                                          (insert-file-contents
+                                           (expand-file-name "argv" dir))
+                                          (buffer-string))
+                                        "\n"))))
+          (should (equal '(("User" . "Mark it")
+                           ("Tool" . "execute {\"code\":\"return await tools.emacs.mark({})\"}\nmarked")
+                           ("Assistant" . "done")
+                           ("Error" . "rate limited")
+                           ("Error" . "agent stderr"))
+                         (claude-queue--managed-turns entry)))
+          (should (equal (list claude-queue-opencode-program "--session"
+                               "ses_e79a97f25ffeCnzrBgRHZBbpIB")
+                         (claude-queue--managed-resume-command entry)))))))))
+
+(ert-deftest claude-queue-managed-stop-and-gone ()
+  "Stopping a running task ends it stopped; a task whose process died
+with an earlier Emacs reads as gone; forgetting a task deletes its
+log."
+  (claude-queue-ert--with-registry
+   (lambda (dir)
+     (claude-queue-ert--with-checkout
+      nil
+      (lambda (root)
+        (let* ((claude-queue-codex-program
+                (claude-queue-ert--fake-agent dir claude-queue-ert--codex-events 0 30))
+               (entry (claude-queue-ert--start 'codex root)))
+          (with-timeout (10 (error "No session seen"))
+            (while (not (plist-get entry :session))
+              (accept-process-output nil 0.05)))
+          (should (claude-queue--managed-stop entry))
+          (claude-queue-ert--wait entry)
+          (should (equal "stopped" (claude-queue--managed-state entry)))
+          (let ((earlier (list :id "cx-00000000" :agent 'codex :state "working"
+                               :name "old" :root root)))
+            (should (equal "gone" (claude-queue--managed-state earlier)))
+            (should-not (claude-queue--agent-active-p
+                         (claude-queue--managed-row earlier))))
+          (should (claude-queue--agent-active-p (claude-queue--managed-row entry)))
+          (let ((log (plist-get entry :log)))
+            (should (file-exists-p log))
+            (claude-queue--forget entry)
+            (should-not (file-exists-p log))
+            (should-not (claude-queue--registry)))))))))
+
+(ert-deftest claude-queue-managed-rows-in-pickers ()
+  "Codex and OpenCode tasks join the pickers' agent rows and are found
+by their bracketed id."
+  (claude-queue-ert--with-registry
+   (lambda (_dir)
+     (claude-queue--registry-add
+      (list :id "oc-12ab34cd" :agent 'opencode :name "task" :root "/w/"
+            :time 1.0 :state "done"))
+     (push "oc-12ab34cd" claude-queue--session-ids)
+     (cl-letf (((symbol-function 'claude-queue--fetch-agents-sync)
+                (lambda (&optional _all) (user-error "No claude here"))))
+       (let* ((candidates (claude-queue--agent-candidates
+                           (claude-queue--all-agents)))
+              (choice (substring-no-properties (car candidates))))
+         (should (equal "task [oc-12ab34cd]" choice))
+         (should (equal "oc-12ab34cd" (claude-queue--choice-id choice nil)))
+         (should (equal "done" (claude-queue--candidate-group (car candidates) nil))))))))
+
 (provide 'claude-queue-ert)
 ;;; claude-queue-ert.el ends here
