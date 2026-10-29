@@ -4,6 +4,8 @@ runs under, composed from the checkout's modules and the agent's own."""
 
 import json
 import os
+import socket
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,7 +13,7 @@ from unittest import mock
 
 from agent_sandbox.cli import main
 from agent_sandbox.files import ToolError
-from agent_sandbox.run import prepare, sandboxed_command, srt_settings
+from agent_sandbox.run import grant_socket, prepare, sandboxed_command, srt_settings
 from fixtures import BASE, WORK, write_registry
 
 AGENT_PART = {
@@ -83,7 +85,9 @@ class RunTest(unittest.TestCase):
 
     def test_enrolled_checkout_runs_under_srt(self):
         self.enroll("work")
-        argv, env = prepare("coder", ["/bin/coder", "exec", "hi"], self.root, False)
+        argv, env, server = prepare("coder", ["/bin/coder", "exec", "hi"], self.root, False)
+        self.assertIsNone(server)
+        self.assertNotIn("AGENT_SANDBOX_EMACS_MCP", env)
         self.assertEqual(argv[:2], ["/nix/store/srt/bin/srt", "--settings"])
         self.assertEqual(
             argv[3:],
@@ -128,7 +132,7 @@ class RunTest(unittest.TestCase):
 
     def test_socket_allowlist_narrows_the_agent_itself(self):
         self.enroll("work", "sockets")
-        argv, _ = prepare("coder", ["/bin/coder"], self.root, True)
+        argv, _, _ = prepare("coder", ["/bin/coder"], self.root, True)
         cmd = argv[4:]
         self.assertEqual(cmd[:3], ["/nix/store/util-linux/bin/setsid", "-w", "-c"])
         self.assertEqual(cmd[3:6], [BASE["socketShell"], "-c", 'exec "$0" "$@"'])
@@ -136,6 +140,51 @@ class RunTest(unittest.TestCase):
         settings = json.loads(Path(argv[2]).read_text())
         self.assertEqual(settings["network"]["allowUnixSockets"], ["/run/thing.sock"])
         self.assertTrue(settings["network"]["allowAllUnixSockets"])
+
+    def test_emacs_mcp_is_served_on_a_socket_of_the_run(self):
+        # A bridge that reports where it runs and echoes one line.
+        bridge = [sys.executable, "-c", "import os, sys; print(os.getcwd()); print(sys.stdin.readline().strip())"]
+        write_registry(
+            self.config,
+            {"work": WORK, "agent": AGENT_PART},
+            base=RUN_BASE,
+            extra={**EXTRA, "emacsMcp": bridge},
+        )
+        self.enroll("work")
+        argv, env, server = prepare("coder", ["/bin/coder"], self.root, False)
+        self.addCleanup(server.close)
+        sock_path = env["AGENT_SANDBOX_EMACS_MCP"]
+        self.assertEqual(Path(sock_path).parent, Path(argv[2]).parent)
+        settings = json.loads(Path(argv[2]).read_text())
+        self.assertEqual(settings["network"]["allowUnixSockets"], [sock_path])
+        self.assertTrue(settings["network"]["allowAllUnixSockets"])
+        self.assertEqual(env["AGENT_SANDBOX_UNIX_SOCKETS"], sock_path)
+        self.assertIn(BASE["socketShell"], argv)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.connect(sock_path)
+            conn.sendall(b"hello\n")
+            reply = b""
+            while reply.count(b"\n") < 2:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                reply += chunk
+        self.assertEqual(reply.decode().splitlines(), [str(self.root), "hello"])
+
+    def test_granting_a_socket_keeps_an_open_allowance_open(self):
+        fragment = {"sandbox": {"network": {"allowAllUnixSockets": True}}, "env": {}}
+        grant_socket(fragment, "/run/x.sock")
+        self.assertEqual(fragment["sandbox"]["network"]["allowUnixSockets"], ["/run/x.sock"])
+        self.assertNotIn("AGENT_SANDBOX_UNIX_SOCKETS", fragment["env"])
+
+    def test_granting_a_socket_joins_the_allowlist(self):
+        fragment = {
+            "sandbox": {"network": {"allowUnixSockets": ["/run/a.sock"], "allowAllUnixSockets": True}},
+            "env": {"AGENT_SANDBOX_UNIX_SOCKETS": "/run/a.sock"},
+        }
+        grant_socket(fragment, "/run/x.sock")
+        self.assertEqual(fragment["env"]["AGENT_SANDBOX_UNIX_SOCKETS"], "/run/a.sock\n/run/x.sock")
 
     def test_dead_runs_are_pruned(self):
         self.enroll("work")

@@ -185,6 +185,14 @@ in
 
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
+      # Codex and OpenCode run whole inside a checkout's sandbox, and the
+      # MCP servers they start run there too; agent-sandbox serves them
+      # this bridge from outside.
+      (lib.optionalAttrs (options.ch-ai-workbench ? agent-sandbox) {
+        ch-ai-workbench.agent-sandbox.emacsMcpCommand = lib.mkIf cfg.skill.enable [
+          emacsServer.emacs.command
+        ];
+      })
       (lib.optionalAttrs (options.ch-ai-workbench ? emacs) {
         ch-emacs-config.emacs.bundles = lib.mkIf (config.ch-ai-workbench.emacs.enable && acpInit != "") {
           agent-shell.init = lib.mkAfter acpInit;

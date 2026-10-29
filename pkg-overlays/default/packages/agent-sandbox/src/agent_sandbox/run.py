@@ -29,6 +29,11 @@ API hosts). What differs from the Claude Code fragment:
   process relays bytes and copies each resize of the real terminal onto
   it. Text the agent pushes into its terminal's input reaches only that
   pseudo-terminal.
+- An MCP server the agent starts runs inside the sandbox with it, unlike
+  the MCP servers of Claude Code. When the registry names the Emacs MCP
+  bridge (``emacsMcp``), this process serves it from outside on a socket
+  of the run, which the sandbox may reach (``EmacsMcpServer``). This
+  process therefore stays the parent of the sandbox for the whole run.
 
 A checkout that is not enrolled with modules runs the command unchanged:
 enrolling is the user's act, and an agent outside every checkout keeps its
@@ -42,8 +47,11 @@ import json
 import os
 import select
 import signal
+import socket
+import subprocess
 import sys
 import termios
+import threading
 import tty
 from pathlib import Path
 from typing import Any
@@ -53,6 +61,7 @@ from .files import ToolError, find_repo_root, migrate_checkout, migrate_state, r
 from .registry import load_part, load_registry
 
 ROOT_ENV_VAR = "AGENT_SANDBOX_ROOT"
+EMACS_MCP_ENV_VAR = "AGENT_SANDBOX_EMACS_MCP"
 
 
 def runtime_dir() -> Path:
@@ -185,10 +194,11 @@ def _prune_scratch(directory: Path) -> None:
 
 def prepare(
     agent_name: str, command: list[str], directory: Path, terminal: bool
-) -> tuple[list[str], dict[str, str]] | None:
+) -> tuple[list[str], dict[str, str], "EmacsMcpServer | None"] | None:
     """The argv and environment that run ``command`` for ``agent_name`` in
-    the checkout containing ``directory``, or None when that checkout is not
-    enrolled with modules."""
+    the checkout containing ``directory``, with the Emacs MCP server this
+    run serves when the registry names one, or None when that checkout is
+    not enrolled with modules."""
     root = find_repo_root(directory)
     if root is None:
         return None
@@ -235,6 +245,17 @@ def prepare(
     os.chmod(run_dir, 0o700)
     env["TMPDIR"] = str(scratch)
 
+    # The Emacs MCP server, served from outside the sandbox on a socket of
+    # this run (see EmacsMcpServer).
+    server = None
+    emacs_mcp = registry.get("emacsMcp")
+    if emacs_mcp:
+        socket_path = run_dir / "emacs-mcp.sock"
+        grant_socket(fragment, str(socket_path))
+        env.update(fragment["env"])
+        env[EMACS_MCP_ENV_VAR] = str(socket_path)
+        server = EmacsMcpServer(socket_path, emacs_mcp, root, dict(os.environ))
+
     settings = srt_settings(fragment, root, registry.get("guards") or [], scratch, base.get("bwrap"))
     settings_file = run_dir / "srt.json"
     write_text_atomic(settings_file, json.dumps(settings, indent=2) + "\n")
@@ -243,7 +264,94 @@ def prepare(
 
     provision_creds(root)
     argv = [srt, "--settings", str(settings_file), "--", *sandboxed_command(command, agent, env, base, terminal)]
-    return argv, env
+    return argv, env, server
+
+
+def grant_socket(fragment: dict[str, Any], path: str) -> None:
+    """Let the sandbox reach the unix socket ``path`` and nothing more:
+    the socket joins the composed allowlist, which the socket shell
+    enforces, unless a chosen module already allows every socket."""
+    net = fragment.setdefault("sandbox", {}).setdefault("network", {})
+    env = fragment.setdefault("env", {})
+    open_already = net.get("allowAllUnixSockets") and not env.get(SOCKETS_ENV_VAR)
+    net["allowUnixSockets"] = [*(net.get("allowUnixSockets") or []), path]
+    if open_already:
+        return
+    net["allowAllUnixSockets"] = True
+    listed = [entry for entry in env.get(SOCKETS_ENV_VAR, "").split("\n") if entry]
+    env[SOCKETS_ENV_VAR] = "\n".join([*listed, path])
+
+
+class EmacsMcpServer:
+    """The Emacs MCP server for an agent inside the sandbox.
+
+    The bridge `emacs-mcp-stdio` reaches Emacs through the daemon's
+    socket, and a process holding that socket can evaluate any Lisp, so
+    the sandbox never gets it. Instead this process, outside the sandbox,
+    listens on a socket of the run and starts the bridge for each
+    connection, with the checkout root as its working directory: the
+    MCP server confines writes to the project of that directory, so the
+    agent cannot choose a wider one. Inside the sandbox the bridge
+    command only relays its stdio to this socket (it finds the socket in
+    ``AGENT_SANDBOX_EMACS_MCP``), so the agent can speak MCP and nothing
+    else."""
+
+    def __init__(self, path: Path, command: list[str], cwd: Path, env: dict[str, str]) -> None:
+        self.path = path
+        self.command = command
+        self.cwd = cwd
+        self.env = env
+        self.children: list[subprocess.Popen[bytes]] = []
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if path.exists():
+            path.unlink()
+        self.sock.bind(str(path))
+        os.chmod(path, 0o600)
+        self.sock.listen(8)
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                self.children.append(
+                    subprocess.Popen(
+                        self.command,
+                        cwd=self.cwd,
+                        env=self.env,
+                        stdin=conn.fileno(),
+                        stdout=conn.fileno(),
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                )
+
+    def close(self) -> None:
+        self.sock.close()
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+        for child in self.children:
+            if child.poll() is None:
+                child.terminate()
+
+
+def supervise(argv: list[str], env: dict[str, str]) -> int:
+    """Run ``argv`` as a child, forwarding the signals that end a session,
+    and return its exit status the way a shell reports it."""
+    child = subprocess.Popen(argv, env=env)
+    forward = (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM)
+    previous = {sig: signal.signal(sig, lambda sig, _frame: child.send_signal(sig)) for sig in forward}
+    try:
+        status = child.wait()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    return 128 - status if status < 0 else status
 
 
 def run(agent_name: str, command: list[str], directory: Path) -> int:
@@ -253,8 +361,13 @@ def run(agent_name: str, command: list[str], directory: Path) -> int:
     prepared = prepare(agent_name, command, directory, terminal)
     if prepared is None:
         os.execvp(command[0], command)
-    argv, env = prepared
-    if terminal:
-        return relay(argv, env)
-    os.execve(argv[0], argv, env)
-    return 127
+    argv, env, server = prepared
+    # This process stays the parent of the sandbox, because it serves the
+    # Emacs MCP server for the agent inside.
+    try:
+        if terminal:
+            return relay(argv, env)
+        return supervise(argv, env)
+    finally:
+        if server is not None:
+            server.close()

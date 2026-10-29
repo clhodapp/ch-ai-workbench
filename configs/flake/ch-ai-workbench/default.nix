@@ -717,7 +717,11 @@
                 assert lib.hasInfix ''/bin/opencode" "acp"'' agentShellInit;
                 pkgs.runCommand "agent-config-home"
                   {
-                    nativeBuildInputs = [ pkgs.jq ];
+                    nativeBuildInputs = [
+                      pkgs.jq
+                      pkgs.socat
+                    ];
+                    bridge = "${workbenchHome.config.home.path}/bin/emacs-mcp-stdio";
                     codex = lib.getExe workbenchHome.config.programs.codex.package;
                     opencode = lib.getExe workbenchHome.config.programs.opencode.package;
                   }
@@ -744,6 +748,14 @@
                       and .mcpServers.emacs == {type: "stdio", command: "/home/tester/.nix-profile/bin/emacs-mcp-stdio"}' \
                       "$HOME/.claude.json"
                     jq -e '.theme == "dark" and .env.WORKBENCH_CHECK == "1"' "$HOME/.claude/settings.json"
+
+                    # Inside an agent-sandbox run, the Emacs MCP bridge only
+                    # relays its stdio to the socket of the run. An echo
+                    # listener stands in for the run.
+                    socat "UNIX-LISTEN:$TMPDIR/emacs-mcp.sock,fork" EXEC:cat &
+                    for _ in $(seq 50); do [ -S "$TMPDIR/emacs-mcp.sock" ] && break; sleep 0.1; done
+                    test "$(echo relayed | SANDBOX_RUNTIME=1 AGENT_SANDBOX_EMACS_MCP="$TMPDIR/emacs-mcp.sock" "$bridge")" = relayed
+                    kill %1
 
                     # OpenCode 1 prints the resolved configuration; OpenCode
                     # 2 lists the documents it loaded, each in its own

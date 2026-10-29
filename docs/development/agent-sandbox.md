@@ -282,6 +282,21 @@ without the daemon socket and cache `allowNix` grants. A checkout that
 runs a whole agent consequently runs its other modules unmasked as
 well.
 
+The MCP servers a whole agent starts run inside the sandbox with it,
+unlike the MCP servers of Claude Code, which run outside its Bash
+sandbox. The Emacs MCP bridge, `emacs-mcp-stdio`, reaches Emacs through
+the daemon socket, and a process that holds that socket can evaluate any
+Lisp, so the sandbox never gets it. Instead `run` listens on a socket of
+the run (`emacs-mcp.sock` in the run directory), which the sandbox may
+reach through the composed socket allowlist. For each connection, `run`
+starts the real bridge (`emacsMcpCommand`, which emacs-integration sets)
+outside the sandbox, in the checkout root. The Emacs MCP server confines
+writes to the project of the bridge's working directory, so the agent
+cannot choose a wider territory. Inside the sandbox the bridge command
+finds the socket in `AGENT_SANDBOX_EMACS_MCP` and only relays its stdio
+there. `run` therefore stays the parent of the sandbox for the whole
+run.
+
 srt starts bubblewrap with `--new-session`, so a sandboxed process has
 no controlling terminal and a terminal UI is never told about a window
 resize. When stdin and stdout are a terminal, `run` therefore gives the
