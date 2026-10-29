@@ -90,7 +90,15 @@ let
   # The MCP server the skills document, through the stdio bridge the
   # claude module installs in the profile, and the two skills, as every
   # agent module of this layer takes them.
-  emacsServer.emacs.command = "${config.home.profileDirectory}/bin/emacs-mcp-stdio";
+  # Inside an agent-sandbox run the bridge relays to the socket the run
+  # names; Codex passes only the variables a server lists.
+  emacsServer.emacs = {
+    command = "${config.home.profileDirectory}/bin/emacs-mcp-stdio";
+    envVars = [
+      "SANDBOX_RUNTIME"
+      "AGENT_SANDBOX_EMACS_MCP"
+    ];
+  };
   emacsSkills = {
     emacs-tools = ./skills/emacs-tools;
     # Terminals are sensitive by default (the MCP server withholds them

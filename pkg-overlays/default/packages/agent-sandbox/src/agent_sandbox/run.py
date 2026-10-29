@@ -83,8 +83,13 @@ def srt_settings(
         "allowWrite": [str(root), str(scratch), *(fs.get("allowWrite") or [])],
         "denyWrite": [g if g.startswith("/") else str(root / g) for g in guards],
     }
-    network: dict[str, Any] = {"allowedDomains": list(net.get("allowedDomains") or [])}
-    for key in ("deniedDomains", "allowUnixSockets", "allowAllUnixSockets"):
+    # srt refuses a settings file whose network table lacks either domain
+    # list.
+    network: dict[str, Any] = {
+        "allowedDomains": list(net.get("allowedDomains") or []),
+        "deniedDomains": list(net.get("deniedDomains") or []),
+    }
+    for key in ("allowUnixSockets", "allowAllUnixSockets"):
         if key in net:
             network[key] = net[key]
     settings: dict[str, Any] = {"filesystem": filesystem, "network": network}
@@ -243,7 +248,9 @@ def prepare(
     scratch = run_dir / "tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     os.chmod(run_dir, 0o700)
-    env["TMPDIR"] = str(scratch)
+    # srt sets the sandbox's TMPDIR from CLAUDE_CODE_TMPDIR, and to
+    # /tmp/claude, shared by every sandbox, without it.
+    env["TMPDIR"] = env["CLAUDE_CODE_TMPDIR"] = str(scratch)
 
     # The Emacs MCP server, served from outside the sandbox on a socket of
     # this run (see EmacsMcpServer).
@@ -257,6 +264,11 @@ def prepare(
         server = EmacsMcpServer(socket_path, emacs_mcp, root, dict(os.environ))
 
     settings = srt_settings(fragment, root, registry.get("guards") or [], scratch, base.get("bwrap"))
+    # srt can grant only a path that exists, and inside the sandbox the
+    # parent of a missing directory is read-only, so an agent could not
+    # create its own state directory on first use.
+    for path in settings["filesystem"]["allowWrite"]:
+        Path(path).mkdir(parents=True, exist_ok=True)
     settings_file = run_dir / "srt.json"
     write_text_atomic(settings_file, json.dumps(settings, indent=2) + "\n")
 

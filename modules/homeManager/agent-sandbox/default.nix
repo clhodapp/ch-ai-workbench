@@ -944,11 +944,16 @@ in
         default = [
           pkgs.bubblewrap
           pkgs.socat
+          pkgs.ripgrep
+          pkgs.which
         ];
-        defaultText = lib.literalExpression "[ pkgs.bubblewrap pkgs.socat ]";
+        defaultText = lib.literalExpression "[ pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.which ]";
         description = ''
           On every enrollment's PATH (and in its closure): the sandbox
           runtime needs these to construct sandboxes at all.
+          sandbox-runtime (`srt`, which runs Codex and OpenCode) runs with
+          that PATH, uses ripgrep, and finds each of its tools with
+          `which`.
         '';
       };
       basePackages = lib.mkOption {

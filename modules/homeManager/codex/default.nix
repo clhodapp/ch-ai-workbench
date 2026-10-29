@@ -81,6 +81,7 @@ let
     }
     // lib.optionalAttrs (server.args != [ ]) { inherit (server) args; }
     // lib.optionalAttrs (server.env != { }) { inherit (server) env; }
+    // lib.optionalAttrs (server.envVars != [ ]) { env_vars = server.envVars; }
   ) cfg.mcpServers;
 
   settings = cfg.settings // lib.optionalAttrs (mcpServers != { }) { mcp_servers = mcpServers; };

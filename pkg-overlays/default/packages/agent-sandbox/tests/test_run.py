@@ -21,7 +21,8 @@ AGENT_PART = {
     "masked": True,
     "closure": ["/nix/store/ccc-agent"],
     "path": ["/nix/store/agent-farm/bin"],
-    "allowWrite": ["/home/u/.agent"],
+    # setUp names a directory of the test here, which does not exist yet.
+    "allowWrite": [],
     "allowedDomains": ["api.example.com"],
 }
 
@@ -54,9 +55,11 @@ class RunTest(unittest.TestCase):
         self.root = tmp / "repo"
         (self.root / ".git").mkdir(parents=True)
         self.runtime = tmp / "runtime"
+        self.agent_state = tmp / "home" / ".agent"
+        self.agent_part = {**AGENT_PART, "allowWrite": [str(self.agent_state)]}
         write_registry(
             self.config,
-            {"work": WORK, "agent": AGENT_PART, "sockets": SOCKETS_PART},
+            {"work": WORK, "agent": self.agent_part, "sockets": SOCKETS_PART},
             base=RUN_BASE,
             extra=EXTRA,
         )
@@ -99,7 +102,10 @@ class RunTest(unittest.TestCase):
         for path in ("/nix/store/aaa-hello", "/nix/store/bbb-base", "/nix/store/ccc-agent"):
             self.assertIn(path, fs["allowRead"])
         self.assertEqual(fs["allowWrite"][:2], [str(self.root), env["TMPDIR"]])
-        self.assertIn("/home/u/.agent", fs["allowWrite"])
+        self.assertIn(str(self.agent_state), fs["allowWrite"])
+        # A granted directory that did not exist is created before the
+        # sandbox starts, because srt can grant only a path that exists.
+        self.assertTrue(self.agent_state.is_dir())
         self.assertEqual(
             fs["denyWrite"],
             [
@@ -114,11 +120,12 @@ class RunTest(unittest.TestCase):
         self.assertEqual(env["AGENT_SANDBOX_ROOT"], str(self.root))
         self.assertEqual(env["CODER_PATH"], "/nix/store/shim/bin/coder")
         self.assertTrue(Path(env["TMPDIR"]).is_dir())
+        self.assertEqual(env["CLAUDE_CODE_TMPDIR"], env["TMPDIR"])
         self.assertNotIn(str(Path(argv[2]).parent), fs["allowWrite"])
 
     def test_no_network_unless_a_module_allows_it(self):
         settings = srt_settings({"sandbox": {}}, self.root, [], self.root / "tmp", None)
-        self.assertEqual(settings["network"], {"allowedDomains": []})
+        self.assertEqual(settings["network"], {"allowedDomains": [], "deniedDomains": []})
         self.assertNotIn("bwrapPath", settings)
 
     def test_unknown_agent_is_an_error(self):
@@ -146,7 +153,7 @@ class RunTest(unittest.TestCase):
         bridge = [sys.executable, "-c", "import os, sys; print(os.getcwd()); print(sys.stdin.readline().strip())"]
         write_registry(
             self.config,
-            {"work": WORK, "agent": AGENT_PART},
+            {"work": WORK, "agent": self.agent_part},
             base=RUN_BASE,
             extra={**EXTRA, "emacsMcp": bridge},
         )

@@ -261,8 +261,14 @@ rules. From that composition it writes an srt settings file under
 the Claude Code fragment:
 
 - srt grants no write access that is not listed. The checkout root and
-  the run's scratch directory, which becomes `TMPDIR`, join
-  `allowWrite`.
+  the run's scratch directory join `allowWrite`. srt sets the sandbox's
+  `TMPDIR` from `CLAUDE_CODE_TMPDIR`, falling back to `/tmp/claude`,
+  which every sandbox would share, so `run` names the scratch directory
+  there.
+- srt can grant only a path that exists, and inside the sandbox the
+  parent of a missing directory is read-only. `run` therefore creates
+  every granted directory that is missing before the sandbox starts, so
+  an agent can create its state directory on first use.
 - The baseline's write guards (the checkout's settings files and
   sidecar, the old sidecar path, the index of expiring checkouts) go to
   `denyWrite`, because a whole agent writes files with its own tools,
@@ -309,9 +315,15 @@ agent directly.
 
 The `agent-sandbox-compose` check runs `run` against the parts a
 home-manager configuration builds, with a stand-in srt that records its
-settings. The interactive relay and the agents' behaviour under the real
-srt need a person at a terminal on a host where nested user namespaces
-work, so the build sandbox cannot run them.
+settings. The `agent-sandbox-agents` check runs Codex and OpenCode, the
+builds hosts install from llm-agents, through their own commands inside
+the real srt, against a mock model API on 127.0.0.2 (srt sends a
+request for localhost or 127.0.0.1 past its proxy, where the sandbox's
+network namespace cannot reach it). The mock answers with a call to an
+MCP tool of a stand-in Emacs bridge, which records that it ran outside
+the sandbox in the checkout root. The check also writes inside and
+outside the checkout. The pseudo-terminal relay needs a terminal and
+stays untested.
 
 ## Trusted executables
 

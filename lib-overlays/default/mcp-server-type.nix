@@ -26,5 +26,16 @@ lib.types.submodule {
       default = { };
       description = "Environment variables the agent sets for the server.";
     };
+
+    envVars = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = ''
+        Variables of the agent's own environment the server needs.
+        Codex starts a server with a cleaned environment and passes
+        these on (its `env_vars`). Claude Code and OpenCode pass their
+        whole environment on, so they need no list.
+      '';
+    };
   };
 }
