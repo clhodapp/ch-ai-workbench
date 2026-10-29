@@ -183,6 +183,13 @@ let
     version = opencodeVersion;
   };
 
+  # The agent claude-queue dispatches to when the home has no Claude
+  # Code: Codex, else OpenCode, else none.
+  queueDefault = lib.findFirst integrated null [
+    "codex"
+    "opencode"
+  ];
+
   # Appended to the claude-queue bundle's init: queued Codex and
   # OpenCode tasks run the commands this home installs, by store path,
   # and Codex tasks may ask to leave their sandbox where the consent
@@ -207,6 +214,11 @@ let
     ++ lib.optional (integrated "opencode" && lib.versionAtLeast opencodeVersion "2") ''
       (defvar claude-queue-opencode-standalone)
       (setq claude-queue-opencode-standalone t)
+    ''
+    # Without Claude Code, plain dispatch goes to an agent the home has.
+    ++ lib.optional (!(integrated "claude-code") && queueDefault != null) ''
+      (defvar claude-queue-default-agent)
+      (setq claude-queue-default-agent '${queueDefault})
     ''
   );
 in

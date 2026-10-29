@@ -868,6 +868,8 @@
                 assert home.ch-ai-workbench.codex.hooks == { };
                 assert !(lib.hasInfix "agent-shell-openai-codex-acp-command" bundles.agent-shell.init);
                 assert !(lib.hasInfix "claude-queue-codex" bundles.claude-queue.init);
+                # Without Claude Code, plain dispatch goes to OpenCode.
+                assert lib.hasInfix "(setq claude-queue-default-agent 'opencode)" bundles.claude-queue.init;
                 selectiveHome.activationPackage;
 
               # The codex command of the full home declares the MCP server

@@ -1406,6 +1406,33 @@ log."
             (should-not (file-exists-p log))
             (should-not (claude-queue--registry)))))))))
 
+(ert-deftest claude-queue-managed-without-claude ()
+  "In a home without the claude command, the pump still dispatches a
+Codex task and the agent listing passes the empty cache."
+  (let ((pump (symbol-function 'claude-queue--pump)))
+   (claude-queue-ert--with-registry
+   (lambda (dir)
+     (claude-queue-ert--with-checkout
+      nil
+      (lambda (root)
+        (let ((claude-queue-program (expand-file-name "no-such-claude" dir))
+              (claude-queue-codex-program
+               (claude-queue-ert--fake-agent dir claude-queue-ert--codex-events))
+              (claude-queue-max-concurrent 1)
+              (claude-queue--agents-cache nil)
+              (listed 'unset))
+          (claude-queue--fetch-agents (lambda (agents) (setq listed agents)))
+          (should (null listed))
+          (setq claude-queue--pending
+                (list (list :status 'queued :agent 'codex :instruction "Mark it"
+                            :prompt "Mark it" :name "N" :model nil :root root
+                            :time 1.0)))
+          (funcall pump)
+          (should-not claude-queue--pending)
+          (let ((entry (car (claude-queue--registry))))
+            (claude-queue-ert--wait entry)
+            (should (equal "done" (claude-queue--managed-state entry)))))))))))
+
 (ert-deftest claude-queue-managed-rows-in-pickers ()
   "Codex and OpenCode tasks join the pickers' agent rows and are found
 by their bracketed id."

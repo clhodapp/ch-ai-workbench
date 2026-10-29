@@ -1273,7 +1273,15 @@ OpenCode task is active when this Emacs dispatched it (`active')."
   "Fetch the background-agent list asynchronously, then run CALLBACK.
 
 CALLBACK receives the parsed list; the result is also cached in
-`claude-queue--agents-cache'.  On failure the stale cache is passed."
+`claude-queue--agents-cache'.  On failure the stale cache is passed,
+and a home without `claude-queue-program' passes it at once: Codex
+and OpenCode tasks need no Claude."
+  (if (not (executable-find claude-queue-program))
+      (funcall callback claude-queue--agents-cache)
+    (claude-queue--fetch-agents-process callback)))
+
+(defun claude-queue--fetch-agents-process (callback)
+  "Run `claude agents --json --all' for `claude-queue--fetch-agents'."
   (let ((buffer (generate-new-buffer " *claude-queue agents*")))
     (make-process
      :name "claude-queue-agents"
