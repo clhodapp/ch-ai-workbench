@@ -440,27 +440,30 @@ line (leaving the session in \"working\" indefinitely).")
 (defconst claude-queue--sandbox-sidecar ".agent-sandbox/binding.json"
   "Checkout-relative path of the agent-sandbox enrollment sidecar.
 Written only by the `agent-sandbox' CLI; a JSON object whose
-\"profile\" names the bound sandbox profile (\"none\" = abandoned).")
+\"modules\" lists the sandbox modules the checkout chose (an empty
+list is the base modules alone, null an abandoned checkout).  A
+sidecar written before sandbox modules existed names a \"profile\"
+instead (\"none\" = abandoned).")
 
-(defun claude-queue--sandbox-profile (root)
-  "Sandbox profile bound to the checkout at ROOT, or nil.
+(defun claude-queue--sandboxed-p (root)
+  "Non-nil when the checkout at ROOT is enrolled in agent-sandbox.
 
-Nil when ROOT is nil, has no sidecar, or the sidecar is unreadable
-or malformed -- every failure reads as unenrolled."
+Nil when ROOT is nil, has no sidecar, the sidecar is unreadable or
+malformed -- every failure reads as unenrolled -- or the checkout
+is abandoned."
   (when root
     (let ((sidecar (expand-file-name claude-queue--sandbox-sidecar root)))
       (when (file-readable-p sidecar)
         (condition-case nil
             (with-temp-buffer
               (insert-file-contents sidecar)
-              (let ((profile (gethash "profile" (json-parse-buffer))))
-                (and (stringp profile) profile)))
+              (let* ((binding (json-parse-buffer))
+                     (modules (gethash "modules" binding 'absent))
+                     (profile (gethash "profile" binding)))
+                (if (eq modules 'absent)
+                    (and (stringp profile) (not (equal profile "none")))
+                  (vectorp modules))))
           (error nil))))))
-
-(defun claude-queue--sandboxed-p (root)
-  "Non-nil when the checkout at ROOT is enrolled in a sandbox profile."
-  (let ((profile (claude-queue--sandbox-profile root)))
-    (and profile (not (equal profile "none")))))
 
 (defun claude-queue--project-root-p (root)
   "Non-nil when ROOT lies in a project as the emacs MCP server sees it.
