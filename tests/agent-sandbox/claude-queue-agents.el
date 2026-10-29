@@ -43,10 +43,18 @@
     (unless (> (length (claude-queue--registry)) before)
       (error "Dispatch of %S to %s failed: %S" instruction agent
              (plist-get (car (last claude-queue--pending)) :error))))
-  (let ((entry (car (claude-queue--registry))))
+  (let ((entry (car (claude-queue--registry)))
+        (started (float-time)))
     (with-timeout (300 (error "%s task %S did not finish" agent instruction))
       (while (gethash (plist-get entry :id) claude-queue--managed-processes)
         (accept-process-output nil 0.1)))
+    ;; OpenCode 1 with a plugin would wait about 70 s for an npm install
+    ;; it cannot reach here, unless the opencode module marked the
+    ;; package installed.
+    (when (and (equal claude-queue-opencode-program (cqa--env "CQA_OPENCODE"))
+               (eq agent 'opencode)
+               (> (- (float-time) started) 45))
+      (error "OpenCode 1 task %S took %.0f s" instruction (- (float-time) started)))
     (message "cqa: %s %S -> %s, session %s" agent instruction
              (claude-queue--managed-state entry) (plist-get entry :session))
     (message "cqa: transcript\n%s"

@@ -962,6 +962,7 @@
                     opencodePlugin = agentsHome.config.ch-ai-workbench.opencode.plugins.workbench-consent;
                     opencodePlugin2 = agentsHome2.config.ch-ai-workbench.opencode.plugins.workbench-consent;
                     codexSettings = agentsHome.config.home.activation.codexSettings.data;
+                    opencodePluginDependencies = agentsHome.config.home.activation.opencodePluginDependencies.data;
                     agentSandboxConfig = "${agentsHome.config.home-files}/.config/agent-sandbox";
                   }
                   ''
@@ -973,6 +974,8 @@
                     cp -r "$agentSandboxConfig" "$HOME/.config/agent-sandbox"
                     run() { "$@"; }
                     eval "$codexSettings"
+                    eval "$opencodePluginDependencies"
+                    test -d "$XDG_CONFIG_HOME/opencode/node_modules"
 
                     python3 ${self}/tests/agent-sandbox/mock-inference.py 127.0.0.2 ${toString mockPort} "$TMPDIR/requests.jsonl" &
                     for _ in $(seq 50); do
