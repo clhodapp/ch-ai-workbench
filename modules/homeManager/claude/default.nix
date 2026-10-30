@@ -42,13 +42,22 @@ let
   # Claude Code process's PATH to its sandbox farms. Defaults target the "emacs" server
   # the mcp-server bundle registers; explicit flags win, since the
   # bridge's argument parser is last-match.
+  #
+  # Inside an agent-sandbox run (Codex or OpenCode, whose MCP servers run
+  # inside the sandbox with them), the bridge cannot reach the Emacs
+  # daemon socket, and must not: it relays its stdio to the socket the
+  # run serves the real bridge on, from outside the sandbox.
   mcpStdioBridge = pkgs.writeShellApplication {
     name = "emacs-mcp-stdio";
     runtimeInputs = [
       config.programs.emacs.finalPackage
       pkgs.coreutils
+      pkgs.socat
     ];
     text = ''
+      if [ -n "''${SANDBOX_RUNTIME:-}" ] && [ -n "''${AGENT_SANDBOX_EMACS_MCP:-}" ]; then
+        exec socat STDIO "UNIX-CONNECT:$AGENT_SANDBOX_EMACS_MCP"
+      fi
       bridge=(${editorScope.epkgs.mcp-server-lib}/share/emacs/site-lisp/elpa/mcp-server-lib-*/emacs-mcp-stdio.sh)
       exec bash "''${bridge[0]}" \
         --init-function=ch-mcp-server-start \

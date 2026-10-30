@@ -242,24 +242,34 @@ the bare-root guard applies in full."
                     (claude-queue-ert--denied root))))
    t))
 
-(ert-deftest claude-queue-sandbox-profile-reads-sidecar ()
+(ert-deftest claude-queue-sandbox-reads-modules ()
+  "A sidecar that lists modules is an enrollment, an empty list (the
+base modules alone) included."
+  (claude-queue-ert--with-checkout
+   "{\"modules\": [\"git\", \"nix\"], \"applied\": {}}"
+   (lambda (root) (should (claude-queue--sandboxed-p root))))
+  (claude-queue-ert--with-checkout
+   "{\"modules\": [], \"applied\": {}}"
+   (lambda (root) (should (claude-queue--sandboxed-p root)))))
+
+(ert-deftest claude-queue-sandbox-reads-legacy-profile ()
+  "A sidecar from before sandbox modules names a profile."
   (claude-queue-ert--with-checkout
    "{\"profile\": \"nix\", \"applied\": {}}"
-   (lambda (root)
-     (should (equal "nix" (claude-queue--sandbox-profile root)))
-     (should (claude-queue--sandboxed-p root)))))
+   (lambda (root) (should (claude-queue--sandboxed-p root)))))
 
 (ert-deftest claude-queue-sandbox-unenrolled-shapes ()
-  "No root, no sidecar, the reserved empty profile, and a malformed
-sidecar all read as unenrolled."
+  "No root, no sidecar, an abandoned checkout in either format, and a
+malformed sidecar all read as unenrolled."
   (should-not (claude-queue--sandboxed-p nil))
   (claude-queue-ert--with-checkout
    nil (lambda (root) (should-not (claude-queue--sandboxed-p root))))
   (claude-queue-ert--with-checkout
+   "{\"modules\": null, \"applied\": {}}"
+   (lambda (root) (should-not (claude-queue--sandboxed-p root))))
+  (claude-queue-ert--with-checkout
    "{\"profile\": \"none\", \"applied\": {}}"
-   (lambda (root)
-     (should (equal "none" (claude-queue--sandbox-profile root)))
-     (should-not (claude-queue--sandboxed-p root))))
+   (lambda (root) (should-not (claude-queue--sandboxed-p root))))
   (claude-queue-ert--with-checkout
    "{\"profile\": 3}"
    (lambda (root) (should-not (claude-queue--sandboxed-p root))))
@@ -271,7 +281,7 @@ sidecar all read as unenrolled."
   "Inside an enrolled project checkout the shell and the network tools
 leave the deny floor, which is then empty: no --settings at all."
   (claude-queue-ert--with-checkout
-   "{\"profile\": \"default\", \"applied\": {}}"
+   "{\"modules\": [\"git\"], \"applied\": {}}"
    (lambda (root)
      (should-not (claude-queue-ert--denied root)))))
 

@@ -589,6 +589,9 @@ let
         else
           lib.getExe' cfg.runtime.sandboxRuntimePackage "srt";
       guards = monotoneBaseline.sandbox.filesystem.denyWrite;
+      # The Emacs MCP bridge `agent-sandbox run` serves to an agent inside
+      # the sandbox, from outside it.
+      emacsMcp = cfg.emacsMcpCommand;
     }
   );
 
@@ -941,11 +944,16 @@ in
         default = [
           pkgs.bubblewrap
           pkgs.socat
+          pkgs.ripgrep
+          pkgs.which
         ];
-        defaultText = lib.literalExpression "[ pkgs.bubblewrap pkgs.socat ]";
+        defaultText = lib.literalExpression "[ pkgs.bubblewrap pkgs.socat pkgs.ripgrep pkgs.which ]";
         description = ''
           On every enrollment's PATH (and in its closure): the sandbox
           runtime needs these to construct sandboxes at all.
+          sandbox-runtime (`srt`, which runs Codex and OpenCode) runs with
+          that PATH, uses ripgrep, and finds each of its tools with
+          `which`.
         '';
       };
       basePackages = lib.mkOption {
@@ -1094,6 +1102,20 @@ in
         Modules every enrollment gets in addition to the modules the
         checkout chooses, for grants no checkout should go without.
         An abandoned checkout gets none.
+      '';
+    };
+
+    emacsMcpCommand = lib.mkOption {
+      type = lib.types.nullOr (lib.types.listOf lib.types.str);
+      default = null;
+      description = ''
+        The Emacs MCP bridge, which `agent-sandbox run` starts outside
+        the sandbox for an agent inside it, one per connection, in the
+        checkout root. The agent reaches it through a socket of the run;
+        the Emacs daemon socket itself stays out of the sandbox, because
+        a process that holds it can evaluate any Lisp. The
+        emacs-integration module sets it. Null serves no Emacs MCP
+        server, so an agent inside the sandbox has none.
       '';
     };
 

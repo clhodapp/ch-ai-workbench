@@ -261,8 +261,14 @@ rules. From that composition it writes an srt settings file under
 the Claude Code fragment:
 
 - srt grants no write access that is not listed. The checkout root and
-  the run's scratch directory, which becomes `TMPDIR`, join
-  `allowWrite`.
+  the run's scratch directory join `allowWrite`. srt sets the sandbox's
+  `TMPDIR` from `CLAUDE_CODE_TMPDIR`, falling back to `/tmp/claude`,
+  which every sandbox would share, so `run` names the scratch directory
+  there.
+- srt can grant only a path that exists, and inside the sandbox the
+  parent of a missing directory is read-only. `run` therefore creates
+  every granted directory that is missing before the sandbox starts, so
+  an agent can create its state directory on first use.
 - The baseline's write guards (the checkout's settings files and
   sidecar, the old sidecar path, the index of expiring checkouts) go to
   `denyWrite`, because a whole agent writes files with its own tools,
@@ -282,6 +288,21 @@ without the daemon socket and cache `allowNix` grants. A checkout that
 runs a whole agent consequently runs its other modules unmasked as
 well.
 
+The MCP servers a whole agent starts run inside the sandbox with it,
+unlike the MCP servers of Claude Code, which run outside its Bash
+sandbox. The Emacs MCP bridge, `emacs-mcp-stdio`, reaches Emacs through
+the daemon socket, and a process that holds that socket can evaluate any
+Lisp, so the sandbox never gets it. Instead `run` listens on a socket of
+the run (`emacs-mcp.sock` in the run directory), which the sandbox may
+reach through the composed socket allowlist. For each connection, `run`
+starts the real bridge (`emacsMcpCommand`, which emacs-integration sets)
+outside the sandbox, in the checkout root. The Emacs MCP server confines
+writes to the project of the bridge's working directory, so the agent
+cannot choose a wider territory. Inside the sandbox the bridge command
+finds the socket in `AGENT_SANDBOX_EMACS_MCP` and only relays its stdio
+there. `run` therefore stays the parent of the sandbox for the whole
+run.
+
 srt starts bubblewrap with `--new-session`, so a sandboxed process has
 no controlling terminal and a terminal UI is never told about a window
 resize. When stdin and stdout are a terminal, `run` therefore gives the
@@ -294,9 +315,15 @@ agent directly.
 
 The `agent-sandbox-compose` check runs `run` against the parts a
 home-manager configuration builds, with a stand-in srt that records its
-settings. The interactive relay and the agents' behaviour under the real
-srt need a person at a terminal on a host where nested user namespaces
-work, so the build sandbox cannot run them.
+settings. The `agent-sandbox-agents` check runs Codex and OpenCode, the
+builds hosts install from llm-agents, through their own commands inside
+the real srt, against a mock model API on 127.0.0.2 (srt sends a
+request for localhost or 127.0.0.1 past its proxy, where the sandbox's
+network namespace cannot reach it). The mock answers with a call to an
+MCP tool of a stand-in Emacs bridge, which records that it ran outside
+the sandbox in the checkout root. The check also writes inside and
+outside the checkout. The pseudo-terminal relay needs a terminal and
+stays untested.
 
 ## Trusted executables
 

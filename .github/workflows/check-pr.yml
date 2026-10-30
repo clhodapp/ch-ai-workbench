@@ -108,6 +108,11 @@ jobs:
           # from too.
           extraPullNames: nix-community,numtide
 
+      # The same setting as in check.yml, for the sandbox checks.
+      - name: Let unprivileged user namespaces hold capabilities
+        if: steps.guard.outputs.build == 'true'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Run the flake checks
         if: steps.guard.outputs.build == 'true'
         run: nix flake check --print-build-logs

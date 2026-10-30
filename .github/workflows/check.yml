@@ -198,6 +198,14 @@ jobs:
           # them too.
           extraPullNames: nix-community,numtide
 
+      # agent-sandbox-agents runs the real sandbox-runtime inside a
+      # build. Its bubblewrap sets up a network namespace with a
+      # loopback interface, which needs capabilities inside an
+      # unprivileged user namespace; the AppArmor policy of the Ubuntu
+      # runners withholds them unless this setting is off.
+      - name: Let unprivileged user namespaces hold capabilities
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Run the flake checks
         run: nix flake check --print-build-logs
 

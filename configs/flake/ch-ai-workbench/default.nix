@@ -395,6 +395,89 @@
                 ];
 
             agentShellInit = workbenchHome.config.ch-emacs-config.emacs.bundles.agent-shell.init;
+
+            # A home whose Codex and OpenCode run whole inside a checkout's
+            # sandbox under the real srt, against a mock model API on
+            # 127.0.0.2. srt sends a sandboxed request through its proxy
+            # unless the host is localhost or 127.0.0.1, and lets the
+            # proxy reach a loopback address only when the address is
+            # listed, which the module `mock` does. The home directory is
+            # the build directory, so the paths in the sandbox parts are
+            # the ones the check uses. The agents and srt are the builds
+            # from llm-agents that hosts install.
+            llmAgents = inputs.llm-agents.packages.${system};
+            mockPort = 18799;
+            mockBase = "http://127.0.0.2:${toString mockPort}/v1";
+            # The MCP command the agents start inside the sandbox: the
+            # relay of the Emacs bridge, to the socket of the run.
+            mcpRelay = pkgs.writeShellScript "emacs-mcp-relay" ''
+              exec ${pkgs.socat}/bin/socat STDIO "UNIX-CONNECT:$AGENT_SANDBOX_EMACS_MCP"
+            '';
+            agentsHome = inputs.home-manager.lib.homeManagerConfiguration {
+              inherit pkgs;
+              modules = [
+                self.modules.homeManager.agent-sandbox
+                self.modules.homeManager.codex
+                self.modules.homeManager.opencode
+                {
+                  home.username = "tester";
+                  home.homeDirectory = "/build/home";
+                  home.stateVersion = "25.05";
+                  ch-ai-workbench.agent-sandbox = {
+                    enable = true;
+                    runtime.claudePackage = pkgs.hello;
+                    runtime.sandboxRuntimePackage = llmAgents.sandbox-runtime;
+                    # The stand-in of the Emacs bridge, served from
+                    # outside the sandbox.
+                    emacsMcpCommand = [
+                      (lib.getExe pkgs.python3)
+                      "${self}/tests/agent-sandbox/fake-mcp.py"
+                    ];
+                    modules.mock = {
+                      description = "the mock model API";
+                      allowedDomains = [ "127.0.0.2:${toString mockPort}" ];
+                    };
+                  };
+                  ch-ai-workbench.codex = {
+                    enable = true;
+                    package = llmAgents.codex;
+                    mcpServers.emacs = {
+                      command = "${mcpRelay}";
+                      envVars = [ "AGENT_SANDBOX_EMACS_MCP" ];
+                    };
+                    settings = {
+                      model = "mock-model";
+                      model_provider = "mock";
+                      approval_policy = "never";
+                      model_providers.mock = {
+                        name = "mock";
+                        base_url = mockBase;
+                        env_key = "MOCK_API_KEY";
+                        wire_api = "responses";
+                      };
+                    };
+                  };
+                  ch-ai-workbench.opencode = {
+                    enable = true;
+                    package = llmAgents.opencode;
+                    mcpServers.emacs.command = "${mcpRelay}";
+                    providers = lib.mkForce { };
+                    settings = {
+                      model = "mock/mock-model";
+                      provider.mock = {
+                        npm = "@ai-sdk/openai-compatible";
+                        name = "mock";
+                        options = {
+                          baseURL = mockBase;
+                          apiKey = "mock";
+                        };
+                        models.mock-model.name = "mock-model";
+                      };
+                    };
+                  };
+                }
+              ];
+            };
           in
           {
             checks = {
@@ -717,7 +800,11 @@
                 assert lib.hasInfix ''/bin/opencode" "acp"'' agentShellInit;
                 pkgs.runCommand "agent-config-home"
                   {
-                    nativeBuildInputs = [ pkgs.jq ];
+                    nativeBuildInputs = [
+                      pkgs.jq
+                      pkgs.socat
+                    ];
+                    bridge = "${workbenchHome.config.home.path}/bin/emacs-mcp-stdio";
                     codex = lib.getExe workbenchHome.config.programs.codex.package;
                     opencode = lib.getExe workbenchHome.config.programs.opencode.package;
                   }
@@ -745,6 +832,14 @@
                       "$HOME/.claude.json"
                     jq -e '.theme == "dark" and .env.WORKBENCH_CHECK == "1"' "$HOME/.claude/settings.json"
 
+                    # Inside an agent-sandbox run, the Emacs MCP bridge only
+                    # relays its stdio to the socket of the run. An echo
+                    # listener stands in for the run.
+                    socat "UNIX-LISTEN:$TMPDIR/emacs-mcp.sock,fork" EXEC:cat &
+                    for _ in $(seq 50); do [ -S "$TMPDIR/emacs-mcp.sock" ] && break; sleep 0.1; done
+                    test "$(echo relayed | SANDBOX_RUNTIME=1 AGENT_SANDBOX_EMACS_MCP="$TMPDIR/emacs-mcp.sock" "$bridge")" = relayed
+                    kill %1
+
                     # OpenCode 1 prints the resolved configuration; OpenCode
                     # 2 lists the documents it loaded, each in its own
                     # shape (the model as provider and model, the servers
@@ -758,6 +853,100 @@
                              or $c.model == {providerID: "baseten", model: "zai-org/GLM-5.3"})' opencode.json
                     touch $out
                   '';
+
+              # Codex and OpenCode, run by their own commands in an enrolled
+              # checkout, inside the real srt, against the mock model API.
+              # The mock answers with a call to the MCP tool `mark`, which
+              # the stand-in Emacs bridge serves from outside the sandbox:
+              # the call reaches it through the socket of the run, and the
+              # bridge runs in the checkout root. A write outside the
+              # checkout fails inside the sandbox.
+              agent-sandbox-agents =
+                pkgs.runCommand "agent-sandbox-agents"
+                  {
+                    nativeBuildInputs = [
+                      self.packages.${system}.agent-sandbox
+                      pkgs.git
+                      pkgs.jq
+                      pkgs.python3
+                    ];
+                    codex = lib.getExe agentsHome.config.programs.codex.package;
+                    opencode = lib.getExe agentsHome.config.programs.opencode.package;
+                    opencode2 = lib.getExe llmAgents.opencode2;
+                    opencodeLayer = agentsHome.config.programs.opencode.package.workbenchLayer;
+                    codexSettings = agentsHome.config.home.activation.codexSettings.data;
+                    agentSandboxConfig = "${agentsHome.config.home-files}/.config/agent-sandbox";
+                  }
+                  ''
+                    test "$TMPDIR" = /build
+                    export HOME=/build/home XDG_RUNTIME_DIR=/build/run
+                    export XDG_CONFIG_HOME=$HOME/.config XDG_DATA_HOME=$HOME/.local/share
+                    export XDG_STATE_HOME=$HOME/.local/state XDG_CACHE_HOME=$HOME/.cache
+                    mkdir -p "$HOME/.config" "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+                    cp -r "$agentSandboxConfig" "$HOME/.config/agent-sandbox"
+                    run() { "$@"; }
+                    eval "$codexSettings"
+
+                    python3 ${self}/tests/agent-sandbox/mock-inference.py 127.0.0.2 ${toString mockPort} "$TMPDIR/requests.jsonl" &
+                    for _ in $(seq 50); do
+                      python3 -c 'import socket; socket.create_connection(("127.0.0.2", ${toString mockPort}), 1)' 2>/dev/null && break
+                      sleep 0.2
+                    done
+
+                    git init -q repo
+                    agent-sandbox enroll mock -C repo --quiet
+                    cd repo
+                    root=$PWD
+                    export MOCK_API_KEY=mock FAKE_MCP_MARKS="$TMPDIR/marks" OPENCODE_DISABLE_MODELS_FETCH=1
+
+                    # Inside, the checkout is writable and the home is not.
+                    agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch inside' < /dev/null
+                    test -e inside
+                    if agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch /build/home/outside' < /dev/null; then
+                      echo "a sandboxed command wrote outside the checkout"; exit 1
+                    fi
+                    test ! -e /build/home/outside
+
+                    timeout 300 "$codex" exec --skip-git-repo-check 'Call the tool mark.' < /dev/null
+                    test "$(cat "$FAKE_MCP_MARKS")" = "$root"
+                    jq -e -s 'map(select(.path | endswith("/responses"))) | length >= 2' "$TMPDIR/requests.jsonl"
+
+                    rm "$FAKE_MCP_MARKS"
+                    timeout 300 "$opencode" run 'Call the tool mark.' < /dev/null
+                    test "$(cat "$FAKE_MCP_MARKS")" = "$root"
+                    jq -e -s 'map(select(.path | endswith("/chat/completions"))) | length >= 2' "$TMPDIR/requests.jsonl"
+
+                    # OpenCode 2, with the same declared settings, reaches the
+                    # MCP server through its Code Mode tool `execute`, once
+                    # the server has connected (the mock retries).
+                    rm "$FAKE_MCP_MARKS"
+                    OPENCODE_CONFIG="$opencodeLayer" OPENCODE_DISABLE_CLAUDE_CODE=1 timeout 300 \
+                      agent-sandbox run opencode -- "$opencode2" run --auto 'Call the tool mark.' < /dev/null
+                    test "$(cat "$FAKE_MCP_MARKS")" = "$root"
+                    touch $out
+                  '';
+
+              # A graphical Emacs in a VM drives OpenCode, sandboxed, through
+              # agent-shell, and OpenCode calls back into that Emacs over the
+              # MCP server; a terminal resize reaches a sandboxed command.
+              agent-shell-vm = import "${self}/tests/agent-shell-vm.nix" {
+                inherit
+                  pkgs
+                  lib
+                  self
+                  llmAgents
+                  ;
+                inherit (inputs) home-manager;
+                homeModules = [
+                  inputs.ch-emacs-config.modules.homeManager.emacs
+                  self.modules.homeManager.emacs
+                  self.modules.homeManager.claude
+                  self.modules.homeManager.claude-code
+                  self.modules.homeManager.agent-sandbox
+                  self.modules.homeManager.emacs-integration
+                  self.modules.homeManager.opencode
+                ];
+              };
 
               ai-commit-ert = pkgs.runCommand "ai-commit-ert" { } ''
                 export HOME="$TMPDIR"
