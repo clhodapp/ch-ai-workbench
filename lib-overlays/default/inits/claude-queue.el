@@ -3,6 +3,7 @@
 ;; init claude-queue
 (declare-function claude-queue-dispatch "claude-queue")
 (declare-function claude-queue-dispatch-model "claude-queue")
+(declare-function claude-queue-dispatch-agent "claude-queue")
 (declare-function claude-queue-list "claude-queue")
 (declare-function claude-queue-list-all "claude-queue")
 (declare-function claude-queue-agents "claude-queue")
@@ -33,6 +34,7 @@
   :commands
   (claude-queue-dispatch
    claude-queue-dispatch-model
+   claude-queue-dispatch-agent
    claude-queue-list
    claude-queue-list-all
    claude-queue-agents
@@ -52,10 +54,12 @@
   (with-eval-after-load 'evil
     ;; Motion-state bindings also serve visual state, so a selected
     ;; region is included in the dispatch capture.  Uppercase = the
-    ;; asking variant: D prompts for the model, Q/L/F widen the same
-    ;; view to the CLI's full --all history.
+    ;; asking variant: D prompts for the model, A for the agent (Claude,
+    ;; Codex or OpenCode) and its model, Q/L/F widen the same view to
+    ;; the full history.
     (evil-global-set-key 'motion (kbd "<leader> a d") #'claude-queue-dispatch)
     (evil-global-set-key 'motion (kbd "<leader> a D") #'claude-queue-dispatch-model)
+    (evil-global-set-key 'motion (kbd "<leader> a A") #'claude-queue-dispatch-agent)
     (evil-global-set-key 'motion (kbd "<leader> a q") #'claude-queue-list)
     (evil-global-set-key 'motion (kbd "<leader> a Q") #'claude-queue-list-all)
     (evil-global-set-key 'motion (kbd "<leader> a l") #'claude-queue-agents)

@@ -92,6 +92,11 @@ let
         ${lib.concatMapStringsSep " " (provider: "--run ${lib.escapeShellArg (readKey provider)}") (
           lib.attrValues keyed
         )}
+      # The OpenCode this home runs is `opencode`, whatever its package
+      # names the command (llm-agents' OpenCode 2 is `opencode2`).
+      if [ ! -e $out/bin/opencode ]; then
+        ln -s ${cfg.package.meta.mainProgram} $out/bin/opencode
+      fi
     '';
     inherit (cfg.package) meta;
     passthru = (cfg.package.passthru or { }) // {
@@ -173,6 +178,18 @@ in
         Skill directories (SKILL.md inside) installed as
         $XDG_CONFIG_HOME/opencode/skills/<name>, through
         programs.opencode.skills.
+      '';
+    };
+
+    plugins = lib.mkOption {
+      type = lib.types.attrsOf lib.types.path;
+      default = { };
+      example = lib.literalExpression "{ notify = ./plugins/notify.js; }";
+      description = ''
+        Plugin files installed as $XDG_CONFIG_HOME/opencode/plugin/<name>.js,
+        the directory both OpenCode 1 and OpenCode 2 load user plugins
+        from. A plugin is written for one major version: the two have
+        different plugin interfaces.
       '';
     };
 
@@ -335,6 +352,38 @@ in
           skills = lib.mkIf (cfg.skills != { }) cfg.skills;
           context = lib.mkIf (cfg.instructions != null) cfg.instructions;
         };
+
+        xdg.configFile = lib.mapAttrs' (
+          name: source: lib.nameValuePair "opencode/plugin/${name}.js" { inherit source; }
+        ) cfg.plugins;
+
+        # With a plugin present, OpenCode 1 waits at every start for an
+        # npm install of @opencode-ai/plugin into its config directory,
+        # and without network that wait runs into a timeout. It skips
+        # the install when node_modules exists and package-lock.json
+        # lists the package. The plugins of this module import nothing
+        # from npm, so a lock file that lists the package is written
+        # when none exists yet; an install of other packages later
+        # replaces it as usual.
+        home.activation.opencodePluginDependencies =
+          lib.mkIf (cfg.plugins != { } && !lib.versionAtLeast (lib.getVersion cfg.package) "2")
+            (
+              lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+                opencodeConfig=${lib.escapeShellArg "${config.xdg.configHome}/opencode"}
+                if [ ! -e "$opencodeConfig/package-lock.json" ]; then
+                  run mkdir -p "$opencodeConfig/node_modules"
+                  run cp ${
+                    pkgs.writeText "opencode-package-lock.json" (
+                      builtins.toJSON {
+                        lockfileVersion = 3;
+                        packages."".dependencies."@opencode-ai/plugin" = "*";
+                      }
+                    )
+                  } "$opencodeConfig/package-lock.json"
+                  run chmod u+w "$opencodeConfig/package-lock.json"
+                fi
+              ''
+            );
       }
     ]
   );

@@ -8,9 +8,13 @@ contains TOOL (default `mark`) and carries no tool result yet gets a
 call to that tool. OpenCode 2 offers the tools of MCP servers only
 inside its Code Mode tool `execute`; a request that offers `execute`
 and no TOOL gets an `execute` call whose code calls TOOL of the MCP
-server SERVER (default `emacs`). Any other request gets a short text
-answer. Every request body is appended to the log file, one JSON
-object per line.
+server SERVER (default `emacs`). A request whose input names
+`PATCH-OUTSIDE:PATH`, offers Codex's `apply_patch` and carries no tool
+result yet gets an `apply_patch` call adding the file PATH; one whose
+messages name `WRITE-OUTSIDE:PATH` gets an OpenCode `write` call to
+PATH the same way. Any other
+request gets a short text answer. Every request body is appended to
+the log file, one JSON object per line.
 
 usage: mock-inference.py HOST PORT LOG [TOOL [SERVER]]
 """
@@ -18,7 +22,9 @@ usage: mock-inference.py HOST PORT LOG [TOOL [SERVER]]
 import itertools
 import json
 import os
+import re
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST, PORT, LOG = sys.argv[1], int(sys.argv[2]), sys.argv[3]
@@ -46,7 +52,7 @@ def tool_results(body):
     """The text of every tool result the request carries."""
     results = []
     for item in body.get("input") or []:
-        if isinstance(item, dict) and item.get("type") == "function_call_output":
+        if isinstance(item, dict) and item.get("type", "").endswith("_call_output"):
             results.append(json.dumps(item.get("output")))
     for message in body.get("messages") or []:
         if message.get("role") == "tool":
@@ -54,13 +60,42 @@ def tool_results(body):
     return results
 
 
+def outside_patch(body):
+    """The `apply_patch` call as (None, "apply_patch", patch, "custom") when
+    the input asks for one, or None."""
+    names = [name for _, name in tool_names(body)]
+    found = re.search(r"PATCH-OUTSIDE:([A-Za-z0-9_./-]+)", json.dumps(body.get("input") or []))
+    if found and "apply_patch" in names and not tool_results(body):
+        patch = f"*** Begin Patch\n*** Add File: {found.group(1)}\n+written by the mock\n*** End Patch\n"
+        return (None, "apply_patch", patch, "custom")
+    return None
+
+
+def outside_write(body):
+    """The `write` call as (None, "write", arguments) when the messages
+    ask for one with `WRITE-OUTSIDE:PATH`, or None. The file argument is
+    the one the offered tool names: `filePath` in OpenCode 1, `path` in
+    OpenCode 2."""
+    found = re.search(r"WRITE-OUTSIDE:([A-Za-z0-9_./-]+)", json.dumps(body.get("messages") or []))
+    if not found or tool_results(body):
+        return None
+    for tool in body.get("tools") or []:
+        function = tool.get("function") or {}
+        if function.get("name") == "write":
+            properties = (function.get("parameters") or {}).get("properties") or {}
+            key = "filePath" if "filePath" in properties else "path"
+            return (None, "write", json.dumps({key: found.group(1), "content": "written by the mock\n"}))
+    return None
+
+
 def mark_tool(body):
     """The tool to call as (namespace, name, arguments), or None.
 
     OpenCode 2 connects MCP servers while the session already runs, so
     a server's tools may be missing from the first step; an `execute`
-    call is therefore repeated, up to four times, until a result shows
-    that the tool ran."""
+    call is therefore repeated, up to eight times and half a second
+    apart (a real model takes longer than that per step), until a
+    result shows that the tool ran."""
     results = tool_results(body)
     if any("marked" in result for result in results):
         return None
@@ -68,7 +103,9 @@ def mark_tool(body):
     found = next((pair for pair in names if TOOL in pair[1]), None)
     if found and not results:
         return (*found, "{}")
-    if any(name == "execute" for _, name in names) and len(results) < 4:
+    if any(name == "execute" for _, name in names) and len(results) < 8:
+        if results:
+            time.sleep(0.5)
         code = os.environ.get("MOCK_CODE") or f'return await tools[{json.dumps(SERVER)}][{json.dumps(TOOL)}]({{}})'
         return (None, "execute", json.dumps({"code": code}))
     return None
@@ -104,11 +141,11 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
         with open(LOG, "a") as log:
             log.write(json.dumps({"path": self.path, "body": body}) + "\n")
-        tool = mark_tool(body)
+        tool = outside_patch(body) or outside_write(body) or mark_tool(body)
         if self.path.endswith("/responses"):
             self.events(responses(tool))
         else:
-            self.events(chat(tool))
+            self.events(chat(tool, body))
 
 
 def sse(event, data):
@@ -116,7 +153,16 @@ def sse(event, data):
 
 
 def responses(tool):
-    if tool:
+    if tool and tool[3:] == ("custom",):
+        item = {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "call_id": f"call_{next(CALLS)}",
+            "name": tool[1],
+            "input": tool[2],
+            "status": "completed",
+        }
+    elif tool:
         namespace, name, arguments = tool
         item = {
             "type": "function_call",
@@ -165,12 +211,21 @@ def chunk(delta, finish=None):
     ) + "\n\n"
 
 
-def chat(tool):
+DIAGRAM = "Here it is:\n\n```mermaid\ngraph TD\n  A[Emacs] --> B[Agent]\n```\n"
+
+
+def text_answer(request):
+    """The text answer: a mermaid diagram when the messages ask to draw
+    one, `done` otherwise."""
+    return DIAGRAM if "Draw a diagram" in json.dumps(request.get("messages") or []) else "done"
+
+
+def chat(tool, request):
     if tool:
         call = {"index": 0, "id": f"call_{next(CALLS)}", "type": "function", "function": {"name": tool[1], "arguments": tool[2]}}
         body = [chunk({"role": "assistant", "tool_calls": [call]}), chunk({}, "tool_calls")]
     else:
-        body = [chunk({"role": "assistant", "content": "done"}), chunk({}, "stop")]
+        body = [chunk({"role": "assistant", "content": text_answer(request)}), chunk({}, "stop")]
     usage = "data: " + json.dumps(
         {
             "id": "chatcmpl-1",

@@ -20,6 +20,16 @@
 ;; `claude-queue-dispatch-model' picks another model (opus, fable,
 ;; ...) first.
 ;;
+;; Codex and OpenCode take tasks too (`claude-queue-dispatch-agent',
+;; or `claude-queue-default-agent').  Such a task is a process this
+;; Emacs runs, the agent's headless command (`codex exec --json',
+;; `opencode run --format json'); its event stream is the transcript
+;; RET shows, its exit ends the task, and `a' continues its session in
+;; a terminal.  Outside a checkout enrolled in agent-sandbox, the
+;; agent's own sandbox or permissions keep the task in its root, and a
+;; write outside the root becomes a consent question, as for Claude
+;; (codex-consent-hook, the OpenCode consent plugin).
+;;
 ;; `claude-queue-follow-mode' keeps session-viewing buffers rooted
 ;; where their session actually works: a ghostel where `claude' was
 ;; run by hand, an attach terminal, a transcript view -- each has its
@@ -234,6 +244,67 @@ the guard fires exactly when the territory would degrade."
   :type '(repeat string)
   :group 'claude-queue)
 
+(defcustom claude-queue-default-agent 'claude
+  "Agent `claude-queue-dispatch' hands tasks to.
+`claude' starts a Claude Code background agent (`claude --bg').
+`codex' and `opencode' run that agent's headless command (`codex exec
+--json', `opencode run --format json') as a process this Emacs
+manages: its event stream is the task's transcript, and its exit is
+the task's end.  `claude-queue-dispatch-agent' asks instead."
+  :type '(choice (const claude) (const codex) (const opencode))
+  :group 'claude-queue)
+
+(defcustom claude-queue-codex-program "codex"
+  "Codex command for queued Codex tasks."
+  :type 'string
+  :group 'claude-queue)
+
+(defcustom claude-queue-opencode-program "opencode"
+  "OpenCode command for queued OpenCode tasks."
+  :type 'string
+  :group 'claude-queue)
+
+(defcustom claude-queue-codex-consent nil
+  "Whether a Codex task may ask to leave its sandbox, through the consent spool.
+Non-nil runs Codex tasks outside agent-sandbox with the approval
+route of Codex open: a call that would leave the workspace-write
+sandbox raises the PermissionRequest hook, where codex-consent-hook
+from this workbench asks the user (`claude-consent-list') and
+answers.  Codex hands a request no hook answers to its automatic
+reviewer, a model, so this is for homes that install that hook; the
+emacs-integration module sets it there.  Nil keeps Codex approvals
+off: such a call is refused."
+  :type 'boolean
+  :group 'claude-queue)
+
+(defcustom claude-queue-opencode-consent nil
+  "Whether an OpenCode task may ask to write outside its root.
+Non-nil opens OpenCode's external_directory permission for tasks
+outside agent-sandbox, and the consent plugin from this workbench
+then asks the user (`claude-consent-list') about each write outside
+the task root.  That plugin is what confines such writes, so this is
+for homes that install it; the emacs-integration module sets it
+there.  Nil denies the permission: such a write fails."
+  :type 'boolean
+  :group 'claude-queue)
+
+(defcustom claude-queue-opencode-standalone nil
+  "Whether OpenCode tasks run as their own server (`--standalone').
+OpenCode 2 otherwise runs a task on the per-user background server,
+whose environment does not name the task, so the consent plugin
+would not see it.  OpenCode 1 has no such server and no such flag;
+the emacs-integration module sets this for OpenCode 2."
+  :type 'boolean
+  :group 'claude-queue)
+
+(defcustom claude-queue-log-directory
+  (locate-user-emacs-file "claude-queue-logs/")
+  "Directory holding the event streams of Codex and OpenCode tasks.
+One JSON-lines file per task, named by the task id; it is the task's
+transcript, and `claude-queue-remove' deletes it with the task."
+  :type 'directory
+  :group 'claude-queue)
+
 (defcustom claude-queue-max-region-chars 8000
   "Longest selected-region excerpt embedded in a task prompt."
   :type 'natnum
@@ -302,6 +373,9 @@ Each item is a plist; :status is `queued', `dispatching', or `failed'.")
 (defvar claude-queue--timer nil
   "Repeating timer driving the pump and the list refresh.")
 
+(defvar claude-queue--managed-processes (make-hash-table :test #'equal)
+  "Task id -> process, for each Codex or OpenCode task this Emacs started.")
+
 (defconst claude-queue--list-buffer "*claude-queue*"
   "Name of the queue list buffer (queue-dispatched tasks only).")
 
@@ -363,14 +437,20 @@ project root, then to DIR itself."
           :modified (buffer-modified-p)
           :region region)))
 
-(defconst claude-queue--conduct
+(defconst claude-queue--managed-conduct
   (concat
    "Conduct for this queued background task: the user fired it from"
    " their editor and moved on; a clarifying question drags them into"
    " an interactive session.  When the request is ambiguous but the"
    " work is low-stakes and easy to redo, pick the most reasonable"
    " interpretation, note the assumption in your reply, and proceed;"
-   " save questions for actions that are risky or hard to reverse."
+   " save questions for actions that are risky or hard to reverse.")
+  "Standing instructions appended to every Codex and OpenCode task prompt.
+Such a task ends when its process exits, so it needs no result: line.")
+
+(defconst claude-queue--conduct
+  (concat
+   claude-queue--managed-conduct
    "  When the task is done, end your final message with a line"
    " starting with \"result:\" summarizing the outcome -- the CLI's"
    " done-detection keys on that line, and without it a finished task"
@@ -382,8 +462,9 @@ clarifying questions on low-stakes tasks (stalling in \"blocked\"
 until the user attaches), and agents finishing without a result:
 line (leaving the session in \"working\" indefinitely).")
 
-(defun claude-queue--compose-prompt (instruction capture)
-  "Compose the task prompt from INSTRUCTION and a CAPTURE plist."
+(defun claude-queue--compose-prompt (instruction capture &optional agent)
+  "Compose the task prompt from INSTRUCTION and a CAPTURE plist.
+AGENT is the agent the task goes to, `claude' when nil."
   (let* ((root (plist-get capture :root))
          (file (plist-get capture :file))
          (region (plist-get capture :region))
@@ -411,7 +492,10 @@ line (leaving the session in \"working\" indefinitely).")
                (plist-get region :text)))
       ((and line-text (not (string-blank-p line-text)))
        (format "- Text of that line: %s\n" line-text)))
-     "\n" claude-queue--conduct "\n")))
+     "\n" (if (claude-queue--managed-agent-p agent)
+              claude-queue--managed-conduct
+            claude-queue--conduct)
+     "\n")))
 
 (defun claude-queue--derive-name (instruction capture)
   "Short display name for the task built from INSTRUCTION and CAPTURE."
@@ -529,27 +613,43 @@ shares the pipe."
     (when (string-match "backgrounded · \\([0-9a-f]+\\)" clean)
       (match-string 1 clean))))
 
+(defun claude-queue--agent-label (agent)
+  "Display name of AGENT."
+  (pcase agent
+    ('codex "Codex")
+    ('opencode "OpenCode")
+    (_ "Claude")))
+
 ;;;###autoload
-(defun claude-queue-dispatch (model)
-  "Queue a task for Claude Code about the current location.
+(defun claude-queue-dispatch (model &optional agent)
+  "Queue a task about the current location.
 
 Captures the buffer's file, line, and the selected region (when one
 is active), prompts for an instruction, and queues a background
-agent working from the enclosing project root.  MODEL is
-`claude-queue-default-model' when called interactively;
-`claude-queue-dispatch-model' asks for one instead."
-  (interactive (list claude-queue-default-model))
-  (let* ((capture (claude-queue--capture))
+agent working from the enclosing project root.  AGENT is the agent
+the task goes to, `claude-queue-default-agent' when nil.  MODEL is
+the model it runs; interactively `claude-queue-default-model' for
+Claude and the agent's configured model (nil) for Codex and OpenCode.
+`claude-queue-dispatch-model' and `claude-queue-dispatch-agent' ask
+for a model or an agent instead."
+  (interactive
+   (list (unless (claude-queue--managed-agent-p claude-queue-default-agent)
+           claude-queue-default-model)))
+  (let* ((agent (or agent claude-queue-default-agent))
+         (capture (claude-queue--capture))
          (instruction (read-string
-                       (format "Claude [%s] (%s): " model
+                       (format "%s%s (%s): "
+                               (claude-queue--agent-label agent)
+                               (if model (format " [%s]" model) "")
                                (claude-queue--location-description capture)))))
     (when (string-blank-p instruction)
       (user-error "Empty instruction"))
     (deactivate-mark)
     (let ((item (list :status 'queued
+                      :agent agent
                       :instruction instruction
                       :prompt (claude-queue--compose-prompt
-                               instruction capture)
+                               instruction capture agent)
                       :name (claude-queue--derive-name instruction capture)
                       :model model
                       :root (plist-get capture :root)
@@ -572,7 +672,26 @@ Offers `claude-queue-models', defaulting to
   (interactive)
   (claude-queue-dispatch
    (completing-read "Model: " claude-queue-models
-                    nil nil nil nil claude-queue-default-model)))
+                    nil nil nil nil claude-queue-default-model)
+   'claude))
+
+;;;###autoload
+(defun claude-queue-dispatch-agent (agent model)
+  "Like `claude-queue-dispatch', but pick the AGENT and its MODEL first.
+For Claude the model defaults to `claude-queue-default-model'; for
+Codex and OpenCode an empty answer keeps the model the agent's own
+configuration names."
+  (interactive
+   (let* ((agent (intern (completing-read
+                          "Agent: " '("claude" "codex" "opencode") nil t nil nil
+                          (symbol-name claude-queue-default-agent))))
+          (model (if (claude-queue--managed-agent-p agent)
+                     (read-string (format "%s model (empty for the configured one): "
+                                          (claude-queue--agent-label agent)))
+                   (completing-read "Model: " claude-queue-models
+                                    nil nil nil nil claude-queue-default-model))))
+     (list agent (unless (string-blank-p model) model))))
+  (claude-queue-dispatch model agent))
 
 (defun claude-queue--releasable (queued working dispatching maximum)
   "How many of QUEUED items may dispatch now.
@@ -589,11 +708,15 @@ MAXIMUM releases everything."
               claude-queue--pending))
 
 (defun claude-queue--session-working-count (agents)
-  "Count of this session's dispatched AGENTS still working."
-  (seq-count (lambda (agent)
-               (and (member (alist-get 'id agent) claude-queue--session-ids)
-                    (equal (alist-get 'state agent) "working")))
-             agents))
+  "Count of this session's dispatched tasks still working.
+The Claude tasks among AGENTS, plus every running Codex or OpenCode
+process."
+  (+ (seq-count (lambda (agent)
+                  (and (member (alist-get 'id agent) claude-queue--session-ids)
+                       (equal (alist-get 'state agent) "working")))
+                agents)
+     (seq-count #'process-live-p
+                (hash-table-values claude-queue--managed-processes))))
 
 (defun claude-queue--pump ()
   "Dispatch queued items into free slots, consulting live agent state."
@@ -619,6 +742,12 @@ MAXIMUM releases everything."
 
 (defun claude-queue--dispatch-now (item)
   "Launch a background agent for ITEM."
+  (if (claude-queue--managed-agent-p (plist-get item :agent))
+      (claude-queue--managed-start item)
+    (claude-queue--claude-dispatch-now item)))
+
+(defun claude-queue--claude-dispatch-now (item)
+  "Launch a Claude Code background agent for ITEM."
   (plist-put item :status 'dispatching)
   (let ((buffer (generate-new-buffer " *claude-queue dispatch*"))
         (default-directory (plist-get item :root)))
@@ -675,6 +804,442 @@ MAXIMUM releases everything."
                (plist-get item :name) id))
     (claude-queue--redraw)))
 
+;;; Codex and OpenCode tasks
+
+;; A Codex or OpenCode task is a process this Emacs runs: the agent's
+;; headless command, from the task root, through the agent's own
+;; command (so a checkout enrolled in agent-sandbox runs it whole
+;; inside its sandbox).  Its JSON event stream goes to a log file under
+;; `claude-queue-log-directory', which is the task's transcript; the
+;; first event names the agent's session, which `a' resumes in a
+;; terminal.  The registry entry carries :agent, :log, :session and
+;; :state; the process itself lives in `claude-queue--managed-processes'
+;; and dies with this Emacs, so an entry still marked working without
+;; a process reads as gone.
+
+(defun claude-queue--managed-agent-p (agent)
+  "Non-nil when AGENT runs as a process this Emacs manages."
+  (memq agent '(codex opencode)))
+
+(defun claude-queue--managed-p (entry)
+  "Non-nil when registry ENTRY is a Codex or OpenCode task."
+  (claude-queue--managed-agent-p (plist-get entry :agent)))
+
+(defun claude-queue--managed-entry (id)
+  "Registry entry of the Codex or OpenCode task ID, or nil."
+  (seq-find (lambda (entry)
+              (and (claude-queue--managed-p entry)
+                   (equal (plist-get entry :id) id)))
+            (claude-queue--registry)))
+
+(defun claude-queue--managed-new-id (agent)
+  "A fresh task id for AGENT: a short agent prefix and 8 hex digits."
+  (format "%s-%s" (if (eq agent 'codex) "cx" "oc")
+          (substring (md5 (format "%s %s %s" (float-time) (random)
+                                  (emacs-pid)))
+                     0 8)))
+
+(defun claude-queue--managed-confinement (root)
+  "How a Codex or OpenCode task rooted at ROOT is confined.
+`sandboxed' when ROOT is a project checkout enrolled in agent-sandbox,
+whose sandbox then confines the whole agent; `project' for any other
+project, where the agent's own permissions confine it; `bare' when
+ROOT is no project, which grants no disk writes (see
+`claude-queue-bare-root-denied-tools')."
+  (cond ((not (claude-queue--project-root-p root)) 'bare)
+        ((claude-queue--sandboxed-p root) 'sandboxed)
+        (t 'project)))
+
+(defun claude-queue--codex-command (item confinement)
+  "The `codex exec' command line for ITEM under CONFINEMENT.
+Inside agent-sandbox the codex command already runs Codex without a
+sandbox of its own.  Elsewhere Codex's own sandbox confines it:
+`workspace-write' lets commands and patches write in the task root
+and nowhere else, without network, and a bare root gets `read-only'
+with the Emacs server's disk-writing tools disabled.  With
+`claude-queue-codex-consent' a call leaving the workspace-write
+sandbox becomes a question to the user."
+  (append (list claude-queue-codex-program "exec" "--json"
+                "--skip-git-repo-check")
+          (pcase confinement
+            ('project
+             (append (list "--sandbox" "workspace-write")
+                     ;; `codex exec' keeps approvals off unless the
+                     ;; reviewer is `auto_review'; the hook then answers
+                     ;; every request before that reviewer would.
+                     (when claude-queue-codex-consent
+                       (list "-c" "approvals_reviewer=\"auto_review\""
+                             "-c" "approval_policy=\"on-request\""))))
+            ('bare (list "--sandbox" "read-only"
+                         "-c" "mcp_servers.emacs.disabled_tools=[\"edit-file\",\"transform\"]")))
+          (when-let* ((model (plist-get item :model)))
+            (list "--model" model))
+          (list "--" (plist-get item :prompt))))
+
+(defun claude-queue--opencode-command (item confinement)
+  "The `opencode run' command line for ITEM under CONFINEMENT.
+Inside agent-sandbox the sandbox confines every tool, so the run
+approves the agent's permission questions itself (--auto).  Elsewhere
+`claude-queue--opencode-config' denies tools, and a question the run
+cannot ask is rejected."
+  (append (list claude-queue-opencode-program "run" "--format" "json"
+                "--title" (plist-get item :name))
+          (when claude-queue-opencode-standalone
+            (list "--standalone"))
+          (when (eq confinement 'sandboxed)
+            (list "--auto"))
+          (when-let* ((model (plist-get item :model)))
+            (list "--model" model))
+          (list "--" (plist-get item :prompt))))
+
+(defun claude-queue--opencode-config (confinement)
+  "Inline OpenCode configuration (JSON) for a task under CONFINEMENT, or nil.
+Outside agent-sandbox the shell and web tools are denied, as
+`claude-queue-denied-tools' denies them to Claude, and writes outside
+the task root follow `claude-queue-opencode-consent'; a bare root
+also loses the edit tools and the Emacs server's disk-writing tools.
+OpenCode 2 reads this permission object as OpenCode 1 does."
+  (unless (eq confinement 'sandboxed)
+    (json-serialize
+     `(:permission
+       (:bash "deny" :webfetch "deny" :websearch "deny"
+              :external_directory ,(if claude-queue-opencode-consent "allow" "deny")
+              ,@(when (eq confinement 'bare)
+                  '(:edit "deny" :emacs_edit-file "deny"
+                          :emacs_transform "deny")))))))
+
+(defun claude-queue--managed-command (item)
+  "Command line (a list of strings) for the Codex or OpenCode task ITEM."
+  (let ((confinement (claude-queue--managed-confinement
+                      (plist-get item :root))))
+    (pcase (plist-get item :agent)
+      ('codex (claude-queue--codex-command item confinement))
+      ('opencode (claude-queue--opencode-command item confinement)))))
+
+(defun claude-queue--managed-environment (item)
+  "Environment entries the Codex or OpenCode task ITEM adds.
+CLAUDE_QUEUE_TASK names the task, whose consent territory record the
+agent's consent hook reads."
+  (cons (concat "CLAUDE_QUEUE_TASK=" (plist-get item :id))
+        (when (eq (plist-get item :agent) 'opencode)
+          (when-let* ((config (claude-queue--opencode-config
+                               (claude-queue--managed-confinement
+                                (plist-get item :root)))))
+            (list (concat "OPENCODE_CONFIG_CONTENT=" config))))))
+
+(defun claude-queue--event-session (event)
+  "Session id an agent event names, or nil.
+Codex names its thread in `thread.started'; OpenCode puts the
+session on every event."
+  (or (alist-get 'thread_id event)
+      (alist-get 'sessionID event)))
+
+(defun claude-queue--parse-event (line)
+  "LINE of an event stream as an alist, or nil when it is no JSON object."
+  (condition-case nil
+      (let ((event (json-parse-string line :object-type 'alist
+                                      :array-type 'list
+                                      :null-object nil :false-object nil)))
+        (and (consp event) event))
+    (error nil)))
+
+(defun claude-queue--managed-line (entry line)
+  "Take note of the event LINE of the task ENTRY."
+  (unless (plist-get entry :session)
+    (when-let* ((session (claude-queue--event-session
+                          (claude-queue--parse-event line))))
+      (plist-put entry :session session)
+      (claude-queue--registry-write))))
+
+(defun claude-queue--managed-filter (entry)
+  "Process filter for the task ENTRY: log output, read complete lines."
+  (let ((partial ""))
+    (lambda (_process output)
+      (write-region output nil (plist-get entry :log) t 'silent)
+      (let ((lines (split-string (concat partial output) "\n")))
+        (setq partial (car (last lines)))
+        (dolist (line (butlast lines))
+          (claude-queue--managed-line entry line))))))
+
+(defun claude-queue--managed-finished (entry process stderr)
+  "Record the end of the task ENTRY, whose PROCESS exited.
+STDERR is the buffer that collected the process's standard error."
+  (let ((status (process-exit-status process))
+        (errors (when (buffer-live-p stderr)
+                  (prog1 (with-current-buffer stderr
+                           (string-trim (buffer-string)))
+                    (kill-buffer stderr)))))
+    (plist-put entry :exit status)
+    (plist-put entry :state
+               (cond ((process-get process 'claude-queue-stopped) "stopped")
+                     ((zerop status) "done")
+                     (t "failed")))
+    (unless (or (zerop status) (string-empty-p (or errors "")))
+      (plist-put entry :error (claude-queue--truncate errors 4000)))
+    (remhash (plist-get entry :id) claude-queue--managed-processes)
+    (claude-queue--registry-write)
+    (message "claude-queue: %s task %S %s"
+             (claude-queue--agent-label (plist-get entry :agent))
+             (plist-get entry :name) (plist-get entry :state))
+    (claude-queue--redraw)
+    (claude-queue--pump)))
+
+(defun claude-queue--managed-start (item)
+  "Start the Codex or OpenCode task ITEM and record it."
+  (let* ((agent (plist-get item :agent))
+         (id (claude-queue--managed-new-id agent))
+         (queued item)
+         (item (append (list :id id) item))
+         (log (expand-file-name (concat id ".jsonl")
+                                claude-queue-log-directory))
+         (entry (list :id id
+                      :agent agent
+                      :name (plist-get item :name)
+                      :model (plist-get item :model)
+                      :root (plist-get item :root)
+                      :time (plist-get item :time)
+                      :instruction (plist-get item :instruction)
+                      :log log
+                      :session nil
+                      :state "working"
+                      :exit nil
+                      :error nil))
+         (stderr (generate-new-buffer (format " *claude-queue %s stderr*" id)))
+         (default-directory (file-name-as-directory (plist-get item :root)))
+         (process-environment (append (claude-queue--managed-environment item)
+                                      process-environment)))
+    (make-directory claude-queue-log-directory t)
+    (write-region "" nil log nil 'silent)
+    (condition-case err
+        (let ((process
+               (progn
+                 ;; Dispatch is the consent, as for a Claude task: the
+                 ;; task root is the territory.  The record exists
+                 ;; before the agent does, so its consent hook never
+                 ;; meets the task without one.  When the record cannot
+                 ;; be written the task still runs: the hook then
+                 ;; denies every write outside the root.
+                 (condition-case err
+                     (claude-consent-record-territory
+                      id (list (plist-get item :root))
+                      claude-queue-consent-deadline (plist-get item :name))
+                   (error
+                    (message "claude-queue: consent territory record failed for %s (%s); writes outside its root are denied"
+                             id (error-message-string err))))
+               (make-process
+                :name (concat "claude-queue-" id)
+                :command (claude-queue--managed-command item)
+                :connection-type 'pipe
+                :noquery t
+                :stderr stderr
+                :filter (claude-queue--managed-filter entry)
+                :sentinel (lambda (process _event)
+                            (unless (process-live-p process)
+                              (claude-queue--managed-finished
+                               entry process stderr)))))))
+          ;; Codex reads further input from a stdin that is not a
+          ;; terminal; end it so the run starts on the prompt alone.
+          (process-send-eof process)
+          (puthash id process claude-queue--managed-processes)
+          (setq claude-queue--pending (delq queued claude-queue--pending))
+          (push id claude-queue--session-ids)
+          (claude-queue--registry-add entry)
+          (message "claude-queue: dispatched %S to %s as %s"
+                   (plist-get item :name)
+                   (claude-queue--agent-label agent) id))
+      (error
+       (kill-buffer stderr)
+       (ignore-errors (claude-consent-remove-territory id))
+       (plist-put queued :status 'failed)
+       (plist-put queued :error (error-message-string err))
+       (message "claude-queue: dispatch failed for %S (RET on the row for output)"
+                (plist-get queued :name))))
+    (claude-queue--redraw)))
+
+(defun claude-queue--managed-state (entry)
+  "Display state of the Codex or OpenCode task ENTRY."
+  (let ((process (gethash (plist-get entry :id)
+                          claude-queue--managed-processes)))
+    (cond ((process-live-p process) "working")
+          ((equal (plist-get entry :state) "working") "gone")
+          (t (or (plist-get entry :state) "gone")))))
+
+(defun claude-queue--managed-row (entry)
+  "The Codex or OpenCode task ENTRY as a `claude agents' row.
+The lists and pickers read every agent through this shape.  The row
+counts as active (see `claude-queue--agent-active-p') when this
+Emacs dispatched the task."
+  `((id . ,(plist-get entry :id))
+    (name . ,(plist-get entry :name))
+    (cwd . ,(plist-get entry :root))
+    (startedAt . ,(* 1000 (or (plist-get entry :time) 0)))
+    (state . ,(claude-queue--managed-state entry))
+    (agent . ,(plist-get entry :agent))
+    (session . ,(plist-get entry :session))
+    ,@(when (member (plist-get entry :id) claude-queue--session-ids)
+        '((active . t)))))
+
+(defun claude-queue--managed-rows (&optional all)
+  "Rows of the Codex and OpenCode tasks: active ones, or ALL of them."
+  (seq-filter (lambda (row) (or all (claude-queue--agent-active-p row)))
+              (mapcar #'claude-queue--managed-row
+                      (seq-filter #'claude-queue--managed-p
+                                  (claude-queue--registry)))))
+
+(defun claude-queue--entry-agent (entry agents)
+  "The agent row of registry ENTRY: its own row for a Codex or OpenCode
+task, its row among AGENTS (a `claude agents' listing) otherwise."
+  (if (claude-queue--managed-p entry)
+      (claude-queue--managed-row entry)
+    (claude-queue--agent-by-id (plist-get entry :id) agents)))
+
+(defun claude-queue--entry-model (entry)
+  "Model column text of ENTRY: the model, after the agent for Codex
+and OpenCode tasks."
+  (let ((model (plist-get entry :model)))
+    (if (claude-queue--managed-p entry)
+        (string-join (delq nil (list (symbol-name (plist-get entry :agent))
+                                     model))
+                     " ")
+      model)))
+
+(defun claude-queue--json-text (value)
+  "VALUE, parsed from JSON, as compact text."
+  (condition-case nil
+      (json-serialize value)
+    (error (format "%S" value))))
+
+(defun claude-queue--codex-turn (event)
+  "Transcript turn (ROLE . TEXT) for the Codex EVENT, or nil."
+  (let ((item (alist-get 'item event)))
+    (pcase (alist-get 'type event)
+      ("item.completed"
+       (pcase (alist-get 'type item)
+         ("agent_message" (cons "Assistant" (alist-get 'text item)))
+         ("command_execution"
+          (cons "Command"
+                (format "%s (exit %s)\n%s"
+                        (alist-get 'command item)
+                        (alist-get 'exit_code item)
+                        (claude-queue--truncate
+                         (or (alist-get 'aggregated_output item) "") 2000))))
+         ("file_change"
+          (cons (if (equal (alist-get 'status item) "failed")
+                    "Change refused"
+                  "Changed")
+                (mapconcat (lambda (change)
+                             (format "%s %s" (alist-get 'kind change)
+                                     (alist-get 'path change)))
+                           (alist-get 'changes item) "\n")))
+         ("mcp_tool_call"
+          (cons "Tool"
+                (format "%s.%s %s\n%s"
+                        (alist-get 'server item) (alist-get 'tool item)
+                        (claude-queue--json-text (alist-get 'arguments item))
+                        (claude-queue--truncate
+                         (mapconcat (lambda (block) (or (alist-get 'text block) ""))
+                                    (alist-get 'content (alist-get 'result item))
+                                    "\n")
+                         2000))))
+         ("web_search" (cons "Search" (alist-get 'query item)))
+         ("error" (cons "Error" (alist-get 'message item)))))
+      ("turn.failed"
+       (cons "Error" (alist-get 'message (alist-get 'error event))))
+      ("error" (cons "Error" (alist-get 'message event))))))
+
+(defun claude-queue--opencode-turn (event)
+  "Transcript turn (ROLE . TEXT) for the OpenCode EVENT, or nil."
+  (let ((part (alist-get 'part event)))
+    (pcase (alist-get 'type event)
+      ("text" (cons "Assistant" (alist-get 'text part)))
+      ("tool_use"
+       (let ((state (alist-get 'state part)))
+         (cons "Tool"
+               (format "%s %s\n%s"
+                       (alist-get 'tool part)
+                       (claude-queue--json-text (alist-get 'input state))
+                       (claude-queue--truncate
+                        (let ((output (or (alist-get 'output state)
+                                          (alist-get 'error state)
+                                          "")))
+                          (if (stringp output) output
+                            (claude-queue--json-text output)))
+                        2000)))))
+      ("error"
+       (let ((failure (alist-get 'error event)))
+         (cons "Error"
+               (or (alist-get 'message (alist-get 'data failure))
+                   (alist-get 'name failure)
+                   (claude-queue--json-text failure))))))))
+
+(defun claude-queue--managed-turns (entry)
+  "Transcript turns of the Codex or OpenCode task ENTRY, oldest first.
+The instruction as the user turn, then the turns of its event log,
+then the process's error output when it failed."
+  (let ((turns (list (cons "User" (or (plist-get entry :instruction)
+                                      (plist-get entry :name)))))
+        (turn-of (if (eq (plist-get entry :agent) 'codex)
+                     #'claude-queue--codex-turn
+                   #'claude-queue--opencode-turn))
+        (log (plist-get entry :log)))
+    (when (and log (file-readable-p log))
+      (dolist (line (split-string (with-temp-buffer
+                                    (insert-file-contents log)
+                                    (buffer-string))
+                                  "\n" t))
+        (when-let* ((turn (funcall turn-of (claude-queue--parse-event line))))
+          (when (and (stringp (cdr turn)) (not (string-blank-p (cdr turn))))
+            (push turn turns)))))
+    (when-let* ((errors (plist-get entry :error)))
+      (push (cons "Error" errors) turns))
+    (nreverse turns)))
+
+(defun claude-queue--managed-show (entry)
+  "Show the transcript of the Codex or OpenCode task ENTRY."
+  (claude-queue--show-text
+   (plist-get entry :name)
+   (claude-queue--render-turns (claude-queue--managed-turns entry))
+   (plist-get entry :id)))
+
+(defun claude-queue--managed-resume-command (entry)
+  "Command line that continues the session of ENTRY in a terminal."
+  (let ((session (plist-get entry :session)))
+    (pcase (plist-get entry :agent)
+      ('codex (list claude-queue-codex-program "resume" session))
+      ('opencode (list claude-queue-opencode-program "--session" session)))))
+
+(defun claude-queue--managed-stop (entry)
+  "Stop the running process of the Codex or OpenCode task ENTRY.
+Returns the process, or nil when none runs."
+  (let ((process (gethash (plist-get entry :id)
+                          claude-queue--managed-processes)))
+    (when (process-live-p process)
+      (process-put process 'claude-queue-stopped t)
+      (signal-process process 'TERM)
+      process)))
+
+(defun claude-queue--managed-attach (entry)
+  "Continue the session of the Codex or OpenCode task ENTRY in a terminal.
+A task still running is stopped first, after confirmation: its
+headless run and the interactive session would otherwise both drive
+the one session."
+  (unless (plist-get entry :session)
+    (user-error "%s has not started a session yet" (plist-get entry :name)))
+  (when-let* ((process (gethash (plist-get entry :id)
+                                claude-queue--managed-processes)))
+    (when (process-live-p process)
+      (unless (yes-or-no-p (format "Stop the running task %S and continue its session here? "
+                                   (plist-get entry :name)))
+        (user-error "Left running"))
+      (claude-queue--managed-stop entry)
+      (with-timeout (10 (kill-process process))
+        (while (process-live-p process)
+          (accept-process-output process 0.1)))))
+  (let ((command (claude-queue--managed-resume-command entry)))
+    (claude-queue--attach-terminal (plist-get entry :id)
+                                   (car command) (cdr command)
+                                   (plist-get entry :root))))
+
 ;;; Agent listing
 
 (defun claude-queue--agents-from-json (json)
@@ -694,10 +1259,11 @@ bracketed body before parsing."
      :object-type 'alist :array-type 'list)))
 
 (defun claude-queue--agent-active-p (agent)
-  "Whether the CLI still lists AGENT as active.
+  "Whether AGENT counts as active.
 In the --all listing only agents with a live process carry `pid';
-the CLI retires the rest (sometimes prematurely)."
-  (and (alist-get 'pid agent) t))
+the CLI retires the rest (sometimes prematurely).  A Codex or
+OpenCode task is active when this Emacs dispatched it (`active')."
+  (and (or (alist-get 'pid agent) (alist-get 'active agent)) t))
 
 (defun claude-queue--agent-by-id (id agents)
   "Row of AGENTS with short id ID, or nil."
@@ -707,7 +1273,15 @@ the CLI retires the rest (sometimes prematurely)."
   "Fetch the background-agent list asynchronously, then run CALLBACK.
 
 CALLBACK receives the parsed list; the result is also cached in
-`claude-queue--agents-cache'.  On failure the stale cache is passed."
+`claude-queue--agents-cache'.  On failure the stale cache is passed,
+and a home without `claude-queue-program' passes it at once: Codex
+and OpenCode tasks need no Claude."
+  (if (not (executable-find claude-queue-program))
+      (funcall callback claude-queue--agents-cache)
+    (claude-queue--fetch-agents-process callback)))
+
+(defun claude-queue--fetch-agents-process (callback)
+  "Run `claude agents --json --all' for `claude-queue--fetch-agents'."
   (let ((buffer (generate-new-buffer " *claude-queue agents*")))
     (make-process
      :name "claude-queue-agents"
@@ -938,7 +1512,12 @@ all there is (transcript views and attach terminals of finished
 agents).  A directory that no longer exists (a removed worktree) is
 not returned.  An id absent from records and cache alike arms the
 follow tick's one-shot cache refill."
-  (or (when-let* ((record (claude-queue--record-for-id
+  (or (when-let* ((entry (claude-queue--managed-entry id))
+                  (root (plist-get entry :root)))
+        ;; Codex and OpenCode keep the directory they started in.
+        (when (file-directory-p root)
+          (file-name-as-directory root)))
+      (when-let* ((record (claude-queue--record-for-id
                            id (claude-queue--session-records))))
         (claude-queue--record-cwd record))
       (let ((agent (claude-queue--agent-by-id id claude-queue--agents-cache)))
@@ -1251,8 +1830,10 @@ snapshot; when it holds requests for AGENT's session the row reads
 PreToolUse hook waiting for an answer (`claude-consent-list'), which
 the CLI itself cannot see -- it keeps reporting working/busy."
   (let ((consent (and agent consent-pending
+                      ;; A Codex or OpenCode task asks under its session.
                       (claude-consent-session-pending-count
-                       (alist-get 'id agent) consent-pending))))
+                       (or (alist-get 'session agent) (alist-get 'id agent))
+                       consent-pending))))
     (cond
      ((null agent) "gone")
      ((and consent (> consent 0)) (format "consent ‹%d›" consent))
@@ -1310,20 +1891,28 @@ scope, also registry rows whose session is gone entirely)."
                  registry
                (seq-filter
                 (lambda (entry)
-                  (when-let* ((agent (claude-queue--agent-by-id
-                                      (plist-get entry :id) agents)))
+                  (when-let* ((agent (claude-queue--entry-agent entry agents)))
                     (claude-queue--agent-active-p agent)))
                 registry)))
             ('all
-             (mapcar (lambda (agent)
-                       (or (seq-find (lambda (entry)
-                                       (equal (plist-get entry :id)
-                                              (alist-get 'id agent)))
-                                     registry)
-                           (claude-queue--synthetic-entry agent)))
-                     (if retired
-                         agents
-                       (seq-filter #'claude-queue--agent-active-p agents)))))))
+             (append
+              (mapcar (lambda (agent)
+                        (or (seq-find (lambda (entry)
+                                        (equal (plist-get entry :id)
+                                               (alist-get 'id agent)))
+                                      registry)
+                            (claude-queue--synthetic-entry agent)))
+                      (if retired
+                          agents
+                        (seq-filter #'claude-queue--agent-active-p agents)))
+              ;; Codex and OpenCode tasks exist only in the registry.
+              (seq-filter
+               (lambda (entry)
+                 (and (claude-queue--managed-p entry)
+                      (or retired
+                          (claude-queue--agent-active-p
+                           (claude-queue--managed-row entry)))))
+               registry))))))
     (append
      (when (eq scope 'queue)
        (mapcar (lambda (item)
@@ -1338,13 +1927,12 @@ scope, also registry rows whose session is gone entirely)."
      (let ((consent-pending (ignore-errors
                               (claude-consent-pending-requests))))
        (mapcar (lambda (entry)
-                 (let ((agent (claude-queue--agent-by-id
-                               (plist-get entry :id) agents)))
+                 (let ((agent (claude-queue--entry-agent entry agents)))
                    (claude-queue--list-entry
                     entry
                     (plist-get entry :time)
                     (claude-queue--agent-display-state agent consent-pending)
-                    (plist-get entry :model)
+                    (claude-queue--entry-model entry)
                     (plist-get entry :name)
                     (or (and agent (alist-get 'cwd agent))
                         (plist-get entry :root)))))
@@ -1387,7 +1975,7 @@ also mean dispatch itself failed (RET shows the output).
   (setq tabulated-list-format
         [("When" 5 nil)
          ("State" 11 nil)
-         ("Model" 6 nil)
+         ("Model" 9 nil)
          ("Task" 50 nil)
          ("Where" 0 nil)])
   (setq tabulated-list-sort-key nil)
@@ -1615,6 +2203,8 @@ turns under sender labels; `a' in the buffer attaches to the agent."
                                (or (plist-get row :error) "(no output)")))
      ((claude-queue--row-pending-p row)
       (message "Not dispatched yet"))
+     ((claude-queue--managed-p row)
+      (claude-queue--managed-show row))
      (t
       (let ((file (claude-queue--transcript-file row)))
         (unless file
@@ -1634,40 +2224,49 @@ turns under sender labels; `a' in the buffer attaches to the agent."
          ;; forgotten it (the short-id glob fallback above).
          (file-name-base file)))))))
 
-(defun claude-queue--attach-id (id)
-  "Attach a terminal to the background agent ID.
+(defun claude-queue--attach-terminal (id program args cwd)
+  "Run PROGRAM with ARGS in a terminal for agent ID, rooted at CWD.
 
 Prefers an ad-hoc ghostel terminal (`ghostel-exec') and falls back to
-`term'.  Re-attaching while an attach buffer for ID still has a live
-process just revisits that buffer.  Attach buffers are rooted at the
-agent's live working directory and follow it under
-`claude-queue-follow-mode'."
+`term'.  While an attach buffer for ID still has a live process, this
+just revisits that buffer."
   (let* ((name (format "*claude-attach-%s*" id))
          (existing (get-buffer name)))
     (if (and existing (process-live-p (get-buffer-process existing)))
         (progn
           (claude-queue--follow-sync existing)
           (pop-to-buffer existing))
-      (let ((cwd (claude-queue--agent-cwd id)))
-        (if (fboundp 'ghostel-exec)
-            (let ((buffer (get-buffer-create name)))
-              (with-current-buffer buffer
-                (setq claude-queue--buffer-agent id)
-                (when cwd (setq default-directory cwd)))
-              ;; Display first: ghostel-exec sizes the new terminal to
-              ;; the window showing the buffer (80x24 otherwise).
-              (pop-to-buffer buffer)
-              (ghostel-exec buffer claude-queue-program (list "attach" id)))
-          (require 'term)
-          (let* ((default-directory (or cwd default-directory))
-                 (buffer (make-term (concat "claude-attach-" id)
-                                    claude-queue-program nil
-                                    "attach" id)))
+      (if (fboundp 'ghostel-exec)
+          (let ((buffer (get-buffer-create name)))
             (with-current-buffer buffer
               (setq claude-queue--buffer-agent id)
-              (term-char-mode))
-            (pop-to-buffer buffer)))
-        (claude-queue--ensure-timer)))))
+              (when cwd (setq default-directory (file-name-as-directory cwd))))
+            ;; Display first: ghostel-exec sizes the new terminal to
+            ;; the window showing the buffer (80x24 otherwise).
+            (pop-to-buffer buffer)
+            (ghostel-exec buffer program args))
+        (require 'term)
+        (let* ((default-directory (if cwd (file-name-as-directory cwd)
+                                    default-directory))
+               (buffer (apply #'make-term (concat "claude-attach-" id)
+                              program nil args)))
+          (with-current-buffer buffer
+            (setq claude-queue--buffer-agent id)
+            (term-char-mode))
+          (pop-to-buffer buffer)))
+      (claude-queue--ensure-timer))))
+
+(defun claude-queue--attach-id (id)
+  "Attach a terminal to the background agent ID.
+
+A Claude agent attaches through `claude attach'; a Codex or OpenCode
+task continues its session (`claude-queue--managed-attach').  Attach
+buffers are rooted at the agent's live working directory and follow
+it under `claude-queue-follow-mode'."
+  (if-let* ((entry (claude-queue--managed-entry id)))
+      (claude-queue--managed-attach entry)
+    (claude-queue--attach-terminal id claude-queue-program (list "attach" id)
+                                   (claude-queue--agent-cwd id))))
 
 (defun claude-queue-attach ()
   "Attach a terminal to the agent at point (see `claude-queue--attach-id')."
@@ -1701,6 +2300,15 @@ absent from a non-ALL fetch are kept, not dropped."
                                                     fresh))
                        claude-queue--agents-cache)))
         fresh))))
+
+(defun claude-queue--all-agents (&optional all)
+  "Claude background agents and Codex and OpenCode tasks, as agent rows.
+Active ones only, or every recorded one when ALL is non-nil.  Without
+a working `claude' command the Claude agents are left out."
+  (append (condition-case nil
+              (claude-queue--fetch-agents-sync all)
+            ((user-error file-missing) nil))
+          (claude-queue--managed-rows all)))
 
 (defun claude-queue--state-rank (state)
   "Attention order of display STATE: lower ranks pick first."
@@ -1774,7 +2382,7 @@ for a property-stripped string."
                                       choice))))
     (if agent
         (alist-get 'id agent)
-      (and (string-match "\\[\\([0-9a-f]+\\)\\]\\'" choice)
+      (and (string-match "\\[\\([0-9a-z-]+\\)\\]\\'" choice)
            (match-string 1 choice)))))
 
 ;;;###autoload
@@ -1782,12 +2390,14 @@ for a property-stripped string."
   "Pick a background agent in the minibuffer and attach to it.
 
 Candidates are grouped by state and annotated with working directory
-and start time; covers every background agent, not only queue-
-dispatched tasks.  With prefix argument ALL, include agents the CLI
-has retired from its active list (sometimes prematurely)."
+and start time; covers every Claude background agent, not only
+queue-dispatched tasks, and the Codex and OpenCode tasks.  With
+prefix argument ALL, include agents the CLI has retired from its
+active list (sometimes prematurely) and Codex and OpenCode tasks
+from earlier Emacs sessions."
   (interactive "P")
   (let ((candidates (claude-queue--agent-candidates
-                     (claude-queue--fetch-agents-sync all))))
+                     (claude-queue--all-agents all))))
     (unless candidates
       (user-error "No active background agents"))
     (let ((choice (completing-read
@@ -1819,14 +2429,33 @@ stamp marks the entry stale.")
   "Minibuffer history for agent description queries.")
 
 (defun claude-queue--agent-transcript-file (agent)
-  "Transcript file for AGENT (a `claude agents' row), or nil.
-Unlike `claude-queue--transcript-file' this needs no registry entry:
-the row itself carries the session id and working directory.  The
-row's cwd is *live* -- for an agent currently inside a worktree it
-differs from the starting directory the store keys transcripts by --
-so the lookup falls back to searching by session id."
-  (claude-queue--session-transcript (alist-get 'sessionId agent)
-                                    (alist-get 'cwd agent)))
+  "Transcript file for AGENT (an agent row), or nil.
+A Claude agent's transcript is found by the row's session id and
+working directory (`claude-queue--session-transcript').  A Codex or
+OpenCode task's transcript is its event log."
+  (if (alist-get 'agent agent)
+      (when-let* ((entry (claude-queue--managed-entry (alist-get 'id agent))))
+        (plist-get entry :log))
+    (claude-queue--session-transcript (alist-get 'sessionId agent)
+                                      (alist-get 'cwd agent))))
+
+(defun claude-queue--agent-key (agent)
+  "Key of AGENT's transcript in `claude-queue--embedding-table', or nil.
+The session id of a Claude agent, the task id of a Codex or OpenCode
+task."
+  (if (alist-get 'agent agent)
+      (alist-get 'id agent)
+    (alist-get 'sessionId agent)))
+
+(defun claude-queue--agent-turns (agent file)
+  "Conversation turns of AGENT, whose transcript is FILE."
+  (if (alist-get 'agent agent)
+      (when-let* ((entry (claude-queue--managed-entry (alist-get 'id agent))))
+        (claude-queue--managed-turns entry))
+    (claude-queue--conversation-turns
+     (with-temp-buffer
+       (insert-file-contents file)
+       (buffer-string)))))
 
 (defun claude-queue--transcript-stamp (file)
   "Cheap freshness stamp for transcript FILE, nil when absent."
@@ -1849,15 +2478,12 @@ head (the task statement) and the tail (the latest activity)."
    (format claude-queue-semantic-document-prefix
            (or (alist-get 'name agent) "(unnamed)"))
    (let ((file (claude-queue--agent-transcript-file agent)))
-     (if (not file)
+     (if (not (and file (file-readable-p file)))
          "(no transcript recorded)"
        (semantic-finder-clip
-        (string-join
-         (claude-queue--conversation
-          (with-temp-buffer
-            (insert-file-contents file)
-            (buffer-string)))
-         "\n\n"))))))
+        (mapconcat (lambda (turn) (format "%s: %s" (car turn) (cdr turn)))
+                   (claude-queue--agent-turns agent file)
+                   "\n\n"))))))
 
 (defun claude-queue--ensure-embeddings (agents)
   "Embed AGENTS whose transcript changed; ((AGENT . EMBEDDING) …).
@@ -1867,12 +2493,10 @@ Agents without a session id cannot be keyed (or read) and are
 dropped."
   (let* ((keyed (mapcar (lambda (agent)
                           (list agent
-                                (alist-get 'sessionId agent)
+                                (claude-queue--agent-key agent)
                                 (claude-queue--transcript-stamp
                                  (claude-queue--agent-transcript-file agent))))
-                        (seq-filter (lambda (agent)
-                                      (alist-get 'sessionId agent))
-                                    agents)))
+                        (seq-filter #'claude-queue--agent-key agents)))
          (stale (seq-remove
                  (lambda (key)
                    (let ((entry (gethash (nth 1 key)
@@ -1915,7 +2539,7 @@ prematurely) -- interactively that is `claude-queue-find-agent-all'."
   (interactive
    (list (read-string "Agent description: " nil
                       'claude-queue--description-history)))
-  (let* ((agents (claude-queue--fetch-agents-sync all))
+  (let* ((agents (claude-queue--all-agents all))
          (ranked (semantic-finder-rank
                   description
                   (claude-queue--ensure-embeddings agents)
@@ -1960,7 +2584,10 @@ list (sometimes prematurely)."
     (when (claude-queue--row-pending-p row)
       (user-error "Not dispatched; use `d' to drop it from the queue"))
     (when (yes-or-no-p (format "Stop %S? " (plist-get row :name)))
-      (make-process
+      (if (claude-queue--managed-p row)
+          (unless (claude-queue--managed-stop row)
+            (user-error "%s is not running" (plist-get row :name)))
+       (make-process
        :name "claude-queue-stop"
        :command (list claude-queue-program "stop" (plist-get row :id))
        :sentinel (lambda (process _event)
@@ -1968,13 +2595,29 @@ list (sometimes prematurely)."
                      (message "claude-queue: stop %s (exit %d)"
                               (plist-get row :id)
                               (process-exit-status process))
-                     (claude-queue--revert)))))))
+                     (claude-queue--revert))))))))
+
+(defun claude-queue--forget (entry)
+  "Drop registry ENTRY with what belongs to it alone.
+That is its consent territory record and, for a Codex or OpenCode
+task, its event log; a task still running is stopped first."
+  (when (claude-queue--managed-p entry)
+    (claude-queue--managed-stop entry)
+    (when-let* ((log (plist-get entry :log)))
+      (when (file-exists-p log)
+        (delete-file log))))
+  (claude-queue--registry-remove entry)
+  (ignore-errors
+    (claude-consent-remove-territory (plist-get entry :id))))
 
 (defun claude-queue-remove ()
   "Drop the row at point: dequeue a pending task or forget a record.
 
-Forgetting a dispatched task only removes it from this list; the
-background session itself is untouched (use `s' to stop one)."
+Forgetting a Claude task only removes it from this list; the
+background session itself is untouched (use `s' to stop one).
+Forgetting a Codex or OpenCode task also stops its process and
+deletes its event log, which is its transcript; the agent's own
+session store keeps the session."
   (interactive)
   (let ((row (claude-queue--row)))
     (cond
@@ -1982,25 +2625,28 @@ background session itself is untouched (use `s' to stop one)."
       (user-error "Not a queue-tracked task; only the CLI forgets it"))
      ((claude-queue--row-pending-p row)
       (setq claude-queue--pending (delq row claude-queue--pending)))
-     (t (claude-queue--registry-remove row)
-        (ignore-errors
-          (claude-consent-remove-territory (plist-get row :id)))))
+     ((and (claude-queue--managed-p row)
+           (equal (claude-queue--managed-state row) "working")
+           (not (yes-or-no-p (format "%S is running; stop and forget it? "
+                                     (plist-get row :name)))))
+      (user-error "Kept"))
+     (t (claude-queue--forget row)))
     (claude-queue--redraw)))
 
 (defun claude-queue-clear-done ()
-  "Forget every task whose session is done or gone."
+  "Forget every task whose session is done or gone.
+Codex and OpenCode tasks that were stopped count as done."
   (interactive)
   (dolist (entry (seq-filter
                   (lambda (entry)
                     (member (claude-queue--agent-display-state
-                             (claude-queue--agent-by-id
-                              (plist-get entry :id)
-                              claude-queue--agents-cache))
-                            '("done" "gone")))
+                             (claude-queue--entry-agent
+                              entry claude-queue--agents-cache))
+                            (if (claude-queue--managed-p entry)
+                                '("done" "gone" "stopped")
+                              '("done" "gone"))))
                   (claude-queue--registry)))
-    (claude-queue--registry-remove entry)
-    (ignore-errors
-      (claude-consent-remove-territory (plist-get entry :id))))
+    (claude-queue--forget entry))
   (claude-queue--redraw))
 
 ;;; Timer

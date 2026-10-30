@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: MIT
 #
 # A graphical Emacs, with this layer and the editor configured by Home
-# Manager, opens an OpenCode session in agent-shell inside an enrolled
+# Manager, opens an OpenCode 2 session in agent-shell inside an enrolled
 # checkout. OpenCode runs whole inside the checkout's sandbox under the
 # real srt, and talks to a mock model API that answers with a call to
 # the tool list-buffers of the Emacs MCP server. The call crosses the
 # sandbox through the socket agent-sandbox serves the bridge on, and
 # reaches the Emacs on the screen: the tool result the mock receives
-# holds that Emacs's buffer names.
+# holds that Emacs's buffer names. A reply holding a mermaid diagram
+# then shows the diagram as an image below its source.
 #
 # A terminal in the same session runs a command through `agent-sandbox
 # run`, which gives it a pseudo-terminal of its own; resizing the
@@ -72,7 +73,7 @@ pkgs.testers.runNixOSTest {
           };
           opencode = {
             enable = true;
-            package = llmAgents.opencode;
+            package = llmAgents.opencode2;
             providers = lib.mkForce { };
             settings = {
               model = "mock/mock-model";
@@ -189,5 +190,31 @@ pkgs.testers.runNixOSTest {
             timeout=60,
         )
         machine.screenshot("agent-shell")
+    with subtest("a mermaid diagram in the reply shows as an image"):
+        elisp(
+            '(progn (agent-shell-insert :text "Draw a diagram." :submit t'
+            " :shell-buffer " + shell + ") t)"
+        )
+        image = (
+            "(with-current-buffer " + shell
+            + " (seq-some (lambda (o) (and (overlay-get o (quote ch-agent-shell-mermaid))"
+            " (eq (car-safe (get-text-property 1 (quote display) (overlay-get o (quote after-string))))"
+            " (quote image))))"
+            " (overlays-in (point-min) (point-max))))"
+        )
+        try:
+            machine.wait_until_succeeds(
+                "su - alice -c " + shlex.quote("emacsclient --eval '" + image + "' | grep -x t"),
+                timeout=120,
+            )
+        except Exception:
+            print(machine.execute("su - alice -c " + shlex.quote(
+                "emacsclient --eval '(with-current-buffer " + shell
+                + " (list (buffer-substring-no-properties (max (point-min) (- (point-max) 1500)) (point-max))"
+                " (mapcar (lambda (o) (overlay-get o (quote after-string)))"
+                " (seq-filter (lambda (o) (overlay-get o (quote ch-agent-shell-mermaid)))"
+                " (overlays-in (point-min) (point-max))))))'"))[1])
+            raise
+        machine.screenshot("agent-shell-mermaid")
   '';
 }

@@ -190,10 +190,94 @@ here turns it on the first time an agent-shell buffer opens."
              (not (bound-and-true-p pixel-scroll-precision-mode)))
     (pixel-scroll-precision-mode 1)))
 
+(declare-function agent-shell-subscribe-to "agent-shell")
+(declare-function render-dwim--render-mermaid "render-dwim")
+(declare-function render-dwim--clean "render-dwim")
+
+(defcustom ch-emacs-config-agent-shell-render-mermaid t
+  "When non-nil, show mermaid diagrams in agent-shell buffers as images.
+
+When an agent's turn completes, each ```mermaid fenced block of the
+agent's messages in that turn is rendered through render-dwim and
+shown below its source; the source stays.  This works for every
+agent agent-shell runs.  Without render-dwim, or without a display
+that shows images, the source stays as text."
+  :type 'boolean
+  :group 'ch-emacs-config-agent-shell)
+
+(defvar-local ch-emacs-config-agent-shell--turn-text nil
+  "The text of the agent's messages in the current turn, as streamed.")
+
+(defun ch-emacs-config-agent-shell--mermaid-sources (markdown)
+  "The bodies of the ```mermaid fenced blocks of MARKDOWN, in order."
+  (let ((case-fold-search nil)
+        (start 0)
+        sources)
+    (while (string-match "^[ \t]*```mermaid[ \t]*\n\\(\\(?:.*\n\\)*?\\)[ \t]*```[ \t]*$"
+                         markdown start)
+      (push (match-string 1 markdown) sources)
+      (setq start (match-end 0)))
+    (nreverse sources)))
+
+(defun ch-emacs-config-agent-shell--show-mermaid (source)
+  "Show the image of mermaid SOURCE below its last occurrence in the buffer.
+agent-shell renders the fence lines of a message away, so the image
+goes after the source text itself.  A source that fails to render
+gets the error below it instead."
+  (save-excursion
+    (goto-char (point-max))
+    (when (search-backward (string-trim source) nil t)
+      (let* ((end (match-end 0))
+             (overlay (make-overlay end end))
+             (shown (condition-case err
+                        (propertize
+                         " "
+                         'display (create-image
+                                   (render-dwim--render-mermaid
+                                    (render-dwim--clean source))))
+                      (error (propertize (error-message-string err)
+                                         'face 'error)))))
+        (overlay-put overlay 'ch-agent-shell-mermaid t)
+        (overlay-put overlay 'after-string (concat "\n" shown))))))
+
+(defun ch-emacs-config-agent-shell-render-mermaid (markdown &optional buffer)
+  "Show the mermaid diagrams of MARKDOWN in agent-shell BUFFER as images.
+BUFFER defaults to the current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (when (and (require 'render-dwim nil t) (display-images-p))
+      (mapc #'ch-emacs-config-agent-shell--show-mermaid
+            (ch-emacs-config-agent-shell--mermaid-sources markdown)))))
+
+(defun ch-emacs-config-agent-shell--subscribe-mermaid ()
+  "Collect each turn's message text, and render its diagrams when it ends."
+  (when (and ch-emacs-config-agent-shell-render-mermaid
+             (fboundp 'agent-shell-subscribe-to))
+    (let ((buffer (current-buffer)))
+      (agent-shell-subscribe-to
+       :shell-buffer buffer
+       :event 'agent-message-chunk
+       :on-event (lambda (event)
+                   (when (buffer-live-p buffer)
+                     (with-current-buffer buffer
+                       (setq ch-emacs-config-agent-shell--turn-text
+                             (concat ch-emacs-config-agent-shell--turn-text
+                                     (map-elt (map-elt event :data) :text-chunk)))))))
+      (agent-shell-subscribe-to
+       :shell-buffer buffer
+       :event 'turn-complete
+       :on-event (lambda (_event)
+                   (when (buffer-live-p buffer)
+                     (with-current-buffer buffer
+                       (let ((text ch-emacs-config-agent-shell--turn-text))
+                         (setq ch-emacs-config-agent-shell--turn-text nil)
+                         (when text
+                           (ch-emacs-config-agent-shell-render-mermaid text))))))))))
+
 (defun ch-emacs-config-agent-shell--on-mode-hook ()
   "Per-buffer hook: ensure submit keys after Evil normalizes keymaps."
   (ch-emacs-config-agent-shell-setup-submit-keys)
-  (ch-emacs-config-agent-shell--maybe-enable-pixel-scroll))
+  (ch-emacs-config-agent-shell--maybe-enable-pixel-scroll)
+  (ch-emacs-config-agent-shell--subscribe-mermaid))
 
 (use-package agent-shell
   :ensure nil

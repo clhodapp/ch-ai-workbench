@@ -14,7 +14,10 @@ pair.
 ## What it adds to the editor
 
 **Agent sessions in Emacs.** `claude-queue` runs and tracks sessions,
-following a session's working directory as it moves. `agent-shell` and
+following a session's working directory as it moves. It queues tasks
+for Claude Code, Codex and OpenCode alike: a Codex or OpenCode task runs
+the agent's headless command from Emacs, with its event stream as the
+transcript and its session resumable in a terminal. `agent-shell` and
 `acp` speak to agents over their own protocols. `parenting` spawns and
 supervises child Emacs instances.
 
@@ -79,7 +82,12 @@ plain allow/deny with nobody attached falls back to the CLI's own
 prompt; mermaid blocks render in message display; and the
 `emacs-tools` skill documents the MCP tools for the agent reading them.
 Codex and OpenCode get the same MCP server and skills, and agent-shell
-starts all three agents over the Agent Client Protocol by store path.
+starts all three agents over the Agent Client Protocol by store path and
+shows the mermaid diagrams of their replies as images. A queued Codex or
+OpenCode task asks through the same spool before it writes outside its
+checkout: Codex through a `PermissionRequest` hook, OpenCode through a
+plugin. Each agent's part is switched on its own with
+`emacs-integration.agents.<agent>.enable`.
 
 ## Use it
 
@@ -134,15 +142,19 @@ session.
 The check builds the editor, whose compiled package set
 `ch-emacs-config`'s `main` pushes to the `clhodapp` cachix cache. The
 flake's `nixConfig` declares that cache and its two upstreams (the cache
-skips uploading paths they already hold), so a direct `nix flake check`
-at the same pins, run with `--accept-flake-config` or after answering
-Nix's prompt, substitutes the editor instead of native-compiling it:
+skips uploading paths they already hold). It also declares the cache
+that llm-agents publishes its builds to, which holds the Codex,
+OpenCode, sandbox-runtime and ACP adapter builds the checks run. A
+direct `nix flake check` at the same pins, run with
+`--accept-flake-config` or after answering Nix's prompt, substitutes
+all of these instead of building them:
 
 | Substituter | Public key |
 |---|---|
 | `https://clhodapp.cachix.org` | `clhodapp.cachix.org-1:EW/0conxH0OQyo0o4ub/grdkFspholmQMSnQyj0vrZI=` |
 | `https://nix-community.cachix.org` | `nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=` |
 | `https://numtide.cachix.org` | `numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=` |
+| `https://cache.numtide.com` | `niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=` |
 
 A flake that consumes this one as an input must add them to its own
 `extra-substituters` and `extra-trusted-public-keys`; Nix does not carry

@@ -396,6 +396,41 @@
 
             agentShellInit = workbenchHome.config.ch-emacs-config.emacs.bundles.agent-shell.init;
 
+            # A home that wires OpenCode into Emacs and leaves Codex out,
+            # and that has no Claude Code at all.
+            selectiveHome = inputs.home-manager.lib.homeManagerConfiguration {
+              inherit pkgs;
+              modules = [
+                inputs.ch-emacs-config.modules.homeManager.emacs
+                self.modules.homeManager.emacs
+                self.modules.homeManager.claude
+                self.modules.homeManager.codex
+                self.modules.homeManager.opencode
+                self.modules.homeManager.emacs-integration
+                {
+                  home.username = "tester";
+                  home.homeDirectory = "/home/tester";
+                  home.stateVersion = "25.05";
+                  programs.emacs.enable = true;
+                  ch-emacs-config.emacs.enable = true;
+                  ch-ai-workbench.emacs.enable = true;
+                  ch-ai-workbench.claude.enable = true;
+                  ch-ai-workbench.codex = {
+                    enable = true;
+                    package = pkgs.codex;
+                  };
+                  ch-ai-workbench.opencode = {
+                    enable = true;
+                    package = pkgs.opencode;
+                  };
+                  ch-ai-workbench.emacs-integration = {
+                    enable = true;
+                    agents.codex.enable = false;
+                  };
+                }
+              ];
+            };
+
             # A home whose Codex and OpenCode run whole inside a checkout's
             # sandbox under the real srt, against a mock model API on
             # 127.0.0.2. srt sends a sandboxed request through its proxy
@@ -413,71 +448,103 @@
             mcpRelay = pkgs.writeShellScript "emacs-mcp-relay" ''
               exec ${pkgs.socat}/bin/socat STDIO "UNIX-CONNECT:$AGENT_SANDBOX_EMACS_MCP"
             '';
+            # The consent hook for queued Codex tasks, as emacs-integration
+            # declares it.
+            codexConsentHook = workbench.mkCodexConsentHook {
+              inherit pkgs;
+              claude-consent = claudeConsent;
+            };
             agentsHome = inputs.home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
-              modules = [
-                self.modules.homeManager.agent-sandbox
-                self.modules.homeManager.codex
-                self.modules.homeManager.opencode
-                {
-                  home.username = "tester";
-                  home.homeDirectory = "/build/home";
-                  home.stateVersion = "25.05";
-                  ch-ai-workbench.agent-sandbox = {
-                    enable = true;
-                    runtime.claudePackage = pkgs.hello;
-                    runtime.sandboxRuntimePackage = llmAgents.sandbox-runtime;
-                    # The stand-in of the Emacs bridge, served from
-                    # outside the sandbox.
-                    emacsMcpCommand = [
-                      (lib.getExe pkgs.python3)
-                      "${self}/tests/agent-sandbox/fake-mcp.py"
-                    ];
-                    modules.mock = {
-                      description = "the mock model API";
-                      allowedDomains = [ "127.0.0.2:${toString mockPort}" ];
-                    };
-                  };
-                  ch-ai-workbench.codex = {
-                    enable = true;
-                    package = llmAgents.codex;
-                    mcpServers.emacs = {
-                      command = "${mcpRelay}";
-                      envVars = [ "AGENT_SANDBOX_EMACS_MCP" ];
-                    };
-                    settings = {
-                      model = "mock-model";
-                      model_provider = "mock";
-                      approval_policy = "never";
-                      model_providers.mock = {
-                        name = "mock";
-                        base_url = mockBase;
-                        env_key = "MOCK_API_KEY";
-                        wire_api = "responses";
-                      };
-                    };
-                  };
-                  ch-ai-workbench.opencode = {
-                    enable = true;
-                    package = llmAgents.opencode;
-                    mcpServers.emacs.command = "${mcpRelay}";
-                    providers = lib.mkForce { };
-                    settings = {
-                      model = "mock/mock-model";
-                      provider.mock = {
-                        npm = "@ai-sdk/openai-compatible";
-                        name = "mock";
-                        options = {
-                          baseURL = mockBase;
-                          apiKey = "mock";
-                        };
-                        models.mock-model.name = "mock-model";
-                      };
-                    };
-                  };
-                }
+              modules = agentsHomeModules;
+            };
+            # The same home with OpenCode 2.
+            agentsHome2 = inputs.home-manager.lib.homeManagerConfiguration {
+              inherit pkgs;
+              modules = agentsHomeModules ++ [
+                { ch-ai-workbench.opencode.package = lib.mkForce llmAgents.opencode2; }
               ];
             };
+            agentsHomeModules = [
+              # The consent plugin for the OpenCode version the home
+              # runs, as emacs-integration declares it.
+              (
+                { config, ... }:
+                {
+                  ch-ai-workbench.opencode.plugins.workbench-consent = workbench.mkOpencodeConsentPlugin {
+                    inherit pkgs lib;
+                    claude-consent = claudeConsent;
+                    version = lib.getVersion config.ch-ai-workbench.opencode.package;
+                  };
+                }
+              )
+              self.modules.homeManager.agent-sandbox
+              self.modules.homeManager.codex
+              self.modules.homeManager.opencode
+              {
+                home.username = "tester";
+                home.homeDirectory = "/build/home";
+                home.stateVersion = "25.05";
+                ch-ai-workbench.agent-sandbox = {
+                  enable = true;
+                  runtime.claudePackage = pkgs.hello;
+                  runtime.sandboxRuntimePackage = llmAgents.sandbox-runtime;
+                  # The stand-in of the Emacs bridge, served from
+                  # outside the sandbox.
+                  emacsMcpCommand = [
+                    (lib.getExe pkgs.python3)
+                    "${self}/tests/agent-sandbox/fake-mcp.py"
+                  ];
+                  modules.mock = {
+                    description = "the mock model API";
+                    allowedDomains = [ "127.0.0.2:${toString mockPort}" ];
+                  };
+                };
+                ch-ai-workbench.codex = {
+                  enable = true;
+                  package = llmAgents.codex;
+                  mcpServers.emacs = {
+                    command = "${mcpRelay}";
+                    envVars = [ "AGENT_SANDBOX_EMACS_MCP" ];
+                  };
+                  hooks.PermissionRequest = [
+                    {
+                      command = lib.getExe codexConsentHook;
+                      timeout = 3600;
+                    }
+                  ];
+                  settings = {
+                    model = "mock-model";
+                    model_provider = "mock";
+                    approval_policy = "never";
+                    model_providers.mock = {
+                      name = "mock";
+                      base_url = mockBase;
+                      env_key = "MOCK_API_KEY";
+                      wire_api = "responses";
+                    };
+                  };
+                };
+                ch-ai-workbench.opencode = {
+                  enable = true;
+                  package = llmAgents.opencode;
+                  mcpServers.emacs.command = "${mcpRelay}";
+                  providers = lib.mkForce { };
+                  settings = {
+                    model = "mock/mock-model";
+                    provider.mock = {
+                      npm = "@ai-sdk/openai-compatible";
+                      name = "mock";
+                      options = {
+                        baseURL = mockBase;
+                        apiKey = "mock";
+                      };
+                      models.mock-model.name = "mock-model";
+                    };
+                  };
+                };
+              }
+            ];
           in
           {
             checks = {
@@ -784,6 +851,27 @@
               # package set, and the whole activation resolves.
               home-manager-module = workbenchHome.activationPackage;
 
+              # Each agent's Emacs integration is switched on its own:
+              # OpenCode gets the MCP server, the consent plugin, its
+              # agent-shell command and its queue command, and Codex,
+              # switched off, gets none of them.
+              emacs-integration-selective =
+                let
+                  home = selectiveHome.config;
+                  bundles = home.ch-emacs-config.emacs.bundles;
+                in
+                assert home.ch-ai-workbench.opencode.mcpServers ? emacs;
+                assert home.ch-ai-workbench.opencode.plugins ? workbench-consent;
+                assert lib.hasInfix "agent-shell-opencode-acp-command" bundles.agent-shell.init;
+                assert lib.hasInfix "claude-queue-opencode-program" bundles.claude-queue.init;
+                assert !(home.ch-ai-workbench.codex.mcpServers ? emacs);
+                assert home.ch-ai-workbench.codex.hooks == { };
+                assert !(lib.hasInfix "agent-shell-openai-codex-acp-command" bundles.agent-shell.init);
+                assert !(lib.hasInfix "claude-queue-codex" bundles.claude-queue.init);
+                # Without Claude Code, plain dispatch goes to OpenCode.
+                assert lib.hasInfix "(setq claude-queue-default-agent 'opencode)" bundles.claude-queue.init;
+                selectiveHome.activationPackage;
+
               # The codex command of the full home declares the MCP server
               # `emacs`, which runs the bridge from the home-manager
               # profile. The home that selects the codex module alone
@@ -872,9 +960,11 @@
                     ];
                     codex = lib.getExe agentsHome.config.programs.codex.package;
                     opencode = lib.getExe agentsHome.config.programs.opencode.package;
-                    opencode2 = lib.getExe llmAgents.opencode2;
-                    opencodeLayer = agentsHome.config.programs.opencode.package.workbenchLayer;
+                    opencode2 = lib.getExe agentsHome2.config.programs.opencode.package;
+                    opencodePlugin = agentsHome.config.ch-ai-workbench.opencode.plugins.workbench-consent;
+                    opencodePlugin2 = agentsHome2.config.ch-ai-workbench.opencode.plugins.workbench-consent;
                     codexSettings = agentsHome.config.home.activation.codexSettings.data;
+                    opencodePluginDependencies = agentsHome.config.home.activation.opencodePluginDependencies.data;
                     agentSandboxConfig = "${agentsHome.config.home-files}/.config/agent-sandbox";
                   }
                   ''
@@ -886,6 +976,8 @@
                     cp -r "$agentSandboxConfig" "$HOME/.config/agent-sandbox"
                     run() { "$@"; }
                     eval "$codexSettings"
+                    eval "$opencodePluginDependencies"
+                    test -d "$XDG_CONFIG_HOME/opencode/node_modules"
 
                     python3 ${self}/tests/agent-sandbox/mock-inference.py 127.0.0.2 ${toString mockPort} "$TMPDIR/requests.jsonl" &
                     for _ in $(seq 50); do
@@ -916,13 +1008,35 @@
                     test "$(cat "$FAKE_MCP_MARKS")" = "$root"
                     jq -e -s 'map(select(.path | endswith("/chat/completions"))) | length >= 2' "$TMPDIR/requests.jsonl"
 
-                    # OpenCode 2, with the same declared settings, reaches the
-                    # MCP server through its Code Mode tool `execute`, once
-                    # the server has connected (the mock retries).
+                    # OpenCode 2, through the opencode module's own command,
+                    # reaches the MCP server through its Code Mode tool
+                    # `execute`, once the server has connected (the mock
+                    # retries).
                     rm "$FAKE_MCP_MARKS"
-                    OPENCODE_CONFIG="$opencodeLayer" OPENCODE_DISABLE_CLAUDE_CODE=1 timeout 300 \
-                      agent-sandbox run opencode -- "$opencode2" run --auto 'Call the tool mark.' < /dev/null
+                    timeout 300 "$opencode2" run --auto 'Call the tool mark.' < /dev/null
                     test "$(cat "$FAKE_MCP_MARKS")" = "$root"
+
+                    # claude-queue dispatches Codex and OpenCode tasks to the
+                    # same commands, here and in a checkout that is not
+                    # enrolled, where writes outside the root ask this Emacs.
+                    # Codex's workspace-write sandbox also opens TMPDIR, so
+                    # the tasks get a TMPDIR of their own, apart from the
+                    # outside directory.
+                    cd "$TMPDIR"
+                    git init -q plain
+                    mkdir outside task-tmp
+                    rm "$FAKE_MCP_MARKS"
+                    plain=$TMPDIR/plain outside=$TMPDIR/outside taskTmp=$TMPDIR/task-tmp
+                    TMPDIR="$taskTmp" \
+                    CQA_CODEX="$codex" CQA_OPENCODE="$opencode" CQA_OPENCODE2="$opencode2" \
+                    CQA_PLUGIN="$opencodePlugin" CQA_PLUGIN2="$opencodePlugin2" \
+                    CQA_PLUGIN_DIR="$XDG_CONFIG_HOME/opencode/plugin" \
+                    CQA_ENROLLED="$root" CQA_PLAIN="$plain" CQA_OUTSIDE="$outside" \
+                    CQA_REQUESTS="$PWD/requests.jsonl" \
+                      ${emacs}/bin/emacs --batch \
+                        -L ${claudeQueueSrc} -L ${semanticFinderSrc} \
+                        -l ${self}/tests/agent-sandbox/claude-queue-agents.el
+                    test "$(sort -u "$FAKE_MCP_MARKS")" = "$root"
                     touch $out
                   '';
 

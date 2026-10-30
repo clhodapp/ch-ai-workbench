@@ -121,7 +121,7 @@ jobs:
       # cannot expand it.
       CI_CACHE: /home/runner/ci-cache
       # Caches whose paths are left out of the entry, space-separated.
-      UPSTREAM_CACHES: https://cache.nixos.org
+      UPSTREAM_CACHES: https://cache.nixos.org https://cache.numtide.com
     outputs:
       head: ${{ steps.target.outputs.head }}
     steps:
@@ -185,6 +185,10 @@ jobs:
             # The restored cache. Its paths carry no signatures; `trusted`
             # accepts them from this store alone.
             extra-substituters = file://${{ env.CI_CACHE }}?trusted=true
+            # The cache llm-agents publishes its builds to: Codex, OpenCode,
+            # sandbox-runtime and the ACP adapters.
+            extra-substituters = https://cache.numtide.com
+            extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
 
       # Configures the clhodapp cache as a substituter. A public cache
       # needs no credentials to read, and this run carries none: nothing
