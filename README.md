@@ -29,6 +29,17 @@ command that clients register once and keeps working across updates.
 and frames by an embedding of what they contain, bound to the `?` key in
 each leader namespace as the semantic sibling of the `/` literal layer.
 
+**Claude in pull request reviews.** `gh-review-claude` joins
+`gh-review` from the editor: opening a pull request starts a read-only
+Claude review of it, in a worktree at its head, that answers whether it
+is safe to merge. The blockers and follow-ups of the verdict are drawn
+under the lines they name, questions asked from a line continue the
+same review, and `!` turns the verdict into an action: merge or approve
+what is safe, send fixes or follow-ups back to the conversation that
+opened the pull request, or start a new one. The `pr-origin` hook
+records which session created which pull request, on this machine
+only, so that conversation can be found.
+
 **Review threads.** `collab-comments` holds comment threads on shared
 text, so a person and an agent can leave each other notes in place.
 

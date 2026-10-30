@@ -32,6 +32,17 @@
         inherit (final) mkLocalBuild semantic-finder;
         version = final.epkgs.emacs.version or "0";
       };
+      # gh-review is the editor's own package; this layer adds the
+      # Claude side of a review on top of it.
+      gh-review-claude = final.epkgs.callPackage ./emacs-packages/gh-review-claude {
+        inherit (final)
+          mkLocalBuild
+          gh-review
+          claude-queue
+          semantic-finder
+          ;
+        version = final.epkgs.emacs.version or "0";
+      };
     })
   ];
 }

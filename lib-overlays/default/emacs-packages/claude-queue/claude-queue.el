@@ -664,6 +664,32 @@ for a model or an agent instead."
                (length claude-queue--pending)))))
 
 ;;;###autoload
+(defun claude-queue-submit (prompt root &rest options)
+  "Queue a Claude Code background agent on PROMPT from the directory ROOT.
+For packages that compose a whole task themselves: PROMPT is the
+complete instruction, and the standing conduct every dispatch
+carries is appended to it.  The task goes to Claude Code whatever
+`claude-queue-default-agent' says.  OPTIONS is a plist: :name is the
+display name, derived from PROMPT when absent; :model is the model,
+`claude-queue-default-model' when absent.  Return the queued item."
+  (let ((item (list :status 'queued
+                    :agent 'claude
+                    :instruction prompt
+                    :prompt (concat prompt "\n\n" claude-queue--conduct "\n")
+                    :name (or (plist-get options :name)
+                              (claude-queue--derive-name prompt nil))
+                    :model (or (plist-get options :model)
+                               claude-queue-default-model)
+                    :root (file-name-as-directory (expand-file-name root))
+                    :time (float-time)
+                    :error nil)))
+    (setq claude-queue--pending
+          (append claude-queue--pending (list item)))
+    (claude-queue--ensure-timer)
+    (claude-queue--pump)
+    item))
+
+;;;###autoload
 (defun claude-queue-dispatch-model ()
   "Like `claude-queue-dispatch', but pick the model first.
 
@@ -2267,6 +2293,49 @@ it under `claude-queue-follow-mode'."
       (claude-queue--managed-attach entry)
     (claude-queue--attach-terminal id claude-queue-program (list "attach" id)
                                    (claude-queue--agent-cwd id))))
+
+(defun claude-queue-session-live-p (session-id)
+  "Whether a running process hosts the session SESSION-ID."
+  (and (claude-queue--record-for-id session-id (claude-queue--session-records))
+       t))
+
+(defun claude-queue-attach-session (session-id)
+  "Attach a terminal to the running session SESSION-ID; return its buffer.
+An agent id is the first 8 hex digits of the session id, so the
+attach goes through `claude-queue--attach-id' with that prefix."
+  (let ((id (substring session-id 0 (min 8 (length session-id)))))
+    (claude-queue--attach-id id)
+    (get-buffer (format "*claude-attach-%s*" id))))
+
+(defun claude-queue-resume-session (session-id directory &optional prompt)
+  "Reopen the session SESSION-ID in a terminal running from DIRECTORY.
+The CLI finds a session only from the directory it last worked in,
+so DIRECTORY must be that one.  PROMPT, when given, is the first
+new message.  The session runs interactively in the terminal, where
+its permission prompts are answered.  Return the terminal buffer."
+  (let* ((id (substring session-id 0 (min 8 (length session-id))))
+         (name (format "*claude-resume-%s*" id))
+         (args (append (list "--resume" session-id)
+                       (when prompt (list prompt))))
+         (default-directory (file-name-as-directory directory)))
+    (if (fboundp 'ghostel-exec)
+        (let ((buffer (get-buffer-create name)))
+          (with-current-buffer buffer
+            (setq claude-queue--buffer-agent id)
+            (setq default-directory (file-name-as-directory directory)))
+          ;; Display first: ghostel-exec sizes the new terminal to
+          ;; the window showing the buffer (80x24 otherwise).
+          (pop-to-buffer buffer)
+          (ghostel-exec buffer claude-queue-program args)
+          buffer)
+      (require 'term)
+      (let ((buffer (apply #'make-term (concat "claude-resume-" id)
+                           claude-queue-program nil args)))
+        (with-current-buffer buffer
+          (setq claude-queue--buffer-agent id)
+          (term-char-mode))
+        (pop-to-buffer buffer)
+        buffer))))
 
 (defun claude-queue-attach ()
   "Attach a terminal to the agent at point (see `claude-queue--attach-id')."

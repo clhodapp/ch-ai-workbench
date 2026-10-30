@@ -1451,5 +1451,43 @@ by their bracketed id."
          (should (equal "oc-12ab34cd" (claude-queue--choice-id choice nil)))
          (should (equal "done" (claude-queue--candidate-group (car candidates) nil))))))))
 
+;;; Programmatic entry points
+
+(ert-deftest claude-queue-submit-queues-composed-prompt ()
+  "A submitted task carries the conduct and its root, and is pumped."
+  (let ((claude-queue--pending nil)
+        (claude-queue-default-agent 'codex)
+        (pumped 0))
+    (cl-letf (((symbol-function 'claude-queue--ensure-timer) #'ignore)
+              ((symbol-function 'claude-queue--pump)
+               (lambda () (setq pumped (1+ pumped)))))
+      (let ((item (claude-queue-submit "Fix the parser" "/tmp/repo"
+                                       :name "parser fix" :model "opus")))
+        (should (equal (list item) claude-queue--pending))
+        (should (eq (plist-get item :status) 'queued))
+        ;; Submitted tasks go to Claude Code even when Codex is the default.
+        (should (eq (plist-get item :agent) 'claude))
+        (should (equal (plist-get item :root) "/tmp/repo/"))
+        (should (equal (plist-get item :model) "opus"))
+        (should (equal (plist-get item :name) "parser fix"))
+        (should (string-prefix-p "Fix the parser\n\n" (plist-get item :prompt)))
+        (should (string-search "result:" (plist-get item :prompt)))
+        (should (= pumped 1))))))
+
+(ert-deftest claude-queue-submit-derives-name ()
+  (let ((claude-queue--pending nil))
+    (cl-letf (((symbol-function 'claude-queue--ensure-timer) #'ignore)
+              ((symbol-function 'claude-queue--pump) #'ignore))
+      (let ((item (claude-queue-submit (make-string 100 ?y) "/tmp")))
+        (should (<= (length (plist-get item :name)) 64))
+        (should (equal (plist-get item :model) claude-queue-default-model))))))
+
+(ert-deftest claude-queue-session-live-p-by-record ()
+  (cl-letf (((symbol-function 'claude-queue--session-records)
+             (lambda () '(((sessionId . "0123abcd-1111-2222-3333-444455556666")
+                           (pid . 1))))))
+    (should (claude-queue-session-live-p "0123abcd-1111-2222-3333-444455556666"))
+    (should-not (claude-queue-session-live-p "ffffffff-1111-2222-3333-444455556666"))))
+
 (provide 'claude-queue-ert)
 ;;; claude-queue-ert.el ends here
