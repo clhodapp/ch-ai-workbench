@@ -142,15 +142,19 @@ session.
 The check builds the editor, whose compiled package set
 `ch-emacs-config`'s `main` pushes to the `clhodapp` cachix cache. The
 flake's `nixConfig` declares that cache and its two upstreams (the cache
-skips uploading paths they already hold), so a direct `nix flake check`
-at the same pins, run with `--accept-flake-config` or after answering
-Nix's prompt, substitutes the editor instead of native-compiling it:
+skips uploading paths they already hold). It also declares the cache
+that llm-agents publishes its builds to, which holds the Codex,
+OpenCode, sandbox-runtime and ACP adapter builds the checks run. A
+direct `nix flake check` at the same pins, run with
+`--accept-flake-config` or after answering Nix's prompt, substitutes
+all of these instead of building them:
 
 | Substituter | Public key |
 |---|---|
 | `https://clhodapp.cachix.org` | `clhodapp.cachix.org-1:EW/0conxH0OQyo0o4ub/grdkFspholmQMSnQyj0vrZI=` |
 | `https://nix-community.cachix.org` | `nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=` |
 | `https://numtide.cachix.org` | `numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=` |
+| `https://cache.numtide.com` | `niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=` |
 
 A flake that consumes this one as an input must add them to its own
 `extra-substituters` and `extra-trusted-public-keys`; Nix does not carry
