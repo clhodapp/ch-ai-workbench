@@ -31,9 +31,11 @@ pkgs.testers.runNixOSTest {
   nodes.machine =
     { ... }:
     {
+      # Path concatenation, not interpolation: "${pkgs.path}/..." would
+      # copy the whole nixpkgs tree into the store to build each path.
       imports = [
-        "${pkgs.path}/nixos/tests/common/user-account.nix"
-        "${pkgs.path}/nixos/tests/common/x11.nix"
+        (pkgs.path + "/nixos/tests/common/user-account.nix")
+        (pkgs.path + "/nixos/tests/common/x11.nix")
         home-manager.nixosModules.home-manager
       ];
       virtualisation.memorySize = 4096;
