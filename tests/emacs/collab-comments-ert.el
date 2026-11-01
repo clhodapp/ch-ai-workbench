@@ -17,8 +17,7 @@
 
 (package-activate-all)
 
-(unless (featurep 'ch-emacs-config-default)
-  (require 'ch-emacs-config-default))
+(require 'nemacs-init)
 
 (require 'collab-comments)
 (require 'mcp-server-lib)

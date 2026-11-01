@@ -5,10 +5,9 @@
 # from the composed library (`closure-lib.ch-ai-workbench` in a module,
 # `lib.ch-ai-workbench` in the flake configuration), so each value has
 # one definition and the directory layout of this repository stays
-# internal. The files sit beside this overlay, which owns them: the
-# bundle spec reads the init files next to it, the local-package
-# overlays build the Emacs packages next to them, and the hook builders
-# read their scripts next to them.
+# internal. The files sit beside this overlay, which owns them: the init
+# files of the bundles, the Emacs packages, and the scripts the hook
+# builders read.
 { ... }:
 {
 
@@ -16,22 +15,19 @@
 
   overlay = _final: prev: {
     ch-ai-workbench = (prev.ch-ai-workbench or { }) // {
-      # This layer's bundles in the shape the editor's `bundles` option
-      # takes, grouped by the module that defines them (`emacs`,
-      # `gptel`, `claude`). Each module defines its own group on that
-      # option; the checks build an Emacs carrying every group.
-      bundleSpec = import ./bundle-spec.nix;
+      # The init files of this layer's bundles, by file name. The nemacs
+      # modules `emacs`, `gptel` and `claude` define the bundles.
+      initFiles = builtins.mapAttrs (name: _: ./inits + "/${name}") (builtins.readDir ./inits);
 
-      # The in-tree Emacs packages this layer adds, as overlays over the
-      # editor's package scope, grouped the same way. Each module feeds
-      # its group to the editor's `localPackageOverlays`; the checks
-      # feed every group to the package scope.
-      localPackageOverlays = import ./local-packages.nix;
+      # The in-tree Emacs packages this layer adds, as an overlay on the
+      # editor's nemacs package set (`final: prev:`), built with its
+      # `nemacsBuild`. The nemacs module `emacs` applies it.
+      emacsPackages = import ./emacs-packages;
 
       # The two Emacs packages this layer builds from plain source
-      # inputs (collab-comments, parenting), as an override of the
-      # editor's Emacs package set. It takes the two source trees; the
-      # emacs module passes its closure's and the checks their own.
+      # inputs (collab-comments, parenting), as an overlay on the
+      # editor's nemacs package set. It takes the two source trees,
+      # which the nemacs module `emacs` takes from its closure inputs.
       mkEmacsPackageOverrides =
         { collab-comments, parenting }:
         self: _super: {

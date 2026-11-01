@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-{ mkLocalBuild, version }:
-mkLocalBuild {
+{ nemacsBuild, version }:
+nemacsBuild {
   pname = "semantic-finder";
   inherit version;
   packageRequires = [ ];

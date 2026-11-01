@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 {
-  mkLocalBuild,
+  nemacsBuild,
   version,
   gh-review,
   claude-queue,
   semantic-finder,
 }:
-mkLocalBuild {
+nemacsBuild {
   pname = "gh-review-claude";
   inherit version;
   packageRequires = [

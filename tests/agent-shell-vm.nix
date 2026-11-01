@@ -50,13 +50,12 @@ pkgs.testers.runNixOSTest {
       home-manager.users.alice = {
         imports = homeModules;
         home.stateVersion = "25.05";
-        programs.emacs.enable = true;
         programs.git.enable = true;
         ch-emacs-config.emacs.enable = true;
         # The test starts the Emacs daemon itself, on the X display. The
         # managed daemon rotates at activation, which at boot runs before
         # the runtime directory of the user exists.
-        ch-emacs-config.emacs.bundles.daemon.enable = false;
+        programs.nemacs.settings.bundles.daemon.enable = false;
         ch-ai-workbench = {
           emacs.enable = true;
           claude.enable = true;

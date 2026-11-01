@@ -19,8 +19,7 @@
 
 (package-activate-all)
 
-(unless (featurep 'ch-emacs-config-default)
-  (require 'ch-emacs-config-default))
+(require 'nemacs-init)
 
 (require 'mcp-server-lib)
 
@@ -675,7 +674,7 @@ the child."
       (progn
         (should (equal "3" (ch-mcp-server--eval-elisp "(+ 1 2)")))
         (should (equal "t" (ch-mcp-server--eval-elisp
-                            "(featurep 'ch-emacs-config-default)")))
+                            "(featurep 'nemacs-init)")))
         ;; A value with no readable form still prints, in the child.
         (should (string-prefix-p "#<buffer"
                                  (ch-mcp-server--eval-elisp "(current-buffer)")))
@@ -1774,7 +1773,7 @@ suffix the completion alist would resolve both to the newer one."
 eglot-ensure; the unhooking must stay in the form the child evaluates."
   (should (eq (car ch-mcp-server--child-bootstrap) 'progn))
   (let ((text (format "%S" ch-mcp-server--child-bootstrap)))
-    (should (string-match-p "ch-emacs-config-default" text))
+    (should (string-match-p "nemacs-init" text))
     (should (string-match-p "eglot-ensure" text))))
 
 (defun ch-mcp-tests--bwrap-usable-p ()
@@ -1800,7 +1799,7 @@ ensure returns the same connection; stop leaves nothing live."
           (should (parenting-connection-live-p conn))
           (should (equal 3 (parenting-eval conn '(+ 1 2))))
           (should (eq t (parenting-eval
-                         conn '(featurep 'ch-emacs-config-default))))
+                         conn '(featurep 'nemacs-init))))
           (should-not (parenting-eval
                        conn '(memq 'eglot-ensure nix-ts-mode-hook)))
           (should (eq t (parenting-eval

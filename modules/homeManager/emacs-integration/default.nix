@@ -233,7 +233,8 @@ in
       description = ''
         Where the cwd hook finds `emacsclient`. `null` means the Nix
         profile, which is right whenever Emacs is in the profile, by
-        `programs.emacs` or by `home.packages`. Set it when emacsclient
+        `programs.emacs`, `programs.nemacs` or `home.packages`. Set it
+        when emacsclient
         comes from somewhere else.
       '';
     };
@@ -295,7 +296,7 @@ in
         ];
       })
       (lib.optionalAttrs (options.ch-ai-workbench ? emacs) {
-        ch-emacs-config.emacs.bundles = lib.mkIf config.ch-ai-workbench.emacs.enable (
+        programs.nemacs.settings.bundles = lib.mkIf config.ch-ai-workbench.emacs.enable (
           lib.optionalAttrs (acpInit != "") { agent-shell.init = lib.mkAfter acpInit; }
           // lib.optionalAttrs (queueInit != "" && (config.ch-ai-workbench.claude.enable or false)) {
             claude-queue.init = lib.mkAfter queueInit;
@@ -330,12 +331,16 @@ in
       {
         assertions = [
           {
-            assertion = cfg.emacsclientPath != null || config.programs.emacs.enable;
+            assertion =
+              cfg.emacsclientPath != null
+              || config.programs.emacs.enable
+              || (config.programs.nemacs.enable or false);
             message = ''
               ch-ai-workbench.emacs-integration needs emacsclient, and
               the hooks fail open, so without it the integration installs
-              and silently does nothing. Either enable programs.emacs, or
-              set emacsclientPath to where emacsclient lives.
+              and silently does nothing. Either enable programs.emacs or
+              programs.nemacs, or set emacsclientPath to where emacsclient
+              lives.
             '';
           }
           # The skill documents the MCP server's tools and the session hooks

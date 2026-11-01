@@ -4,21 +4,14 @@
 # bundles, and the choice of backend and model they start on. Stands on
 # the editor alone; it does not need the vendor-neutral module beside
 # it.
-{ closure-inputs, closure-lib, ... }:
+{ closure-lib, ... }:
 {
   config,
   lib,
-  pkgs,
   ...
 }:
 let
   cfg = config.ch-ai-workbench.gptel;
-
-  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
-
-  # The bundle spec comes from this layer's library, so the modules and
-  # the checks read one definition.
-  workbench = closure-lib.ch-ai-workbench;
 in
 {
   options.ch-ai-workbench.gptel = {
@@ -52,29 +45,19 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    ch-emacs-config.emacs.bundles = lib.mkMerge [
-      # `enable` is wrapped here rather than in the spec: the spec is also
-      # read as plain data by the checks, where a priority wrapper is not
-      # a boolean. mkDefault so a consumer can switch a bundle off.
-      (lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
-        (workbench.bundleSpec {
-          inherit lib merman;
-          betterleaks = pkgs.betterleaks;
-        }).gptel
-      )
+    programs.nemacs.settings = {
+      imports = [ closure-lib.caisson.libManifest.modules.nemacs.gptel ];
       # The backend and model choices, set on the variables the gptel
       # init declares for them. Appended to that bundle's own init, so
       # they are in the same file as the declarations (the byte compiler
       # sees them) and run at load, before gptel's deferred config reads
       # them.
-      {
-        gptel.init = lib.mkAfter (
-          lib.concatStringsSep "\n" (
-            lib.optional (cfg.backend != null) "(setq ch-emacs-config-gptel-default-backend '${cfg.backend})"
-            ++ lib.optional (cfg.model != null) "(setq ch-emacs-config-gptel-default-model '${cfg.model})"
-          )
-        );
-      }
-    ];
+      bundles.gptel.init = lib.mkAfter (
+        lib.concatStringsSep "\n" (
+          lib.optional (cfg.backend != null) "(setq ch-emacs-config-gptel-default-backend '${cfg.backend})"
+          ++ lib.optional (cfg.model != null) "(setq ch-emacs-config-gptel-default-model '${cfg.model})"
+        )
+      );
+    };
   };
 }

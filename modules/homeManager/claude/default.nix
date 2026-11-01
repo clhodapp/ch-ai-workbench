@@ -12,7 +12,7 @@
 # The Claude Code CLI itself (hooks, skills, the LSP plugin) is the
 # claude-code module; the hooks and skill that let a session drive this
 # Emacs are emacs-integration.
-{ closure-inputs, closure-lib, ... }:
+{ closure-lib, ... }:
 {
   config,
   lib,
@@ -22,16 +22,10 @@
 let
   cfg = config.ch-ai-workbench.claude;
 
-  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
-
-  # The bundle spec and the local packages come from this layer's
-  # library, so the modules and the checks read one definition.
-  workbench = closure-lib.ch-ai-workbench;
-
-  # The editor's package scope, read from its module rather than rebuilt:
-  # the bridge below is built against the same Emacs the editor
-  # configures, or it loads into a different one than it compiled for.
-  editorScope = config.ch-emacs-config.emacs.build.packageScope;
+  # What the editor's nemacs configuration builds. The bridge below takes
+  # its script from the editor's own package set, so it matches the
+  # mcp-server-lib the editor loads.
+  editor = config.programs.nemacs.settings.build;
 
   # The MCP stdio bridge: a stable command MCP clients register through
   # the home-manager profile, ~/.nix-profile/bin/emacs-mcp-stdio (the
@@ -50,7 +44,7 @@ let
   mcpStdioBridge = pkgs.writeShellApplication {
     name = "emacs-mcp-stdio";
     runtimeInputs = [
-      config.programs.emacs.finalPackage
+      editor.package
       pkgs.coreutils
       pkgs.socat
     ];
@@ -58,7 +52,7 @@ let
       if [ -n "''${SANDBOX_RUNTIME:-}" ] && [ -n "''${AGENT_SANDBOX_EMACS_MCP:-}" ]; then
         exec socat STDIO "UNIX-CONNECT:$AGENT_SANDBOX_EMACS_MCP"
       fi
-      bridge=(${editorScope.epkgs.mcp-server-lib}/share/emacs/site-lisp/elpa/mcp-server-lib-*/emacs-mcp-stdio.sh)
+      bridge=(${editor.epkgs.mcp-server-lib}/share/emacs/site-lisp/elpa/mcp-server-lib-*/emacs-mcp-stdio.sh)
       exec bash "''${bridge[0]}" \
         --init-function=ch-mcp-server-start \
         --server-id=emacs \
@@ -83,17 +77,7 @@ in
       }
     ];
 
-    ch-emacs-config.emacs.localPackageOverlays = workbench.localPackageOverlays.claude;
-
-    # `enable` is wrapped here rather than in the spec: the spec is also
-    # read as plain data by the checks, where a priority wrapper is not
-    # a boolean. mkDefault so a consumer can switch a bundle off.
-    ch-emacs-config.emacs.bundles =
-      lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault bundle.enable; })
-        (workbench.bundleSpec {
-          inherit lib merman;
-          betterleaks = pkgs.betterleaks;
-        }).claude;
+    programs.nemacs.settings.imports = [ closure-lib.caisson.libManifest.modules.nemacs.claude ];
 
     home.packages = [ mcpStdioBridge ];
   };
