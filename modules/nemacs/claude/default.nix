@@ -5,12 +5,13 @@
 # reach the editor through. It builds on the nemacs module `emacs`,
 # whose packages it needs (claude-queue depends on semantic-finder, and
 # the MCP server's comment tools on collab-comments).
-{ closure-inputs, closure-lib, ... }:
+{ closure-lib, ... }:
 { lib, pkgs, ... }:
 let
   readInit = name: builtins.readFile closure-lib.ch-ai-workbench.initFiles.${name};
 
-  merman = closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
+  merman =
+    closure-lib.caisson.dependencies.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview;
 in
 {
   bundles = lib.mapAttrs (_name: bundle: bundle // { enable = lib.mkDefault true; }) {
