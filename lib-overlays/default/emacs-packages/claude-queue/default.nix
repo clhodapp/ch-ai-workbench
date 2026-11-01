@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 {
-  mkLocalBuild,
+  nemacsBuild,
   version,
   semantic-finder,
 }:
-mkLocalBuild {
+nemacsBuild {
   pname = "claude-queue";
   inherit version;
   packageRequires = [ semantic-finder ];

@@ -10,6 +10,14 @@
   imports = [ inputs.flake-parts.flakeModules.partitions ];
 
   debug = false;
+  caisson.modules.nemacs.exported = modules: {
+    inherit (modules)
+      emacs
+      gptel
+      claude
+      ;
+  };
+
   caisson.modules.homeManager.exported = modules: {
     inherit (modules)
       emacs
@@ -71,45 +79,32 @@
           let
             merman = inputs.merman-nix.packages.${system}.merman-preview;
 
-            # An Emacs carrying both layers' bundles, built the way the
-            # editor builds its own check Emacs: the ERT suites below run
+            # An Emacs carrying both layers' bundles: the editor's nemacs
+            # module and every nemacs module of this layer, the modules a
+            # real configuration imports. The ERT suites below run
             # `--batch` against the full init, so the packages must be in
             # the init package's closure rather than merely installed
             # into a profile.
-            scope = closure-lib.ch-emacs-config.mkEmacsScope {
-              inherit pkgs;
-              lib = pkgs.lib;
-              emacsPackage = pkgs.ch-emacs-config.emacs-pgtk;
-              bundles = closure-lib.ch-emacs-config.bundleSpec // workbenchBundles;
-              sources = {
-                # Through the editor rather than a second input, so both
-                # layers build these from one revision. The list mirrors
-                # the editor module's own `emacsPackageSources`.
-                inherit (inputs.ch-emacs-config.inputs) pr-review ghostel;
-              };
-              extraOverrides = [
-                (workbench.mkEmacsPackageOverrides { inherit (inputs) collab-comments parenting; })
-              ];
-              localPackageOverlays = workbenchLocalPackages;
-            };
+            nemacsModules = closure-lib.caisson.libManifest.modules.nemacs;
+            # nemacs through the editor rather than a second input, so the
+            # checks evaluate with the nemacs revision the editor's Home
+            # Manager module imports.
+            emacs =
+              (inputs.ch-emacs-config.inputs.nemacs.lib.nemacs.evalNemacs {
+                inherit pkgs;
+                modules = [
+                  nemacsModules."ch-emacs-config/default"
+                  nemacsModules.emacs
+                  nemacsModules.gptel
+                  nemacsModules.claude
+                  {
+                    key = "ch-ai-workbench.checks.package";
+                    package = pkgs.ch-emacs-config.emacs-pgtk;
+                  }
+                ];
+              }).config.build.package;
 
-            emacs = scope.emacs;
-
-            # This layer's bundle spec and local packages, from its
-            # library, so the checks and a real configuration read one
-            # definition. Every group at once: the ERT suites below need
-            # the whole layer in one Emacs.
             workbench = closure-lib.ch-ai-workbench;
-            workbenchBundles = lib.foldl' (acc: group: acc // group) { } (
-              lib.attrValues (
-                workbench.bundleSpec {
-                  inherit lib;
-                  merman = inputs.merman-nix.packages.${system}.merman-preview;
-                  betterleaks = pkgs.betterleaks;
-                }
-              )
-            );
-            workbenchLocalPackages = lib.concatLists (lib.attrValues workbench.localPackageOverlays);
 
             aiCommitSrc = workbench.emacsPackageSources.ai-commit;
             claudeQueueSrc = workbench.emacsPackageSources.claude-queue;
@@ -342,7 +337,6 @@
                   home.username = "tester";
                   home.homeDirectory = "/home/tester";
                   home.stateVersion = "25.05";
-                  programs.emacs.enable = true;
                   # The claude-code module contributes global git
                   # excludes; with git enabled the check evaluates
                   # that file too.
@@ -397,7 +391,7 @@
                   "codexSettings"
                 ];
 
-            agentShellInit = workbenchHome.config.ch-emacs-config.emacs.bundles.agent-shell.init;
+            agentShellInit = workbenchHome.config.programs.nemacs.settings.bundles.agent-shell.init;
 
             # A home that wires OpenCode into Emacs and leaves Codex out,
             # and that has no Claude Code at all.
@@ -414,7 +408,6 @@
                   home.username = "tester";
                   home.homeDirectory = "/home/tester";
                   home.stateVersion = "25.05";
-                  programs.emacs.enable = true;
                   ch-emacs-config.emacs.enable = true;
                   ch-ai-workbench.emacs.enable = true;
                   ch-ai-workbench.claude.enable = true;
@@ -861,7 +854,7 @@
               emacs-integration-selective =
                 let
                   home = selectiveHome.config;
-                  bundles = home.ch-emacs-config.emacs.bundles;
+                  bundles = home.programs.nemacs.settings.bundles;
                 in
                 assert home.ch-ai-workbench.opencode.mcpServers ? emacs;
                 assert home.ch-ai-workbench.opencode.plugins ? workbench-consent;

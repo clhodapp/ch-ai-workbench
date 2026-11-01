@@ -2089,7 +2089,7 @@ replaced after a switch.  Falls back to `invocation-directory' when
 the library is not found.  The child runs the same Emacs binary as
 the parent (parenting's :emacs default), so the two share one package
 set."
-  (let ((library (locate-library "ch-emacs-config-default")))
+  (let ((library (locate-library "nemacs-init")))
     (if library
         (file-name-directory library)
       invocation-directory)))
@@ -2097,7 +2097,7 @@ set."
 (defconst ch-mcp-server--child-bootstrap
   '(progn
      (package-activate-all)
-     (require 'ch-emacs-config-default)
+     (require 'nemacs-init)
      (when (fboundp 'eglot-ensure)
        (mapatoms (lambda (sym)
                    (when (and (boundp sym)
