@@ -42,6 +42,10 @@
  * - Abstract scope: connects to abstract sockets created outside the
  *   domain are refused (EPERM); the allowlist cannot name them and the
  *   kernel has no per-name rule for them.
+ * - REFER: explicitly allowed at / in every enforced layer.
+ *   Landlock otherwise denies cross-directory rename/link with EXDEV
+ *   even though this shim only intends to restrict socket resolution.
+ *   This grant cannot override another sandbox's filesystem restrictions.
  *
  * Listed paths that do not exist are skipped with a warning: skipping is
  * strictly narrower, and an absent socket cannot be connected to anyway.
@@ -65,6 +69,7 @@
 
 #define SHIM_CREATE_RULESET_VERSION (1U << 0)
 #define SHIM_RULE_PATH_BENEATH 1
+#define SHIM_ACCESS_FS_REFER (1ULL << 13)
 #define SHIM_ACCESS_FS_RESOLVE_UNIX (1ULL << 16)
 #define SHIM_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0)
 
@@ -200,9 +205,19 @@ int main(int argc, char **argv) {
     die("execvp");
   }
 
+  /* REFER is denied implicitly by filesystem rulesets, even when omitted
+   * from handled_access_fs. Preserve the caller's ordinary rename/link
+   * permissions instead of accidentally treating directories as devices.
+   * Include scope-only layers too: otherwise a descendant filesystem
+   * ruleset can activate their implicit REFER denial. Every enforceable
+   * mode above needs ABI >= 6, so REFER (ABI 2) is available here. */
+  attr.handled_access_fs |= SHIM_ACCESS_FS_REFER;
+
   int ruleset_fd =
       (int)syscall(SHIM_NR_landlock_create_ruleset, &attr, sizeof(attr), 0);
   if (ruleset_fd < 0) die("create_ruleset");
+
+  add_path_rule(ruleset_fd, "/", SHIM_ACCESS_FS_REFER);
 
   if (want_sock && can_sock)
     for (int a = 0; a < n_sock; a++)

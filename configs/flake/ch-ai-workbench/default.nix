@@ -547,12 +547,25 @@
             checks = {
               # The sandbox's packages: building the CLI runs its
               # unittest suite, the plugin assembles the skills-dir
-              # tree, and compiling the shim is its build-time test
-              # (Landlock cannot be exercised inside the Nix build
-              # sandbox).
+              # tree. The shim checks sockets at build time and tests
+              # filesystem compatibility in an independent guest kernel.
               agent-sandbox = self.packages.${system}.agent-sandbox;
               agent-sandbox-plugin = self.packages.${system}.agent-sandbox-plugin;
               landlock-shim = self.packages.${system}.landlock-shim;
+              landlock-shim-vm = pkgs.testers.runNixOSTest {
+                name = "landlock-shim";
+                nodes.machine = {
+                  boot.kernelPackages = pkgs.linuxPackages_latest;
+                  virtualisation.memorySize = 1024;
+                  environment.systemPackages = [ pkgs.python3 ];
+                };
+                testScript = ''
+                  machine.start()
+                  machine.succeed("python3 ${self}/pkg-overlays/default/packages/landlock-shim/test_shim.py ${
+                    self.packages.${system}.landlock-shim
+                  }/bin/landlock-shim --require-pathname -v")
+                '';
+              };
               # Building the judge client runs its unittest suite against
               # stub System One servers.
               claude-response-judge = self.packages.${system}.claude-response-judge;

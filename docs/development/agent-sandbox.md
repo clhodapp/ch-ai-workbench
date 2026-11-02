@@ -272,6 +272,18 @@ copy. The launcher snapshots its passwd/group identity into read-only
 binds, so homed/userdb accounts work without opening the user-management
 socket to sandboxed commands.
 
+The socket ruleset explicitly handles and allows `REFER` at `/`.
+Landlock otherwise denies cross-directory rename and hard-link operations
+with `EXDEV`, even when a ruleset only requests socket restrictions. This
+preserves filesystem permissions established by the surrounding sandbox;
+it does not make a read-only or denied path writable. The shim's kernel
+tests cover chat-file moves, atomic symlink publication, directory moves,
+hard links, and continued socket denial.
+Scope-only layers also handle and allow `REFER`, so a later filesystem
+ruleset cannot activate an implicit denial inherited from our shim. The
+full suite runs in `landlock-shim-vm`: Nix itself installs an enclosing
+scope-only ruleset whose inherited denial cannot be relaxed by a build.
+
 Approval policy is `on-request`: commands within the generated policy
 run normally, and requests beyond it still require approval. This does
 not grant approval to MCP tools; their own annotations, approval
