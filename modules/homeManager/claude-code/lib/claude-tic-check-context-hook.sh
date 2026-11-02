@@ -9,13 +9,8 @@
 # model's context beside the prompt; nothing is shown to the user.  A
 # verdict with nothing to report, a missing file, no runtime dir, or a
 # jq failure resolves to abstention (exit 0, no output).
-#
-# A prompt starts a turn the Stop hook will judge, so this hook first
-# starts the judge's on-demand server (tic_wake_endpoints from
-# tic-check-wake.sh), which then loads while the turn runs.
 
 payload=$(cat) || exit 0
-tic_wake_endpoints
 
 store=$(tic_verdict_path "$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null)") || exit 0
 [ -f "$store" ] || exit 0

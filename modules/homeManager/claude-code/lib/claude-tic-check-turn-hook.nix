@@ -27,7 +27,6 @@ pkgs.writeShellApplication {
     judge=${pkgs.writeText "claude-tic-check-judge.json" (builtins.toJSON judge)}
     ${builtins.readFile ./tic-check-match.sh}
     ${builtins.readFile ./tic-check-verdict-path.sh}
-    ${builtins.readFile ./tic-check-wake.sh}
     ${builtins.readFile ./claude-tic-check-turn-hook.sh}
   '';
 }
