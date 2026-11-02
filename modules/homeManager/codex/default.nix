@@ -287,7 +287,12 @@ in
         ch-ai-workbench.agent-sandbox = lib.mkIf config.ch-ai-workbench.agent-sandbox.enable {
           modules.codex = {
             description = "Codex itself: its package, CODEX_HOME and OpenAI's hosts";
-            toolset = [ cfg.package ];
+            # The pid-managed shared server invokes ps to record the
+            # identity of its child after spawning it.
+            toolset = [
+              cfg.package
+              pkgs.procps
+            ];
             readStore = true;
             allowWrite = [ codexHome ];
             allowedDomains = [

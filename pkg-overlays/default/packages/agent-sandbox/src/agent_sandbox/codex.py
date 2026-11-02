@@ -41,7 +41,36 @@ def check_native_config(root: Path, env: dict[str, str]) -> None:
                             "permission profile; remove sandbox_mode/sandbox_workspace_write before launching")
 
 
-def configuration(settings: dict[str, Any], root: Path, scratch: Path) -> dict[str, Any]:
+def git_write_paths(root: Path, filesystem: dict[str, Any]) -> list[str]:
+    """Reopen Git metadata only within the enrollment's existing grants.
+
+    Worktrees and submodules use a .git pointer and may share a common
+    directory. A pointer must never turn enrollment into an external
+    filesystem grant. Explicit read/write guards remain authoritative.
+    """
+    entry = root / ".git"
+    guarded = [Path(p).resolve() for key in ("denyWrite", "denyRead")
+               for p in filesystem.get(key) or []]
+    if any(entry.resolve().is_relative_to(base) for base in guarded):
+        return []
+    targets = [entry]
+    metadata = entry
+    if entry.is_file():
+        pointer = entry.read_text().strip()
+        if pointer.startswith("gitdir:"):
+            metadata = (root / pointer[len("gitdir:"):].strip()).resolve()
+            targets.append(metadata)
+            common = metadata / "commondir"
+            if common.is_file():
+                targets.append((metadata / common.read_text().strip()).resolve())
+    writable = [Path(p).resolve() for p in filesystem.get("allowWrite") or []]
+    return [str(p) for p in targets
+            if any(p.resolve().is_relative_to(base) for base in writable)
+            and not any(p.resolve().is_relative_to(base) for base in guarded)]
+
+
+def configuration(settings: dict[str, Any], root: Path, scratch: Path,
+                  *, git_write: bool = False) -> dict[str, Any]:
     """Map srt-shaped grants to a native permission profile, refusing
     grants whose meaning Codex cannot preserve."""
     fs = settings["filesystem"]
@@ -52,6 +81,8 @@ def configuration(settings: dict[str, Any], root: Path, scratch: Path) -> dict[s
             if any(c in path for c in "*?["):
                 raise ToolError(f"Codex native sandbox cannot preserve this {key} glob: {path}")
             paths[path] = access
+    if git_write:
+        paths.update(dict.fromkeys(git_write_paths(root, fs), "write"))
     # Runtime policy and wrappers must stay immutable even if a module
     # grants a broader directory, such as /run/user/UID.
     paths[str(scratch.parent)] = "read"
@@ -96,11 +127,12 @@ def config_args(config: dict[str, Any]) -> list[str]:
 
 
 def prepare_native(settings: dict[str, Any], root: Path, scratch: Path,
-                   base: dict[str, Any], env: dict[str, str]) -> list[str]:
+                   base: dict[str, Any], env: dict[str, str],
+                   *, git_write: bool = False) -> list[str]:
     """Write this launch's policy and bwrap entry point, and return its
     native config overrides. The same file configures codex-acp's child."""
     check_native_config(root, env)
-    config = configuration(settings, root, scratch)
+    config = configuration(settings, root, scratch, git_write=git_write)
     config["shell_environment_policy"] = {"set": {
         **{k: v for k, v in env.items() if k.startswith("AGENT_SANDBOX_")},
         "PATH": env["PATH"], "SHELL": base["shell"], "SANDBOX_RUNTIME": "1",

@@ -247,7 +247,14 @@ its generated `agent-sandbox` permission profile; the ACP `CODEX_PATH`
 child reads the same file through `agent-sandbox codex-exec`.
 Filesystem read/write grants, store masks, and write guards map into
 native filesystem rules. The profile extends `:workspace`, preserving
-Codex's metadata guards, but replaces the ambient `/tmp` write grant
+Codex's metadata guards. A chosen module can set `allowGit = true` to
+override the `.git` write guard for normal repository operations. This
+also resolves worktree/submodule Git pointers and their common directory,
+but only reopens metadata inside the already-composed write grants;
+explicit read/write guards still win. Dependencies inherit the same grant,
+so a GitHub module requiring the Git module needs no duplicate setting.
+The `.agents`, `.codex`, and `.aws` guards remain in effect.
+The profile replaces the ambient `/tmp` write grant
 with the run's private scratch directory. The policy and wrapper
 directory stay read-only to commands. Allowed and denied domains map
 to the native network proxy, which is explicitly enabled; an empty
@@ -257,6 +264,11 @@ composed PATH and grants for each command. `TMPDIR` and zsh's
 heredoc temporary files. Login shells and shell
 snapshots are disabled so startup files and old proxy environments do
 not replace those grants.
+
+The Codex module includes `procps` on its composed PATH: the pid-managed
+shared server invokes `ps` after spawning its child to record process
+identity. This dependency is needed even though the trusted parent runs
+outside the command sandbox.
 
 The per-run `bwrap` entry point forwards native capability probes and
 recognizes the final `--apply-seccomp-then-exec` stage. It leaves
@@ -508,6 +520,7 @@ by nobody, and tools that check the ownership of their configuration
     modules = {
       git = {
         description = "git over https and ssh to GitHub";
+        allowGit = true;
         toolset = [ pkgs.git pkgs.openssh ];
         allowedDomains = [ "github.com" "*.github.com" ];
       };

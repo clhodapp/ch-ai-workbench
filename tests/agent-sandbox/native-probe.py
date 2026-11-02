@@ -17,7 +17,21 @@ heredoc = subprocess.run(["zsh", "-f", "-c", "cat <<'EOF'\nheredoc works\nEOF\n"
                          capture_output=True, text=True)
 assert heredoc.returncode == 0, heredoc.stderr
 assert heredoc.stdout == "heredoc works\n", heredoc.stdout
+# Exercise both the workspace repository and submodule metadata, which
+# lives under the enclosing .git/modules directory.
+for directory in (root, root / "child"):
+    (directory / "git-write-probe").write_text("allowed")
+    for args in (["add", "git-write-probe"],
+                 ["-c", "user.name=Sandbox test", "-c", "user.email=sandbox@example.invalid",
+                  "commit", "-qm", "sandbox write probe"],
+                 ["update-ref", "refs/remotes/origin/probe", "HEAD"]):
+        result = subprocess.run(["git", "-C", str(directory), *args], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+# The shared server's process-identity check requires ps on the same PATH.
+identity = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "pid="], capture_output=True, text=True)
+assert identity.returncode == 0 and int(identity.stdout.strip()) == os.getpid(), identity.stderr
 for path in (Path("/build/home/outside"), root / ".agent-sandbox/binding.json",
+             root / ".agents/guard-probe", root / ".codex/guard-probe", root / ".aws/guard-probe",
              Path(os.environ["AGENT_SANDBOX_CODEX_POLICY"])):
     try:
         with path.open("a") as target:

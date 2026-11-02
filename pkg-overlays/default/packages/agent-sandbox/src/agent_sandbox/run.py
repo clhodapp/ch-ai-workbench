@@ -61,7 +61,7 @@ import tty
 from pathlib import Path
 from typing import Any
 
-from .compose import SOCKETS_ENV_VAR, compose
+from .compose import SOCKETS_ENV_VAR, compose, resolve
 from .files import ToolError, find_repo_root, migrate_checkout, migrate_state, read_sidecar, write_text_atomic
 from .registry import load_part, load_registry
 
@@ -284,7 +284,10 @@ def prepare(
         from .codex import prepare_native
 
         try:
-            args = prepare_native(settings, root, scratch, base, env)
+            git_write = any(part.get("allowGit", False) for part in resolve(
+                registry, [*sidecar["modules"], *(agent.get("modules") or [])]
+            ).values())
+            args = prepare_native(settings, root, scratch, base, env, git_write=git_write)
         except Exception:
             if server is not None:
                 server.close()

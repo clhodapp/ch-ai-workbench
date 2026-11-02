@@ -492,12 +492,18 @@
                   ];
                   modules.mock = {
                     description = "the mock model API";
+                    requires = [ "git" ];
                     toolset = [
                       pkgs.python3
                       pkgs.zsh
                     ];
                     # Codex's native domain policies are host-scoped.
                     allowedDomains = [ "127.0.0.2" ];
+                  };
+                  modules.git = {
+                    description = "Git repository writes";
+                    toolset = [ pkgs.git ];
+                    allowGit = true;
                   };
                 };
                 ch-ai-workbench.codex = {
@@ -1010,6 +1016,12 @@
                     cd repo
                     root=$PWD
                     export MOCK_API_KEY=mock FAKE_MCP_MARKS="$TMPDIR/marks" OPENCODE_DISABLE_MODELS_FETCH=1
+
+                    git init -q ../child-source
+                    git -C ../child-source -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm initial
+                    git -c protocol.file.allow=always submodule add -q ../child-source child
+                    mkdir -p .agents .codex .aws
+                    touch .agents/guard-probe .codex/guard-probe .aws/guard-probe
 
                     python3 -c 'import socket,time; s=socket.socket(socket.AF_UNIX); s.bind("/build/home/forbidden.sock"); s.listen(); time.sleep(600)' &
                     for _ in $(seq 50); do

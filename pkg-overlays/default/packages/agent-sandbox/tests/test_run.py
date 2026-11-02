@@ -167,6 +167,17 @@ class RunTest(unittest.TestCase):
         self.assertEqual(env["CODEX_PATH"], "/bin/native-child")
         self.assertTrue(Path(env["AGENT_SANDBOX_CODEX_POLICY"]).is_file())
 
+    def test_git_metadata_permission_follows_module_dependencies(self):
+        base = {**RUN_BASE, "cli": "/bin/agent-sandbox", "landlock": "/bin/landlock"}
+        work = {**WORK, "requires": ["git"]}
+        write_registry(self.config, {"work": work, "git": {**WORK, "allowGit": True},
+                                     "agent": self.agent_part}, base=base,
+                       extra={**EXTRA, "agents": {"codex": {"backend": "codex", "modules": ["agent"]}}})
+        self.enroll("work")
+        _, env, _ = prepare("codex", ["/bin/codex"], self.root, False)
+        fs = json.loads(Path(env["AGENT_SANDBOX_CODEX_POLICY"]).read_text())["config"]["permissions"]["agent-sandbox"]["filesystem"]
+        self.assertEqual(fs[str(self.root / ".git")], "write")
+
     def test_terminal_runs_through_setsid(self):
         cmd = sandboxed_command(["/bin/a", "x"], {}, {}, RUN_BASE, True)
         self.assertEqual(cmd, ["/nix/store/util-linux/bin/setsid", "-w", "-c", "/bin/a", "x"])

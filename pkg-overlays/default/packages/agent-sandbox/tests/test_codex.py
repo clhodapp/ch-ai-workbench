@@ -55,6 +55,36 @@ class CodexTest(unittest.TestCase):
         self.assertEqual(net["domains"]["blocked.github.com"], "deny")
         self.assertEqual(net["unix_sockets"], {"/run/nix.sock": "allow"})
 
+    def test_git_override_is_opt_in_and_keeps_explicit_guards(self):
+        self.assertNotIn(str(self.root / ".git"),
+                         configuration(self.settings, self.root, self.scratch)["permissions"]["agent-sandbox"]["filesystem"])
+        fs = configuration(self.settings, self.root, self.scratch, git_write=True)["permissions"]["agent-sandbox"]["filesystem"]
+        self.assertEqual(fs[str(self.root / ".git")], "write")
+        self.assertEqual(fs[str(self.root / ".agent-sandbox/binding.json")], "read")
+        self.settings["filesystem"]["denyWrite"].append(str(self.root / ".git"))
+        fs = configuration(self.settings, self.root, self.scratch, git_write=True)["permissions"]["agent-sandbox"]["filesystem"]
+        self.assertNotEqual(fs.get(str(self.root / ".git")), "write")
+
+    def test_git_pointer_only_reopens_metadata_with_existing_write_grants(self):
+        metadata = self.root / "metadata/worktree"
+        metadata.mkdir(parents=True)
+        (metadata / "commondir").write_text("..\n")
+        (self.root / ".git").write_text("gitdir: metadata/worktree\n")
+        fs = configuration(self.settings, self.root, self.scratch, git_write=True)["permissions"]["agent-sandbox"]["filesystem"]
+        self.assertEqual(fs[str(metadata)], "write")
+        # The common dir is not necessarily a .git directory; resolve
+        # the Git pointer rather than assuming a checkout layout.
+        self.assertEqual(fs[str(metadata.parent)], "write")
+        outside = Path(self.tmp.name) / "other-repo"
+        outside.mkdir()
+        (self.root / ".git").write_text(f"gitdir: {outside}\n")
+        fs = configuration(self.settings, self.root, self.scratch, git_write=True)["permissions"]["agent-sandbox"]["filesystem"]
+        self.assertNotIn(str(outside), fs)
+        (self.root / ".git").unlink()
+        (self.root / ".git").symlink_to(outside, target_is_directory=True)
+        fs = configuration(self.settings, self.root, self.scratch, git_write=True)["permissions"]["agent-sandbox"]["filesystem"]
+        self.assertNotIn(str(self.root / ".git"), fs)
+
     def test_no_domains_means_no_network(self):
         self.settings["network"] = {}
         config = configuration(self.settings, self.root, self.scratch)

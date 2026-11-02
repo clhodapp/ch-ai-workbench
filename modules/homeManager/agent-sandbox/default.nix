@@ -387,6 +387,7 @@ let
           excludedCommands
           allowAllUnixSockets
           devices
+          allowGit
           ;
         masked = !(module.allowNix || module.readStore);
         # What the module puts on PATH, for the people and agents that
@@ -795,6 +796,16 @@ let
           execution in other contexts, so scope narrowly.
         '';
       };
+      allowGit = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Allow Git metadata writes within already-writable paths. For
+          Codex this overrides the inherited workspace .git write guard;
+          explicit filesystem guards still apply. This does not grant
+          access to Git directories outside the composed write grants.
+        '';
+      };
       allowedDomains = lib.mkOption {
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
@@ -1047,6 +1058,7 @@ in
         {
           git = {
             description = "git over https and ssh to GitHub";
+            allowGit = true;
             toolset = [ pkgs.git pkgs.openssh ];
             allowedDomains = [ "github.com" "*.github.com" ];
           };
