@@ -245,6 +245,15 @@ The launcher writes a per-run `codex.json` under
 `$XDG_RUNTIME_DIR/agent-sandbox/run-<pid>/`. CLI config overrides select
 its generated `agent-sandbox` permission profile; the ACP `CODEX_PATH`
 child reads the same file through `agent-sandbox codex-exec`.
+The persistent Codex settings also register `agent-sandbox` as a read-only
+fallback so the shared server can list it in `/permissions`. The catalog
+RPC reads persistent configuration, not a launcher's CLI overrides.
+Reselecting the profile on an enrolled thread reuses that thread's
+original overrides and restores its compiled grants. Outside enrollment,
+the catalog entry grants no writes or command networking. No checkout's
+paths, sockets, or network allowlist are published into the global entry.
+Declaring profiles requires an explicit persistent default; it is the
+built-in `:workspace`, overridden by every enrolled launch.
 Filesystem read/write grants, store masks, and write guards map into
 native filesystem rules. The profile extends `:workspace`, preserving
 Codex's metadata guards. A chosen module can set `allowGit = true` to

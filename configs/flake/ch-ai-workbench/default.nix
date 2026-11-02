@@ -901,6 +901,19 @@
               # what they hold; Codex and OpenCode then report the MCP
               # server `emacs` that emacs-integration declares for them,
               # and agent-shell starts each agent by store path.
+              codex-profile-catalog =
+                pkgs.runCommand "codex-profile-catalog"
+                  {
+                    nativeBuildInputs = [ pkgs.python3 ];
+                    codex = lib.getExe agentsHome.config.ch-ai-workbench.codex.package;
+                  }
+                  ''
+                    export HOME="$TMPDIR/home"
+                    mkdir -p "$HOME"
+                    python3 ${self}/tests/agent-sandbox/profile-catalog.py "$codex"
+                    touch "$out"
+                  '';
+
               agent-config-home =
                 assert lib.hasInfix "agent-shell-anthropic-claude-acp-command" agentShellInit;
                 assert lib.hasInfix "agent-shell-openai-codex-acp-command" agentShellInit;
@@ -931,6 +944,15 @@
 
                     grep -q '^# chosen with /model$' "$HOME/.codex/config.toml"
                     grep -q '^trust_level = "trusted"$' "$HOME/.codex/config.toml"
+                    ${lib.getExe pkgs.python3} -c '
+                    import pathlib, os, tomllib
+                    settings = tomllib.loads(pathlib.Path(os.environ["HOME"], ".codex/config.toml").read_text())
+                    profile = settings["permissions"]["agent-sandbox"]
+                    assert profile["extends"] == ":read-only"
+                    assert set(profile["filesystem"].values()) == {"read"}
+                    assert profile["network"]["enabled"] is False
+                    assert settings["default_permissions"] == ":workspace"
+                    '
                     CODEX_HOME="$HOME/.codex" "$codex" mcp get emacs --json \
                       | jq -e '.transport.command == "/home/tester/.nix-profile/bin/emacs-mcp-stdio"'
 
