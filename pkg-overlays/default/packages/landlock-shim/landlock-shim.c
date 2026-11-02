@@ -10,6 +10,7 @@
  *                            sockets created outside the domain are
  *                            denied. ABI 9 (RESOLVE_UNIX) and ABI 6
  *                            (abstract scope) respectively.
+ *   --restrict-sockets       enforce even an empty socket allowlist.
  *   --socket-fallback MODE   what to do when the kernel cannot enforce
  *                            the socket allowlist: "open" (default)
  *                            warns once and leaves sockets as upstream
@@ -91,7 +92,7 @@ static void die(const char *msg) {
 static void usage(void) {
   fprintf(stderr,
           "usage: landlock-shim [--allow PATH]... "
-          "[--socket-fallback open|closed] -- CMD [ARGS...]\n");
+          "[--restrict-sockets] [--socket-fallback open|closed] -- CMD [ARGS...]\n");
   exit(2);
 }
 
@@ -124,11 +125,14 @@ int main(int argc, char **argv) {
   const char *sock_paths[MAX_PATHS];
   int n_sock = 0;
   int fallback_closed = 0;
+  int restrict_sockets = 0;
   int i = 1;
   for (; i < argc; i++) {
     if (strcmp(argv[i], "--allow") == 0 && i + 1 < argc) {
       if (n_sock >= MAX_PATHS) usage();
       sock_paths[n_sock++] = argv[++i];
+    } else if (strcmp(argv[i], "--restrict-sockets") == 0) {
+      restrict_sockets = 1;
     } else if (strcmp(argv[i], "--socket-fallback") == 0 && i + 1 < argc) {
       const char *mode = argv[++i];
       if (strcmp(mode, "closed") == 0)
@@ -152,7 +156,7 @@ int main(int argc, char **argv) {
     /* No Landlock at all (kernel too old or LSM disabled). Narrowing
      * is impossible; either refuse (sockets requested, closed policy)
      * or run the command with upstream's enforcement alone. */
-    if (n_sock > 0 && fallback_closed) {
+    if ((n_sock > 0 || restrict_sockets) && fallback_closed) {
       fprintf(stderr,
               "landlock-shim: Landlock unavailable and socket fallback is "
               "closed; refusing to run\n");
@@ -166,7 +170,7 @@ int main(int argc, char **argv) {
   }
 
   struct shim_ruleset_attr attr = {0};
-  int want_sock = n_sock > 0;
+  int want_sock = n_sock > 0 || restrict_sockets;
   int can_sock = abi >= ABI_RESOLVE_UNIX;
   int can_scope = abi >= ABI_ABSTRACT_SCOPE;
 

@@ -24,7 +24,7 @@ python3Packages.buildPythonApplication {
   '';
 
   meta = {
-    description = "Nix-authored per-project configuration for Claude Code's native sandbox";
+    description = "Nix-authored per-project sandbox policies for coding agents";
     license = lib.licenses.mit;
     mainProgram = "agent-sandbox";
   };

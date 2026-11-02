@@ -106,6 +106,23 @@ let
   # falls through to real ssh unchanged, so it is inert there.
   sshWrapper = pkgs.writeShellScriptBin "ssh" ''
     real=${cfg.runtime.opensshPackage}/bin/ssh
+    transport=()
+    if [ -n "''${AGENT_SANDBOX_CODEX_POLICY:-}" ]; then
+      # OpenSSH does not consume HTTP_PROXY. Codex's isolated network
+      # namespace reaches approved hosts through this local CONNECT proxy.
+      proxy=''${HTTPS_PROXY:-''${HTTP_PROXY:-}}
+      authority=''${proxy#http://}
+      host=''${authority%:*}
+      port=''${authority##*:}
+      case "$host" in
+        localhost|127.0.0.1) ;;
+        *) echo "agent-sandbox: native SSH requires its loopback HTTP proxy" >&2; exit 2 ;;
+      esac
+      case "$port" in
+        ""|*[!0-9]*) echo "agent-sandbox: invalid native SSH proxy port" >&2; exit 2 ;;
+      esac
+      transport=(-o "ProxyCommand=${pkgs.socat}/bin/socat - PROXY:$host:%h:%p,proxyport=$port")
+    fi
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
       root=''${AGENT_SANDBOX_ROOT:-}
       if [ -z "$root" ]; then
@@ -120,10 +137,10 @@ let
       fi
       cfgfile="$root/.agent-sandbox/creds/ssh_config"
       if [ -n "$root" ] && [ -f "$cfgfile" ]; then
-        exec "$real" -F "$cfgfile" "$@"
+        exec "$real" -F "$cfgfile" "''${transport[@]}" "$@"
       fi
     fi
-    exec "$real" "$@"
+    exec "$real" "''${transport[@]}" "$@"
   '';
 
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
@@ -320,6 +337,8 @@ let
           # binds the composed devices.
           setsid = "${pkgs.util-linux}/bin/setsid";
           bwrap = "${devicesBwrap}/bin/bwrap";
+          cli = lib.getExe cfg.package;
+          landlock = "${landlockShim}/bin/landlock-shim";
         };
       }
       ''
@@ -936,7 +955,7 @@ in
         description = ''
           Anthropic's sandbox-runtime, whose `srt` runs a whole agent
           under the composed rules (`agent-sandbox run`). Needed when
-          `agents` declares any agent.
+          `agents` declares an agent with backend `srt`.
         '';
       };
       sandboxTools = lib.mkOption {
@@ -1123,6 +1142,14 @@ in
       type = lib.types.attrsOf (
         lib.types.submodule {
           options = {
+            backend = lib.mkOption {
+              type = lib.types.enum [
+                "srt"
+                "codex"
+              ];
+              default = "srt";
+              description = "Use sandbox-runtime for the whole agent, or compile grants for Codex's native command sandbox.";
+            };
             modules = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [ ];
@@ -1151,14 +1178,11 @@ in
       );
       default = { };
       description = ''
-        Agents that run whole inside a checkout's sandbox through
-        `agent-sandbox run AGENT -- COMMAND`, which sandbox-runtime
-        enforces, unlike Claude Code, which applies the rules to each
-        Bash command itself. In a checkout enrolled with modules, the
-        agent runs under the composition of the checkout's modules,
-        `baseModules` and the agent's `modules`, with write access to
-        the checkout and a scratch directory. Elsewhere the command runs
-        unchanged. The codex and opencode modules declare their agents.
+        Agents launched through `agent-sandbox run AGENT -- COMMAND`.
+        The codex backend compiles native command permissions; srt runs
+        the whole agent under sandbox-runtime. Both compose the checkout's
+        modules, baseModules and the agent's modules. Elsewhere the command
+        runs unchanged. The codex and opencode modules declare their agents.
       '';
     };
 
@@ -1250,7 +1274,9 @@ in
           '';
         }
         {
-          assertion = cfg.agents == { } || cfg.runtime.sandboxRuntimePackage != null;
+          assertion =
+            !(lib.any (a: a.backend == "srt") (lib.attrValues cfg.agents))
+            || cfg.runtime.sandboxRuntimePackage != null;
           message = ''
             agent-sandbox: agents (${lib.concatStringsSep ", " (lib.attrNames cfg.agents)}) run under
             sandbox-runtime; set runtime.sandboxRuntimePackage.

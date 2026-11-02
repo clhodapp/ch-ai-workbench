@@ -16,6 +16,7 @@ after it is stopped and started again.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -673,6 +674,26 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run(args.agent, command, Path(args.directory))
 
 
+def cmd_codex_bwrap(args: argparse.Namespace) -> int:
+    from .codex import bwrap_command
+
+    command = args.agent_command
+    if command and command[0] == "--":
+        command = command[1:]
+    policy = json.loads(Path(args.policy).read_text())
+    argv = bwrap_command(command, policy)
+    # The device wrapper finds the real bwrap on PATH. Do not let it
+    # rediscover this native wrapper and recurse back into itself.
+    os.execve(argv[0], argv, {**os.environ, "PATH": policy["path"]})
+
+
+def cmd_codex_exec(args: argparse.Namespace) -> int:
+    from .codex import exec_native
+
+    command = args.agent_command
+    exec_native(command[1:] if command and command[0] == "--" else command)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-sandbox",
@@ -758,6 +779,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("agent", metavar="AGENT")
     p.add_argument("agent_command", nargs=argparse.REMAINDER, metavar="-- COMMAND")
+
+    p = add("codex-bwrap", cmd_codex_bwrap, checkout=False, help=argparse.SUPPRESS)
+    p.add_argument("--policy", required=True)
+    p.add_argument("agent_command", nargs=argparse.REMAINDER)
+    p = add("codex-exec", cmd_codex_exec, checkout=False, help=argparse.SUPPRESS)
+    p.add_argument("agent_command", nargs=argparse.REMAINDER)
 
     add("hook-session-start", cmd_hook_session_start, checkout=False, help=argparse.SUPPRESS)
 

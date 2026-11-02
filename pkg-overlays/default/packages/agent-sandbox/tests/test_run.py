@@ -133,6 +133,36 @@ class RunTest(unittest.TestCase):
         with self.assertRaises(ToolError):
             prepare("nobody", ["/bin/x"], self.root, False)
 
+    def test_codex_uses_native_profile_without_parent_landlock(self):
+        base = {**RUN_BASE, "cli": "/bin/agent-sandbox", "landlock": "/bin/landlock"}
+        write_registry(self.config, {"work": WORK, "agent": self.agent_part}, base=base,
+                       extra={**EXTRA, "agents": {"codex": {"backend": "codex", "modules": ["agent"]}}})
+        self.enroll("work")
+        argv, env, server = prepare("codex", ["/bin/codex", "exec", "hi"], self.root, False)
+        self.assertIsNone(server)
+        self.assertEqual(argv[0], "/bin/codex")
+        self.assertEqual(argv[-2:], ["exec", "hi"])
+        self.assertNotIn(BASE["socketShell"], argv)
+        self.assertNotIn('sandbox_mode="danger-full-access"', argv)
+        self.assertIn('default_permissions="agent-sandbox"', argv)
+        policy = json.loads(Path(env["AGENT_SANDBOX_CODEX_POLICY"]).read_text())
+        self.assertEqual(policy["sockets"], [])
+        self.assertEqual(policy["config"]["approval_policy"], "on-request")
+        wrapper = Path(env["PATH"].split(":")[0]) / "bwrap"
+        self.assertIn("codex-bwrap --policy", wrapper.read_text())
+        self.assertNotIn(str(wrapper.parent), policy["path"])
+
+    def test_codex_acp_child_gets_the_same_native_profile(self):
+        base = {**RUN_BASE, "cli": "/bin/agent-sandbox", "landlock": "/bin/landlock"}
+        write_registry(self.config, {"work": WORK, "agent": self.agent_part}, base=base,
+                       extra={**EXTRA, "agents": {"codex-acp": {
+                           "backend": "codex", "modules": ["agent"], "env": {"CODEX_PATH": "/bin/native-child"}}}})
+        self.enroll("work")
+        argv, env, _ = prepare("codex-acp", ["/bin/codex-acp"], self.root, False)
+        self.assertEqual(argv, ["/bin/codex-acp"])
+        self.assertEqual(env["CODEX_PATH"], "/bin/native-child")
+        self.assertTrue(Path(env["AGENT_SANDBOX_CODEX_POLICY"]).is_file())
+
     def test_terminal_runs_through_setsid(self):
         cmd = sandboxed_command(["/bin/a", "x"], {}, {}, RUN_BASE, True)
         self.assertEqual(cmd, ["/nix/store/util-linux/bin/setsid", "-w", "-c", "/bin/a", "x"])

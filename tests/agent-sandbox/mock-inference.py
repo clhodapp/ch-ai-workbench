@@ -71,6 +71,20 @@ def outside_patch(body):
     return None
 
 
+def shell_probe(body):
+    """Exercise a real shell command, rather than only the MCP transport."""
+    if tool_results(body):
+        return None
+    found = re.search(r"SHELL-PROBE:([A-Za-z0-9_./-]+)", json.dumps(body.get("input") or []))
+    if not found:
+        return None
+    for namespace, name in tool_names(body):
+        if name == "exec_command":
+            return (namespace, name, json.dumps({"cmd": "python3 " + found.group(1), "login": False,
+                                                "yield_time_ms": 10000, "max_output_tokens": 2000}))
+    raise RuntimeError("Codex did not offer exec_command for the native sandbox probe")
+
+
 def outside_write(body):
     """The `write` call as (None, "write", arguments) when the messages
     ask for one with `WRITE-OUTSIDE:PATH`, or None. The file argument is
@@ -141,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
         with open(LOG, "a") as log:
             log.write(json.dumps({"path": self.path, "body": body}) + "\n")
-        tool = outside_patch(body) or outside_write(body) or mark_tool(body)
+        tool = shell_probe(body) or outside_patch(body) or outside_write(body) or mark_tool(body)
         if self.path.endswith("/responses"):
             self.events(responses(tool))
         else:

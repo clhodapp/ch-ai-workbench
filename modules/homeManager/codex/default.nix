@@ -36,22 +36,15 @@ let
     else
       "${config.home.homeDirectory}/.codex";
 
-  # With agent-sandbox enabled in this home, Codex runs whole inside a
-  # checkout's sandbox when the checkout is enrolled (`agent-sandbox run`),
-  # and as it is elsewhere. Inside, the sandbox confines every command, so
-  # Codex runs its commands without a sandbox of its own: its bubblewrap
-  # sandbox would need user namespaces the outer sandbox does not grant.
+  # Enrolled checkouts compile their grants into Codex's native permission
+  # profile. Codex builds each command sandbox; the bwrap wrapper applies
+  # Landlock after mounts and native proxy routing are complete.
   sandboxed = options.ch-ai-workbench ? agent-sandbox && config.ch-ai-workbench.agent-sandbox.enable;
   sandboxCli = lib.getExe config.ch-ai-workbench.agent-sandbox.package;
-  noInnerSandbox = [
-    "-c"
-    ''sandbox_mode="danger-full-access"''
-  ];
-
-  # The codex that codex-acp starts inside the sandbox, through
-  # CODEX_PATH: the same Codex, without a sandbox of its own.
+  # The ACP adapter launches this child with the same generated profile
+  # as the CLI, without changing the user's CODEX_HOME/config.toml.
   codexInSandbox = pkgs.writeShellScriptBin "codex-in-sandbox" ''
-    exec ${lib.getExe cfg.package} ${lib.escapeShellArgs noInnerSandbox} "$@"
+    exec ${sandboxCli} codex-exec -- ${lib.getExe cfg.package} "$@"
   '';
 
   # The codex command. The name keeps the version and passthru stays,
@@ -305,10 +298,11 @@ in
             ];
           };
           agents.codex = {
+            backend = "codex";
             modules = [ "codex" ];
-            args = noInnerSandbox;
           };
           agents.codex-acp = {
+            backend = "codex";
             modules = [ "codex" ];
             env.CODEX_PATH = lib.getExe codexInSandbox;
           };

@@ -1,7 +1,8 @@
 # agent-sandbox
 
-Nix-authored per-project configuration for [Claude Code]'s native
-sandbox. The `agent-sandbox` Home Manager module declares named
+Nix-authored per-project configuration for the native command sandboxes
+of [Claude Code] and Codex, and a whole-agent sandbox for OpenCode.
+The `agent-sandbox` Home Manager module declares named
 sandbox **modules**, each saying what one kind of tooling (git, nix, a
 language toolchain) needs inside the sandbox: its executables, domains,
 sockets and writable paths. The `agent-sandbox` CLI binds each
@@ -23,8 +24,8 @@ Where things live in this repository:
 
 ## Principles
 
-- **Enforcement belongs to Claude Code's sandbox**; Nix authors its
-  configuration.
+- **Native command sandboxes enforce the policy** for Claude Code and
+  Codex; OpenCode runs whole under sandbox-runtime. Nix authors the grants.
 - **Enrollment is the user's act.** Nothing is ambient: unenrolled
   repos get only the monotone baseline, and no file ever lands in a
   shared repository.
@@ -226,33 +227,69 @@ The tools go through Claude Code's usual permission check for MCP
 tools, so the first call of each may itself ask for permission, unless
 a permission rule allows `mcp__plugin_agent-sandbox_sandbox`.
 
-## Whole agents: Codex and OpenCode
+## Codex's native sandbox and whole-agent OpenCode
 
-Claude Code applies a checkout's rules itself, to each Bash command it
-runs. Codex and OpenCode have no such mechanism, so they run whole
-inside the checkout's sandbox: `agent-sandbox run AGENT -- COMMAND`
-runs the command under sandbox-runtime (`srt`, from
-`runtime.sandboxRuntimePackage`), the sandbox engine Claude Code's own
-rules are written for. In a checkout that is not enrolled with modules,
-and outside every checkout, the command runs unchanged.
+`agent-sandbox run` composes the checkout's modules and the agent's own
+modules at launch. In unenrolled checkouts and outside checkouts it runs
+the command unchanged. `agents.<name>.backend` selects the enforcement:
+`codex` compiles native permission profiles; `srt` runs the whole agent
+under sandbox-runtime. The Codex and OpenCode modules select their
+backends automatically for both their CLI and ACP commands.
 
-The home-manager option `agents.<name>` declares an agent: the sandbox
-modules it always adds to the checkout's set, arguments inserted after
-its program, and variables set for it. The codex and opencode modules
-declare their agents whenever this module is enabled, and route the
-`codex` and `opencode` commands and their Agent Client Protocol
-commands for agent-shell through `agent-sandbox run`:
+Codex uses its **native command sandbox**, followed by our Landlock
+socket filter, just as Claude Code does. The trusted Codex/ACP parent
+runs outside the command boundary, as Claude Code's parent does. It is
+not wrapped in srt, and `danger-full-access` is not injected.
 
-| Agent | Module it adds | Inside the sandbox |
-|---|---|---|
-| `codex` | `codex`: the package, CODEX_HOME, OpenAI's API and sign-in hosts | `-c sandbox_mode="danger-full-access"`, so Codex leaves command sandboxing to the outer sandbox |
-| `codex-acp` | `codex` | `CODEX_PATH` names a codex with the same setting |
-| `opencode` | `opencode`: the package, its XDG directories, models.dev, the npm registry, and each provider's `hosts` | nothing more |
+The launcher writes a per-run `codex.json` under
+`$XDG_RUNTIME_DIR/agent-sandbox/run-<pid>/`. CLI config overrides select
+its generated `agent-sandbox` permission profile; the ACP `CODEX_PATH`
+child reads the same file through `agent-sandbox codex-exec`.
+Filesystem read/write grants, store masks, and write guards map into
+native filesystem rules. The profile extends `:workspace`, preserving
+Codex's metadata guards, but replaces the ambient `/tmp` write grant
+with the run's private scratch directory. The policy and wrapper
+directory stay read-only to commands. Allowed and denied domains map
+to the native network proxy, which is explicitly enabled; an empty
+allowlist disables command networking. The environment pins the
+composed PATH and grants for each command. Login shells and shell
+snapshots are disabled so startup files and old proxy environments do
+not replace those grants.
 
-Codex runs its own commands in a bubblewrap sandbox of its own, which
-would need user namespaces that the outer sandbox does not grant, so
-inside it Codex runs them without one. Its approval policy still
-applies.
+The per-run `bwrap` entry point forwards native capability probes and
+recognizes the final `--apply-seccomp-then-exec` stage. It leaves
+Codex's mount arguments, helper argv0, proxy routing and file descriptors
+intact, and inserts Landlock into the user command after that stage.
+Thus choosing a different shell cannot bypass socket narrowing. An
+empty socket list denies every external socket; an explicit module
+allow-all remains open. Codex's all-or-nothing Unix-socket syscall switch is opened before
+Landlock narrows access to the list. Socket enforcement fails closed
+without Landlock ABI 9. Nested user namespaces are disabled after native mount
+construction so a command cannot detach read-only guards. The existing
+device wrapper still binds enrolled device nodes. OpenSSH uses the native
+loopback CONNECT proxy explicitly and the checkout's owned SSH config
+copy. The launcher snapshots its passwd/group identity into read-only
+binds, so homed/userdb accounts work without opening the user-management
+socket to sandboxed commands.
+
+Approval policy is `on-request`: commands within the generated policy
+run normally, and requests beyond it still require approval. This does
+not grant approval to MCP tools; their own annotations, approval
+settings and consent hooks apply separately. Headless `codex exec`
+keeps its usual noninteractive approval behavior.
+
+Codex's domain rules are host-scoped, unlike srt's optional port-scoped
+rules. The compiler refuses port-scoped domains and filesystem glob
+grants rather than silently widening them. Use exact filesystem paths
+and host-scoped domains for Codex enrollments. This backend requires a
+Codex version supporting native permission profiles and the tested
+Linux bubblewrap stage protocol (currently 0.163.0); an unrecognized
+launch refuses to execute. User configuration must not select the older
+`sandbox_mode` or `sandbox_workspace_write` system, which takes
+precedence over permission profiles.
+
+OpenCode continues to run whole under srt, including its MCP children.
+The following srt details describe that backend.
 
 The run composes the checkout's chosen modules, `baseModules` and the
 agent's modules at each launch, so a whole agent never runs stale
@@ -315,11 +352,11 @@ agent directly.
 
 The `agent-sandbox-compose` check runs `run` against the parts a
 home-manager configuration builds, with a stand-in srt that records its
-settings. The `agent-sandbox-agents` check runs Codex and OpenCode, the
-builds hosts install from llm-agents, through their own commands inside
-the real srt, against a mock model API on 127.0.0.2 (srt sends a
-request for localhost or 127.0.0.1 past its proxy, where the sandbox's
-network namespace cannot reach it). The mock answers with a call to an
+settings. The `agent-sandbox-agents` check runs the Codex and OpenCode builds hosts
+install from llm-agents through their native and srt backends against a
+mock model API on 127.0.0.2. Codex shell probes verify workspace and
+scratch writes, write guards, allowed and denied hosts, allowed and
+denied sockets (including an empty list), and nested namespace refusal. The mock answers with a call to an
 MCP tool of a stand-in Emacs bridge, which records that it ran outside
 the sandbox in the checkout root. The check also writes inside and
 outside the checkout. The pseudo-terminal relay needs a terminal and

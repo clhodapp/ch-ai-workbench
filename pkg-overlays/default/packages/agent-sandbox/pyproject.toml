@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-sandbox"
 version = "0.1.0"
-description = "Nix-authored per-project configuration for Claude Code's native sandbox"
+description = "Nix-authored per-project sandbox policies for coding agents"
 requires-python = ">=3.11"
 license = "MIT"
 

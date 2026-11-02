@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: MIT
-"""Running a whole agent (Codex, OpenCode) inside the checkout's sandbox.
+"""Launch agents with the checkout's composed sandbox policy.
 
-Claude Code applies the composed rules itself, to each Bash command. Codex
-and OpenCode have no such hook, so ``agent-sandbox run AGENT -- COMMAND``
+Codex receives a native permission profile and applies the socket filter
+after constructing each command sandbox (see codex.py). The trusted
+Codex/ACP parent runs outside that boundary, as Claude Code does. The
+remaining description concerns the whole-agent srt backend (OpenCode).
+
+Claude Code applies the composed rules itself, to each Bash command.
+For the srt backend, ``agent-sandbox run AGENT -- COMMAND``
 runs the whole agent process under sandbox-runtime (``srt``), the sandbox
 Claude Code's own rules are written for. The rules come from the same
 composition: the checkout's chosen modules, ``baseModules``, and the
@@ -229,7 +234,8 @@ def prepare(
         )
     agent = agents[agent_name]
     srt = registry.get("srt")
-    if not srt:
+    native = agent.get("backend") == "codex"
+    if not srt and not native:
         raise ToolError("the registry names no srt: set runtime.sandboxRuntimePackage and switch")
     base = load_part(registry.get("base"), "the base part")
 
@@ -269,12 +275,28 @@ def prepare(
     # create its own state directory on first use.
     for path in settings["filesystem"]["allowWrite"]:
         Path(path).mkdir(parents=True, exist_ok=True)
-    settings_file = run_dir / "srt.json"
-    write_text_atomic(settings_file, json.dumps(settings, indent=2) + "\n")
-
     from .cli import provision_creds
 
     provision_creds(root)
+    if native:
+        from .codex import prepare_native
+
+        try:
+            args = prepare_native(settings, root, scratch, base, env)
+        except Exception:
+            if server is not None:
+                server.close()
+            raise
+        if agent_name == "codex":
+            command = [command[0], *args, *command[1:]]
+        # The native command helper constructs the filesystem and
+        # network boundary; it inserts Landlock immediately before the
+        # workload. The trusted Codex/ACP parent stays outside both.
+        if terminal:
+            command = [base["setsid"], "-w", "-c", *command]
+        return command, env, server
+    settings_file = run_dir / "srt.json"
+    write_text_atomic(settings_file, json.dumps(settings, indent=2) + "\n")
     argv = [srt, "--settings", str(settings_file), "--", *sandboxed_command(command, agent, env, base, terminal)]
     return argv, env, server
 

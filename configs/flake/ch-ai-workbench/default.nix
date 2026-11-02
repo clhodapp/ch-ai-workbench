@@ -492,7 +492,9 @@
                   ];
                   modules.mock = {
                     description = "the mock model API";
-                    allowedDomains = [ "127.0.0.2:${toString mockPort}" ];
+                    toolset = [ pkgs.python3 ];
+                    # Codex's native domain policies are host-scoped.
+                    allowedDomains = [ "127.0.0.2" ];
                   };
                 };
                 ch-ai-workbench.codex = {
@@ -971,6 +973,13 @@
                     cp -r "$agentSandboxConfig" "$HOME/.config/agent-sandbox"
                     run() { "$@"; }
                     eval "$codexSettings"
+                    # The fake MCP writes a test marker outside the
+                    # checkout. Authorize that test tool explicitly;
+                    # native command permissions do not authorize MCP.
+                    cat >> "$HOME/.codex/config.toml" <<'EOF'
+                    [mcp_servers.emacs.tools.mark]
+                    approval_mode = "approve"
+                    EOF
                     eval "$opencodePluginDependencies"
                     test -d "$XDG_CONFIG_HOME/opencode/node_modules"
 
@@ -985,6 +994,19 @@
                     cd repo
                     root=$PWD
                     export MOCK_API_KEY=mock FAKE_MCP_MARKS="$TMPDIR/marks" OPENCODE_DISABLE_MODELS_FETCH=1
+
+                    python3 -c 'import socket,time; s=socket.socket(socket.AF_UNIX); s.bind("/build/home/forbidden.sock"); s.listen(); time.sleep(600)' &
+                    for _ in $(seq 50); do
+                      test -S /build/home/forbidden.sock && break
+                      sleep 0.1
+                    done
+                    cp ${self}/tests/agent-sandbox/native-probe.py native-probe.py
+                    timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:native-probe.py' < /dev/null
+                    test -e native-probe-passed
+                    cp ${self}/tests/agent-sandbox/native-denied-network.py native-denied-network.py
+                    timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:native-denied-network.py' < /dev/null
+                    test ! -e native-network-escaped
+                    grep -q 'Network access to.*127.0.0.3.*was blocked' "$TMPDIR/requests.jsonl"
 
                     # Inside, the checkout is writable and the home is not.
                     agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch inside' < /dev/null
