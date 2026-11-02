@@ -121,6 +121,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(env["CODER_PATH"], "/nix/store/shim/bin/coder")
         self.assertTrue(Path(env["TMPDIR"]).is_dir())
         self.assertEqual(env["CLAUDE_CODE_TMPDIR"], env["TMPDIR"])
+        self.assertEqual(env["TMPPREFIX"], str(Path(env["TMPDIR"]) / "zsh"))
         self.assertNotIn(str(Path(argv[2]).parent), fs["allowWrite"])
 
     def test_no_network_unless_a_module_allows_it(self):
@@ -148,6 +149,9 @@ class RunTest(unittest.TestCase):
         policy = json.loads(Path(env["AGENT_SANDBOX_CODEX_POLICY"]).read_text())
         self.assertEqual(policy["sockets"], [])
         self.assertEqual(policy["config"]["approval_policy"], "on-request")
+        shell_env = policy["config"]["shell_environment_policy"]["set"]
+        self.assertEqual(shell_env["TMPDIR"], env["TMPDIR"])
+        self.assertEqual(shell_env["TMPPREFIX"], str(Path(env["TMPDIR"]) / "zsh"))
         wrapper = Path(env["PATH"].split(":")[0]) / "bwrap"
         self.assertIn("codex-bwrap --policy", wrapper.read_text())
         self.assertNotIn(str(wrapper.parent), policy["path"])

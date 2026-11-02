@@ -252,7 +252,9 @@ with the run's private scratch directory. The policy and wrapper
 directory stay read-only to commands. Allowed and denied domains map
 to the native network proxy, which is explicitly enabled; an empty
 allowlist disables command networking. The environment pins the
-composed PATH and grants for each command. Login shells and shell
+composed PATH and grants for each command. `TMPDIR` and zsh's
+`TMPPREFIX` point into the private scratch directory, including for
+heredoc temporary files. Login shells and shell
 snapshots are disabled so startup files and old proxy environments do
 not replace those grants.
 

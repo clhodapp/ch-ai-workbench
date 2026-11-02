@@ -257,6 +257,8 @@ def prepare(
     # srt sets the sandbox's TMPDIR from CLAUDE_CODE_TMPDIR, and to
     # /tmp/claude, shared by every sandbox, without it.
     env["TMPDIR"] = env["CLAUDE_CODE_TMPDIR"] = str(scratch)
+    # zsh uses TMPPREFIX for heredocs rather than deriving it from TMPDIR.
+    env["TMPPREFIX"] = str(scratch / "zsh")
 
     # The Emacs MCP server, served from outside the sandbox on a socket of
     # this run (see EmacsMcpServer).

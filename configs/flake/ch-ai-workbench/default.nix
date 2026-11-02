@@ -492,7 +492,10 @@
                   ];
                   modules.mock = {
                     description = "the mock model API";
-                    toolset = [ pkgs.python3 ];
+                    toolset = [
+                      pkgs.python3
+                      pkgs.zsh
+                    ];
                     # Codex's native domain policies are host-scoped.
                     allowedDomains = [ "127.0.0.2" ];
                   };

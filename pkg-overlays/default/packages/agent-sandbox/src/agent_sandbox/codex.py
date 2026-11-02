@@ -104,6 +104,7 @@ def prepare_native(settings: dict[str, Any], root: Path, scratch: Path,
     config["shell_environment_policy"] = {"set": {
         **{k: v for k, v in env.items() if k.startswith("AGENT_SANDBOX_")},
         "PATH": env["PATH"], "SHELL": base["shell"], "SANDBOX_RUNTIME": "1",
+        "TMPDIR": str(scratch), "TMPPREFIX": str(scratch / "zsh"),
     }}
     # Unlike a whole-agent sandbox, the native boundary begins at each
     # tool command. Do not apply the socket shell to the trusted parent.

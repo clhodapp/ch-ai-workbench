@@ -12,6 +12,11 @@ from pathlib import Path
 root = Path.cwd()
 (root / "native-write").write_text("allowed")
 Path(os.environ["TMPDIR"], "native-write").write_text("allowed")
+# zsh's default /tmp/zsh prefix is read-only even when TMPDIR is writable.
+heredoc = subprocess.run(["zsh", "-f", "-c", "cat <<'EOF'\nheredoc works\nEOF\n"],
+                         capture_output=True, text=True)
+assert heredoc.returncode == 0, heredoc.stderr
+assert heredoc.stdout == "heredoc works\n", heredoc.stdout
 for path in (Path("/build/home/outside"), root / ".agent-sandbox/binding.json",
              Path(os.environ["AGENT_SANDBOX_CODEX_POLICY"])):
     try:
