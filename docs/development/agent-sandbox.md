@@ -519,6 +519,25 @@ by nobody, and tools that check the ownership of their configuration
 (ssh, for one) reject them. Every instance also gets
 `NoNewPrivileges = true` unless `serviceConfig` sets it.
 
+## GitHub keyring credentials
+
+A GitHub module can set `githubKeyring = true`. Its `gh` wrapper obtains
+the active github.com credential through the existing trusted-executable
+broker, then runs the real `gh` inside the sandbox with `GH_TOKEN` in its
+environment. Explicit `GH_TOKEN` or `GITHUB_TOKEN` values take precedence.
+The token is never written into the store, enrollment state, or native
+policy files. `gh --version`, help, and completion do not need the broker.
+
+This is necessary when `gh auth login` saved the credential in the host
+keyring: blocking the session bus otherwise makes `gh auth status`
+misreport a valid login as an invalid token. Granting the session bus
+would expose much more than GitHub credentials. The broker instead runs
+only `gh auth token --hostname github.com`, rejects caller arguments, uses
+the host's gh config directory, and permits only Unix sockets. Only a
+checkout choosing a module with `githubKeyring` receives its socket grant.
+Home Manager declares the socket and service; activate the configuration
+normally before using the module in a new session.
+
 ## Module sketch
 
 ```nix

@@ -30,6 +30,16 @@ for directory in (root, root / "child"):
 # The shared server's process-identity check requires ps on the same PATH.
 identity = subprocess.run(["ps", "-p", str(os.getpid()), "-o", "pid="], capture_output=True, text=True)
 assert identity.returncode == 0 and int(identity.stdout.strip()) == os.getpid(), identity.stderr
+# The host keyring is not reachable through the session bus. A narrow
+# broker supplies gh's token in memory, while gh remains sandboxed.
+credential = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"], capture_output=True, text=True)
+assert credential.returncode == 0, credential.stderr
+assert credential.stdout.strip() == "sandbox-test-github-token"
+explicit = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"],
+                          env={**os.environ, "GH_TOKEN": "explicit-test-token"}, capture_output=True, text=True)
+assert explicit.returncode == 0 and explicit.stdout.strip() == "explicit-test-token"
+rejected = subprocess.run(["github-auth-token", "--hostname", "other.invalid"], capture_output=True)
+assert rejected.returncode != 0 and not rejected.stdout
 for path in (Path("/build/home/outside"), root / ".agent-sandbox/binding.json",
              root / ".agents/guard-probe", root / ".codex/guard-probe", root / ".aws/guard-probe",
              Path(os.environ["AGENT_SANDBOX_CODEX_POLICY"])):
@@ -58,6 +68,12 @@ with socket.socket(socket.AF_UNIX) as sock:
 
 # An empty list must narrow even a socket the parent domain permits.
 policy = json.loads(Path(os.environ["AGENT_SANDBOX_CODEX_POLICY"]).read_text())
+blocked_credential = subprocess.run([
+    policy["landlock"], "--restrict-sockets", "--socket-fallback", "closed", "--",
+    "gh", "auth", "token", "--hostname", "github.com",
+], capture_output=True)
+assert blocked_credential.returncode != 0 and not blocked_credential.stdout
+assert b"sandbox credential broker failed" in blocked_credential.stderr
 empty = subprocess.run([
     policy["landlock"], "--restrict-sockets", "--socket-fallback", "closed", "--", sys.executable, "-c",
     "import os,socket; socket.socket(socket.AF_UNIX).connect(os.environ['AGENT_SANDBOX_EMACS_MCP'])",

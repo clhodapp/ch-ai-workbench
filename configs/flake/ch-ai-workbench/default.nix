@@ -492,7 +492,10 @@
                   ];
                   modules.mock = {
                     description = "the mock model API";
-                    requires = [ "git" ];
+                    requires = [
+                      "git"
+                      "github"
+                    ];
                     toolset = [
                       pkgs.python3
                       pkgs.zsh
@@ -505,6 +508,17 @@
                     toolset = [ pkgs.git ];
                     allowGit = true;
                   };
+                  modules.github = {
+                    description = "GitHub CLI with keyring credentials";
+                    toolset = [ pkgs.gh ];
+                    githubKeyring = true;
+                  };
+                  trustedExecutables.github-auth-token.program = toString (
+                    pkgs.writeShellScript "mock-github-keyring" ''
+                      [ "$#" -eq 0 ] || exit 64
+                      echo sandbox-test-github-token
+                    ''
+                  );
                 };
                 ch-ai-workbench.codex = {
                   enable = true;
@@ -998,6 +1012,7 @@
                       pkgs.git
                       pkgs.jq
                       pkgs.python3
+                      pkgs.socat
                     ];
                     codex = lib.getExe agentsHome.config.programs.codex.package;
                     opencode = lib.getExe agentsHome.config.programs.opencode.package;
@@ -1014,6 +1029,15 @@
                     export XDG_CONFIG_HOME=$HOME/.config XDG_DATA_HOME=$HOME/.local/share
                     export XDG_STATE_HOME=$HOME/.local/state XDG_CACHE_HOME=$HOME/.cache
                     mkdir -p "$HOME/.config" "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+                    mkdir -p "$XDG_STATE_HOME/agent-sandbox/trusted"
+                    socat UNIX-LISTEN:"$XDG_STATE_HOME/agent-sandbox/trusted/github-auth-token.sock",fork \
+                      EXEC:'${
+                        lib.getExe self.packages.${system}.trusted-exec
+                      } serve --cwd / -- ${agentsHome.config.ch-ai-workbench.agent-sandbox.trustedExecutables.github-auth-token.program}' &
+                    for _ in $(seq 50); do
+                      test -S "$XDG_STATE_HOME/agent-sandbox/trusted/github-auth-token.sock" && break
+                      sleep 0.1
+                    done
                     cp -r "$agentSandboxConfig" "$HOME/.config/agent-sandbox"
                     run() { "$@"; }
                     eval "$codexSettings"

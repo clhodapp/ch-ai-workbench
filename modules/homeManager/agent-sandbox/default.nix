@@ -81,6 +81,38 @@ let
       this home evaluates with.
     '');
 
+  githubTokenName = "github-auth-token";
+  githubKeyringEnabled = lib.any (module: module.githubKeyring) (lib.attrValues cfg.modules);
+  githubTokenProgram = pkgs.writeShellScript "agent-sandbox-github-token" ''
+    # The broker must not forward caller-controlled gh options or commands.
+    if [ "$#" -ne 0 ]; then
+      echo 'github-auth-token accepts no arguments' >&2
+      exit 64
+    fi
+    exec ${lib.getExe pkgs.gh} auth token --hostname github.com
+  '';
+  githubCli = pkgs.writeShellScriptBin "gh" ''
+    if [ -n "''${SANDBOX_RUNTIME:-}" ] && [ -z "''${GH_TOKEN:-}''${GITHUB_TOKEN:-}" ]; then
+      case "''${1:-}" in
+        --version|version|help|--help|completion) ;;
+        *)
+          if ! token=$(${
+            trustedStub githubTokenName cfg.trustedExecutables.${githubTokenName}
+          }/bin/${githubTokenName}); then
+            echo 'gh: sandbox credential broker failed; check agent-sandbox-trusted-github-auth-token.socket' >&2
+            exit 1
+          fi
+          if [ -z "$token" ]; then
+            echo 'gh: sandbox credential broker returned an empty token' >&2
+            exit 1
+          fi
+          export GH_TOKEN="$token"
+          ;;
+      esac
+    fi
+    exec ${lib.getExe pkgs.gh} "$@"
+  '';
+
   # An `ssh` that redirects config to the checkout's owned creds copy.
   # Inside the sandbox, ssh rejects the store-symlinked ~/.ssh/config
   # ("Bad owner or permissions": the userns maps its root owner to
@@ -360,11 +392,12 @@ let
       # in the allowlist. The socket is what the grant consists of: any
       # program inside the sandbox that can connect to it can speak the
       # protocol, with or without the stub.
-      trusted = lib.genAttrs module.trustedExecutables (te: cfg.trustedExecutables.${te});
+      trustedNames = module.trustedExecutables ++ lib.optional module.githubKeyring githubTokenName;
+      trusted = lib.genAttrs trustedNames (te: cfg.trustedExecutables.${te});
       stubs = lib.mapAttrsToList trustedStub trusted;
       farm = pkgs.buildEnv {
         name = "agent-sandbox-module-${name}";
-        paths = module.toolset ++ stubs;
+        paths = module.toolset ++ lib.optional module.githubKeyring (lib.hiPrio githubCli) ++ stubs;
       };
       hasFarm = module.toolset != [ ] || stubs != [ ];
       # allowNix grants the daemon socket and the client-side fetcher
@@ -399,8 +432,7 @@ let
           lib.optional module.allowNix "${config.xdg.cacheHome}/nix"
         );
         allowUnixSockets = withAuto module.allowUnixSockets (
-          lib.optional module.allowNix "/nix/var/nix/daemon-socket/socket"
-          ++ map trustedSocket module.trustedExecutables
+          lib.optional module.allowNix "/nix/var/nix/daemon-socket/socket" ++ map trustedSocket trustedNames
         );
         trustedExecutables =
           if trusted == { } then
@@ -806,6 +838,18 @@ let
           access to Git directories outside the composed write grants.
         '';
       };
+      githubKeyring = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Provide gh with the user's github.com credential through a fixed
+          trusted-executable broker. The broker reads the host keyring;
+          gh itself runs inside the sandbox with GH_TOKEN set only for
+          that process. Explicit GH_TOKEN/GITHUB_TOKEN values take priority.
+          No token is written to enrollment files or native policy JSON,
+          and the module does not grant the session D-Bus socket.
+        '';
+      };
       allowedDomains = lib.mkOption {
         type = lib.types.nullOr (lib.types.listOf lib.types.str);
         default = null;
@@ -1064,6 +1108,7 @@ in
           };
           github = {
             requires = [ "git" ];
+            githubKeyring = true;
             toolset = [ pkgs.gh ];
             allowedDomains = [ "*.githubusercontent.com" ];
           };
@@ -1272,6 +1317,15 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    ch-ai-workbench.agent-sandbox.trustedExecutables = lib.mkIf githubKeyringEnabled {
+      ${githubTokenName} = {
+        description = "Read only the active github.com credential from the host keyring";
+        program = lib.mkDefault (toString githubTokenProgram);
+        workingDirectory = "/";
+        environment.GH_CONFIG_DIR = "${config.xdg.configHome}/gh";
+        serviceConfig.RestrictAddressFamilies = [ "AF_UNIX" ];
+      };
+    };
     assertions =
       let
         known = lib.attrNames cfg.modules;
