@@ -8,7 +8,7 @@
 # nemacs modules `gptel` and `claude` add their own bundles on top. Every
 # bundle is on by default, so a plain `enable = false` elsewhere turns
 # one off.
-{ closure-inputs, closure-lib, ... }:
+{ closure-lib, ... }:
 { lib, ... }:
 let
   workbench = closure-lib.ch-ai-workbench;
@@ -16,7 +16,9 @@ let
 in
 {
   overrides = [
-    (workbench.mkEmacsPackageOverrides { inherit (closure-inputs) collab-comments parenting; })
+    (workbench.mkEmacsPackageOverrides {
+      inherit (closure-lib.caisson.dependencies) collab-comments parenting;
+    })
     workbench.emacsPackages
   ];
 
