@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Exercise the actual kernel boundary, including socket-only side effects."""
 
-import ctypes
 import platform
 from pathlib import Path
 import socket
@@ -12,7 +11,7 @@ import unittest
 
 
 SHIM = str(Path(sys.argv.pop(1)).resolve())
-ABI = ctypes.CDLL(None, use_errno=True).syscall(444, 0, 0, 1)
+ABI = int(subprocess.run([SHIM, "--abi"], capture_output=True, text=True, check=True).stdout)
 if "--require-pathname" in sys.argv:
     sys.argv.remove("--require-pathname")
     if ABI < 9:

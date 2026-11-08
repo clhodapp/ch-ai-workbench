@@ -16,6 +16,11 @@
  *                            warns once and leaves sockets as upstream
  *                            left them; "closed" refuses to run (exit 2).
  *
+ *        landlock-shim --abi
+ *   Prints the kernel's Landlock ABI version (0 without Landlock) and
+ *   exits. Tests and checks read the ABI here, so the number they gate
+ *   on is the number this shim sees.
+ *
  * The home-manager module's socket shell runs this inside Claude Code's
  * sandbox for every enrollment with a unix-socket allowlist. It exists
  * to make that allowlist real on Linux: upstream's seccomp filter is all-or-nothing,
@@ -97,7 +102,8 @@ static void die(const char *msg) {
 static void usage(void) {
   fprintf(stderr,
           "usage: landlock-shim [--allow PATH]... "
-          "[--restrict-sockets] [--socket-fallback open|closed] -- CMD [ARGS...]\n");
+          "[--restrict-sockets] [--socket-fallback open|closed] -- CMD [ARGS...]\n"
+          "       landlock-shim --abi\n");
   exit(2);
 }
 
@@ -132,6 +138,12 @@ int main(int argc, char **argv) {
   int fallback_closed = 0;
   int restrict_sockets = 0;
   int i = 1;
+  if (argc == 2 && strcmp(argv[1], "--abi") == 0) {
+    long abi = syscall(SHIM_NR_landlock_create_ruleset, NULL, 0,
+                       SHIM_CREATE_RULESET_VERSION);
+    printf("%ld\n", abi < 0 ? 0 : abi);
+    return 0;
+  }
   for (; i < argc; i++) {
     if (strcmp(argv[i], "--allow") == 0 && i + 1 < argc) {
       if (n_sock >= MAX_PATHS) usage();
