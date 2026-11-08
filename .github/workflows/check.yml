@@ -202,6 +202,19 @@ jobs:
           # them too.
           extraPullNames: nix-community,numtide
 
+      # `cachix use` writes a `substituters` line into the user's
+      # nix.conf, and a `substituters` setting replaces the extra
+      # substituters that install-nix-action configured. This step adds
+      # the restored cache and the llm-agents cache back after it, and
+      # prints the substituters Nix uses.
+      - name: Add the restored cache and the llm-agents cache back
+        run: |
+          {
+            echo "extra-substituters = file://$CI_CACHE?trusted=true https://cache.numtide.com"
+            echo "extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g="
+          } >> "$HOME/.config/nix/nix.conf"
+          nix config show substituters
+
       # agent-sandbox-agents runs the real sandbox-runtime inside a
       # build. Its bubblewrap sets up a network namespace with a
       # loopback interface, which needs capabilities inside an
