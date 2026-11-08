@@ -1024,6 +1024,18 @@
                     agentSandboxConfig = "${agentsHome.config.home-files}/.config/agent-sandbox";
                   }
                   ''
+                    # Codex's native backend runs its commands under
+                    # landlock-shim with a closed socket fallback, and the
+                    # shim refuses to run below Landlock ABI 9 (RESOLVE_UNIX,
+                    # Linux 7.1). On such a build host the check records
+                    # the skip in its log and its output, and passes.
+                    abi=$(${lib.getExe self.packages.${system}.landlock-shim} --abi)
+                    if [ "$abi" -lt 9 ]; then
+                      echo "agent-sandbox-agents: skipped, the build host's kernel offers Landlock ABI $abi; the socket allowlist needs ABI 9 (Linux 7.1)" | tee $out
+                      exit 0
+                    fi
+                    echo "agent-sandbox-agents: running at Landlock ABI $abi"
+
                     test "$TMPDIR" = /build
                     export HOME=/build/home XDG_RUNTIME_DIR=/build/run
                     export XDG_CONFIG_HOME=$HOME/.config XDG_DATA_HOME=$HOME/.local/share
@@ -1128,7 +1140,7 @@
                         -L ${claudeQueueSrc} -L ${semanticFinderSrc} \
                         -l ${self}/tests/agent-sandbox/claude-queue-agents.el
                     test "$(sort -u "$FAKE_MCP_MARKS")" = "$root"
-                    touch $out
+                    echo "agent-sandbox-agents: ran at Landlock ABI $abi" > $out
                   '';
 
               # A graphical Emacs in a VM drives OpenCode, sandboxed, through

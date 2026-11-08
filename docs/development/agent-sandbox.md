@@ -394,8 +394,11 @@ scratch writes, write guards, allowed and denied hosts, allowed and
 denied sockets (including an empty list), and nested namespace refusal. The mock answers with a call to an
 MCP tool of a stand-in Emacs bridge, which records that it ran outside
 the sandbox in the checkout root. The check also writes inside and
-outside the checkout. The pseudo-terminal relay needs a terminal and
-stays untested.
+outside the checkout. The check skips when `landlock-shim --abi` reports a
+Landlock ABI below 9 on the build host, because Codex's native backend
+runs its commands under the shim with a closed socket fallback, which
+refuses to run there. The pseudo-terminal relay needs a terminal
+and stays untested.
 
 ## Trusted executables
 
