@@ -63,7 +63,7 @@
     inputs@{ caisson, ... }:
     let
       lib = caisson.lib.caisson.mkLib {
-        inherit (caisson.lib.caisson.pins.flake inputs) sources root;
+        inherit (caisson.lib.caisson.pins.flake inputs) dependencies root;
         name = "ch-ai-workbench";
         systems = [ "x86_64-linux" ];
 

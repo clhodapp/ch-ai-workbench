@@ -32,7 +32,7 @@
 # deliberate (a session must never block on the editor) and it is also
 # why `emacsclientPath` is asserted rather than discovered: without it
 # the integration would install cleanly and quietly do nothing.
-{ closure-inputs, closure-lib, ... }:
+{ closure-lib, ... }:
 {
   config,
   options,
@@ -89,7 +89,7 @@ let
       pkgs.gawk
       pkgs.gnugrep
       pkgs.jq
-      closure-inputs.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview
+      closure-lib.caisson.dependencies.merman-nix.packages.${pkgs.stdenv.hostPlatform.system}.merman-preview
     ];
     text = builtins.readFile ./claude-mermaid-display-hook.sh;
   };
