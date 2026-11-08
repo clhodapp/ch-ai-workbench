@@ -17,6 +17,7 @@ import queue
 import socket
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from typing import Any
 
@@ -188,6 +189,23 @@ class ServerCase(Fixture):
     def text(self, result: dict[str, Any]) -> str:
         return result["content"][0]["text"]
 
+    def test_discovery_connection_cleanup_cannot_stop_another_servers_guest(self) -> None:
+        # Two MCP connections may have the same Codex daemon parent.
+        # Each server must use its own process identity as the holder.
+        self.call("microvm_up", {"kind": "probe"})
+        other_holder = self.process(1001)
+        discovery = Server(self.instances(), other_holder, lambda msg: None, self.mcp_kinds)
+        discovery.cleanup()
+        self.assertIsNotNone(self.lease("probe-1"))
+        self.assertEqual(self.tool_names(), [*MANAGER_TOOLS, "open_binary", "slow"])
+
+    def test_cli_uses_its_own_pid_not_the_shared_parent(self) -> None:
+        config_file = self.root / "mcp.json"
+        config_file.write_text(json.dumps({"instances": "unused", "kinds": {name: {"mcp": info} for name, info in self.mcp_kinds.items()}}))
+        with patch.object(cli, "load", return_value={}), patch.object(cli, "Instances") as instances, patch.object(cli.os, "getpid", return_value=123), patch("microvm_mcp.mcp.serve", return_value=0):
+            self.assertEqual(cli.main([], {"MICROVM_MCP_CONFIG": str(config_file)}), 0)
+            instances.return_value.holder_for.assert_called_once_with(123, None)
+
     def test_initialize_and_the_tools_before_any_guest(self) -> None:
         names = self.tool_names()
         self.assertEqual(names, list(MANAGER_TOOLS))
@@ -200,6 +218,17 @@ class ServerCase(Fixture):
         self.assertEqual(tools[1]["inputSchema"]["properties"]["instance"]["enum"], ["other-1", "probe-1", "probe-2", "quiet-1"])
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.connects, [])
+
+    def test_static_catalog_client_can_discover_and_call_guest_tools(self) -> None:
+        self.assertTrue(self.call("microvm_guest_tools", {"kind": "probe"})["isError"])
+        self.call("microvm_up", {"kind": "probe"})
+        schema = self.call("microvm_guest_tools", {"kind": "probe", "name": "open_binary"})
+        self.assertEqual(json.loads(self.text(schema))[0]["inputSchema"], {"type": "object"})
+        result = self.call("microvm_guest_call", {"kind": "probe", "name": "open_binary", "arguments": {"path": "/work/in/sample"}})
+        self.assertEqual(self.text(result), 'open_binary {"path": "/work/in/sample"}')
+        self.assertTrue(self.call("microvm_guest_call", {"kind": "probe", "name": "absent", "arguments": {}})["isError"])
+        self.call("microvm_down")
+        self.assertTrue(self.call("microvm_guest_call", {"kind": "probe", "name": "open_binary", "arguments": {}})["isError"])
 
     def test_a_kind_agents_may_not_use_is_refused(self) -> None:
         result = self.call("microvm_up", {"kind": "hidden"})

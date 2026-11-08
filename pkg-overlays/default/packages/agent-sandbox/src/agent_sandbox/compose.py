@@ -195,6 +195,9 @@ def compose(
     if fs:
         sandbox["filesystem"] = fs
     net: dict[str, Any] = {}
+    local_bindings = [p.get("allowLocalBinding") for p in ordered]
+    if any(value is not None for value in local_bindings):
+        net["allowLocalBinding"] = True in local_bindings
     for key in ("allowedDomains", "deniedDomains"):
         if grants[key] is not None:
             net[key] = grants[key]

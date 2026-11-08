@@ -3,6 +3,7 @@
   python3Packages,
   lib,
   git,
+  agent-config,
 }:
 python3Packages.buildPythonApplication {
   pname = "agent-sandbox";
@@ -15,7 +16,7 @@ python3Packages.buildPythonApplication {
 
   # The session-start hook locates a checkout's git dir via `git
   # rev-parse`; the tests exercise it against a real repository.
-  nativeCheckInputs = [ git ];
+  nativeCheckInputs = [ git agent-config ];
 
   checkPhase = ''
     runHook preCheck

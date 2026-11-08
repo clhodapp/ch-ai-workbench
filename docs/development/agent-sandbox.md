@@ -74,6 +74,10 @@ fragment for Claude Code's built-in sandbox carries:
   pinned to the base bash.
 - The union of the chosen modules' list grants: read and write paths,
   allowed and denied domains, excluded commands, unix sockets.
+- `allowLocalBinding` when a chosen module requests local test servers.
+  This also tells Codex to bypass its HTTP proxy for local traffic, so
+  ordinary Python HTTP clients can reach servers inside their command's
+  network namespace. External destinations still require domain grants.
 - The union of the `devices` patterns every chosen module lists, in
   `env.AGENT_SANDBOX_DEVICES`, one pattern per line. The variable
   is in every fragment and is empty when no chosen module lists a
@@ -243,17 +247,39 @@ not wrapped in srt, and `danger-full-access` is not injected.
 
 The launcher writes a per-run `codex.json` under
 `$XDG_RUNTIME_DIR/agent-sandbox/run-<pid>/`. CLI config overrides select
-its generated `agent-sandbox` permission profile; the ACP `CODEX_PATH`
+its generated checkout-specific permission profile; the ACP `CODEX_PATH`
 child reads the same file through `agent-sandbox codex-exec`.
-The persistent Codex settings also register `agent-sandbox` as a read-only
-fallback so the shared server can list it in `/permissions`. The catalog
-RPC reads persistent configuration, not a launcher's CLI overrides.
-Reselecting the profile on an enrolled thread reuses that thread's
-original overrides and restores its compiled grants. Outside enrollment,
-the catalog entry grants no writes or command networking. No checkout's
-paths, sockets, or network allowlist are published into the global entry.
-Declaring profiles requires an explicit persistent default; it is the
-built-in `:workspace`, overridden by every enrolled launch.
+The launcher uses the same module composer and enrollment binding as
+Claude Code. Enrollment, sync and launch three-way merge the composed
+profile into the checkout's `.codex/config.toml`; its merge base lives in
+the guarded `.agent-sandbox/codex-config.json`. The global configuration
+does not define an enrollment profile or a fallback. The native profile
+uses `:tmpdir` and the stable runtime parent, so different launches carry
+identical definitions. Per-run Emacs sockets are enforced by Landlock
+without becoming part of the persistent named profile.
+The project settings also retain `SANDBOX_RUNTIME=1` and the enrolled
+root and composed `PATH`, so resumed commands use the declared tooling,
+GitHub credential broker and checkout SSH configuration. Tokens and per-process environment values stay out
+of the project settings.
+An unenrolled nested repository or registered Git worktree inherits its
+enclosing/primary checkout's Codex enrollment. A local binding, including
+abandonment, takes precedence. The worktree keeps no copied binding to
+drift: launch and `sync` resolve the owner again, and `status` names it.
+Changing the primary enrollment with `add`, `drop`, `enroll`, `abandon`,
+or `sync` also updates every registered worktree that inherits it.
+Explicit worktree enrollments and abandonments stay independent.
+This updates generated configuration; a running Codex session can still
+retain an older native permission snapshot.
+The native grants include the worktree and the owner's Git metadata,
+with both checkouts' configuration guards retained.
+The policy file, wrappers, sockets and private scratch under the runtime
+directory are transient launch resources, not persistent project settings.
+Do not copy their process-specific paths into `.codex/config.toml`.
+Cleanup of old scratch directories is best effort: an undeletable build
+tree produces a warning and must not block a new agent launch.
+Native runtimes are retained for the boot lifetime: shared-server threads
+can outlive their launcher, so launcher PID death cannot authorize deleting
+their policy, bridge or scratch directory.
 Filesystem read/write grants, store masks, and write guards map into
 native filesystem rules. The profile extends `:workspace`, preserving
 Codex's metadata guards. A chosen module can set `allowGit = true` to
@@ -541,6 +567,54 @@ checkout choosing a module with `githubKeyring` receives its socket grant.
 Home Manager declares the socket and service; activate the configuration
 normally before using the module in a new session.
 
+Credential routes have different boundaries:
+
+| Route | Behavior |
+|---|---|
+| `GH_TOKEN` / `GITHUB_TOKEN` | Explicit caller credentials take precedence; the wrapper skips the broker. |
+| Token in gh's config file | gh can read it directly, but this system keeps tokens out of checkout and Nix configuration. |
+| Host Secret Service | gh uses the session D-Bus. That socket remains unavailable inside the command sandbox. |
+| Granted credential broker | A fixed host command reads only the active github.com token; the sandboxed gh child receives it in memory. |
+
+The source path for the selected route is:
+
+1. Codex's `core/src/unified_exec/process_manager.rs`,
+   `open_session_with_sandbox`, creates the command environment from the
+   thread's retained shell policy. Its runtime refresh does not rebuild that
+   policy (`core/src/config/runtime_refresh.rs`).
+2. Our `codex-bwrap` entry point loads the protected native runtime policy.
+   `bwrap_command` applies the checkout's declared command environment after
+   the native launcher's environment options, before starting the shell.
+3. The selected module's `gh` wrapper calls the fixed broker with stdin
+   redirected from `/dev/null`, preserving Git's credential request for gh.
+4. `trusted-exec` crosses only the explicitly granted Unix socket. The host
+   program runs `gh auth token --hostname github.com` with its own gh config
+   and session bus, then returns the token to that gh process.
+5. gh's [keyring implementation](https://github.com/cli/cli/blob/v2.102.0/internal/keyring/keyring.go)
+   uses Secret Service on Linux. Its
+   [Git credential helper](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/auth/gitcredential/helper.go)
+   reads Git's request from stdin and emits the username/password protocol.
+
+Every clone's canonical path determines its profile ID. A shared daemon can
+therefore carry definitions for multiple clones without combining their
+grants under one name. Inherited worktrees continue to resolve their primary
+checkout's module selection.
+
+`sync` also updates matching, user-owned native runtime helpers. This repairs
+cached command routing in existing chats at the next command boundary. The
+filesystem and network policies continue to enforce the session's grants;
+an older store mask that excludes the new tool closure requires a fresh
+native policy context. Runtime updates never contain credentials.
+
+`checks.x86_64-linux.github-keyring-vm` boots a NixOS VM with real gh,
+GNOME Keyring/Secret Service, a disposable token, and a VM-local HTTPS GitHub
+endpoint. It reproduces stale credential lookup in a real Codex thread,
+repairs it with `sync` without restarting the daemon or thread, and verifies
+that another clone cannot reach either the broker or session bus. It also
+checks explicit token precedence and absence of credentials from enrollment
+files. The test uses the workstation's latest-kernel posture because scoped
+Unix sockets require Landlock ABI 9.
+
 ## Module sketch
 
 ```nix
@@ -762,3 +836,63 @@ home-manager switch, from `$XDG_CONFIG_HOME/claude-code-sandbox` to
 `$XDG_CONFIG_HOME/agent-sandbox`. The monotone baseline keeps
 write-guarding `.claude/claude-code-sandbox.json`, because the migration
 would turn a sidecar an agent wrote there into a binding.
+
+### USB hotplug in native Codex
+
+A module with `udevMonitor = true` grants an unprivileged host uevent socket
+broker, in addition to its separately declared USB device paths. The broker
+accepts one fixed request and returns only an unbound
+`AF_NETLINK/SOCK_RAW/NETLINK_KOBJECT_UEVENT` descriptor through SCM_RIGHTS.
+The descriptor retains the host network namespace. Creating the monitor
+inside the command's isolated namespace would miss host hardware events.
+
+The module supplies a small socket compatibility library and the broker's
+exact Unix pathname. Only `socket(AF_NETLINK, SOCK_RAW, 15)` uses that broker;
+other socket requests still encounter Codex's existing seccomp filter. The
+compatibility environment is installed after Codex's inner helper sanitizes
+its loader environment, inside the filesystem, network and Landlock sandbox.
+The broker is a socket-activated user service with no capabilities; its Unix
+socket is mode 0600 and checks the peer UID. It cannot execute commands or
+create caller-selected socket families, protocols, or addresses. A process
+with this capability can observe host uevents; USB device access still
+requires its device grants and the host's ordinary permissions.
+
+Enrollment sync refreshes this explicit broker pathname in owned existing
+runtime helpers, along with the compatibility environment. It leaves unrelated
+filesystem and IP-network snapshots intact. A checkout without the capability
+gets neither the environment nor the broker socket grant. Tests apply an
+actual netlink-denying seccomp filter: libudev monitor initialization succeeds
+through the bridge while direct uevent creation and NETLINK_ROUTE remain
+blocked.
+
+### Moved chats and fixed LAN endpoints
+
+An `internet` domain grant does not create routes out of the isolated network
+namespace. For one private endpoint, a checkout can select a module naming a
+fixed trusted executable. The Realiser module uses `realiser-a16-tcp`: a
+persistent stdin/stdout stream to `192.168.1.53:4101`. Its host program rejects
+all arguments and fixes its working directory to `/`; no caller-supplied
+address, socat option, command, or environment changes its destination. The
+existing trusted-exec transport streams both directions without buffering a
+whole response or requiring stdin EOF. Only the selecting checkout receives
+the broker's Unix socket grant. Device-state authorization remains the
+caller's responsibility; read-only verification sends only `83\r\n`.
+
+A fork after changing a chat's directory can retain its parent's launch
+helper and `AGENT_SANDBOX_ROOT`. At the native bwrap boundary,
+`policy_for_command` resolves the actual command's enrollment and uses that
+clone's IPC grants and command routing. Before reading a different clone's
+manifest, it requires explicit native read-only guards on both the binding
+and managed config sidecar. A writable nested manifest is not grant authority.
+The original clone's shared helper grants are not expanded, and the native
+filesystem and IP-network argv are left intact. Commands in an unenrolled
+scratch directory retain the thread's enrolled policy cwd.
+
+Older immutable launchers also read the runtime policy's `landlock` entry.
+Sync points it at `codex-socket-boundary`, so moved chats can be repaired
+without replacing their captured PATH or restarting them. This entry runs
+after Codex has mounted its native filesystem restrictions. It requires the
+new workspace root to be writable while both enrollment files reside on
+read-only mounts (`statvfs`, not chmod), then selects that clone's socket
+list. The native socket boundary belongs to the base closure so masked-store
+enrollments can execute it too. No old-clone socket list is expanded.

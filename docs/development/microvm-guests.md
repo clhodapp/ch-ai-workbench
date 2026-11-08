@@ -1,6 +1,6 @@
-# microvm guests for Claude Code sessions
+# microvm guests for coding agents
 
-The home-manager module `microvm` lets Claude Code sessions run
+The home-manager module `microvm` lets Claude Code and Codex run
 microvm.nix guests of the user on demand. A session leases an instance
 of a guest, starts it, uses it, and stops it. When the guest serves
 MCP, the session uses its tools as tools of the MCP server `microvm`.
@@ -51,6 +51,24 @@ that sets `mcp` while its `vsockPort` is null. The other options are
 
 ## The MCP server
 
+When Codex is enabled, the module registers `microvm` directly under
+`ch-ai-workbench.codex.mcpServers`. It forwards `XDG_RUNTIME_DIR` and
+`DBUS_SESSION_BUS_ADDRESS` so the trusted MCP process reaches the user
+systemd manager. No shell sandbox grants are added by that registration;
+checkouts still enroll `microvm-<kind>` to access the default shares.
+Codex's MCP manager can outlive a chat and share connections between
+chats. Call `microvm_down` explicitly after an investigation; a chat
+ending is not a reliable lease boundary. Disconnecting the MCP server
+also releases its instances.
+
+Some Codex builds only log `notifications/tools/list_changed`, retaining
+the initial catalog. The always-visible `microvm_guest_tools` lists the
+running guest's tool names/descriptions, or one full schema with `name`.
+`microvm_guest_call` forwards `kind`, `name` and `arguments` to that
+ready guest. It refuses absent guests and unknown tools. This path does
+not start guests automatically or change the shell sandbox. Clients
+that refresh their catalogs can continue calling guest tools directly.
+
 The module installs the skills-directory plugin `microvm` as
 `ch-ai-workbench.claude-code.skills.microvm`, when at least one kind
 sets `agents`. Its `.claude-plugin/plugin.json` declares one MCP
@@ -67,10 +85,11 @@ ch-microvm from that path and serves the instances of the kinds for
 agents through the library `ch_microvm`. Its leases and units are the
 ones `ch-microvm status` shows and `ch-microvm reap` stops.
 
-The holder of every lease of the server is its parent process, the
-Claude Code process, with that process's start time. The label of the
-holder is `Claude Code session <CLAUDE_CODE_SESSION_ID>`, so
-`ch-microvm status` shows which session holds an instance.
+Each MCP server process owns its leases, identified by its PID and start
+time. The parent may be a shared Codex daemon: using that parent would
+let a short-lived discovery connection clean up another connection's
+VMs. When available, `CLAUDE_CODE_SESSION_ID` supplies a descriptive
+label. Closing the connection stops only that MCP server's guests.
 
 The server speaks MCP over stdio, one JSON-RPC message per line, with
 the protocol version `2025-06-18`, as the agent tools of

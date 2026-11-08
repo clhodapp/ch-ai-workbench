@@ -117,6 +117,9 @@ def _apply(
 
     changed = update_json(settings_path(root), transform)
     write_sidecar(root, modules, fragment, declined, expires)
+    from .codex import sync_enrollment
+
+    sync_enrollment(root, modules, load_registry())
     if quiet:
         return
     state = "updated" if changed else "already current"
@@ -321,6 +324,23 @@ def cmd_sync(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
     sidecar = read_sidecar(root)
     if sidecar is None:
+        from .run import native_enrollment_root
+        from .codex import sync_enrollment
+
+        owner = native_enrollment_root(root)
+        inherited = read_sidecar(owner) if owner != root else None
+        registry = load_registry()
+        if inherited is not None and any(
+            agent.get("backend") == "codex" for agent in (registry.get("agents") or {}).values()
+        ):
+            if due_modules(inherited):
+                expire_due(owner)
+                inherited = read_sidecar(owner)
+            assert inherited is not None
+            sync_enrollment(owner, inherited["modules"], registry, project_root=root)
+            if not args.quiet:
+                print(f"{root}: Codex enrollment inherited from {owner}, updated")
+            return 0
         raise ToolError(f"{root} is not enrolled (use enroll)")
     if sidecar["legacy_profile"] is not None:
         raise ToolError(_legacy_message(root, sidecar["legacy_profile"]))
@@ -354,6 +374,20 @@ def cmd_expire(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
+    if read_sidecar(root) is None:
+        from .run import native_enrollment_root
+
+        owner = native_enrollment_root(root)
+        if owner != root:
+            try:
+                native = any(agent.get("backend") == "codex"
+                             for agent in (load_registry().get("agents") or {}).values())
+            except MaskedStore:
+                native = False
+            if native:
+                line, attention = _status_line(owner)
+                print(f"{root}: Codex enrollment inherited from {owner}\n{line}")
+                return 2 if attention else 0
     line, attention = _status_line(root)
     print(line)
     return 2 if attention else 0
@@ -675,16 +709,26 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_codex_bwrap(args: argparse.Namespace) -> int:
-    from .codex import bwrap_command
+    from .codex import bwrap_command, policy_for_command
 
     command = args.agent_command
     if command and command[0] == "--":
         command = command[1:]
     policy = json.loads(Path(args.policy).read_text())
+    policy = policy_for_command(command, policy)
     argv = bwrap_command(command, policy)
     # The device wrapper finds the real bwrap on PATH. Do not let it
     # rediscover this native wrapper and recurse back into itself.
-    os.execve(argv[0], argv, {**os.environ, "PATH": policy["path"]})
+    os.execve(argv[0], argv, {**os.environ, "PATH": policy["path"], "AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE": "1"})
+
+
+def cmd_codex_socket_boundary(args: argparse.Namespace) -> int:
+    from .codex import socket_boundary_command
+    command = args.agent_command
+    if command and command[0] == "--":
+        command = command[1:]
+    argv, env = socket_boundary_command(command, args.landlock, dict(os.environ))
+    os.execvpe(argv[0], argv, env)
 
 
 def cmd_codex_exec(args: argparse.Namespace) -> int:
@@ -782,6 +826,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("codex-bwrap", cmd_codex_bwrap, checkout=False, help=argparse.SUPPRESS)
     p.add_argument("--policy", required=True)
+    p.add_argument("agent_command", nargs=argparse.REMAINDER)
+    p = add("codex-socket-boundary", cmd_codex_socket_boundary, checkout=False, help=argparse.SUPPRESS)
+    p.add_argument("--landlock", required=True)
     p.add_argument("agent_command", nargs=argparse.REMAINDER)
     p = add("codex-exec", cmd_codex_exec, checkout=False, help=argparse.SUPPRESS)
     p.add_argument("agent_command", nargs=argparse.REMAINDER)

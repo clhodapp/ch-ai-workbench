@@ -7,10 +7,10 @@ wrapper the home-manager module builds sets. The configuration names
 the configuration file of ch-microvm and the kinds agents may use, each
 with the MCP server of its guest or null.
 
-The holder of every instance the server leases is its parent process:
-Claude Code, which starts the server. The label of the holder names the
-session, from `CLAUDE_CODE_SESSION_ID`, so `ch-microvm status` shows
-which session holds an instance.
+The holder of every instance is this MCP server process. Clients may
+share a parent daemon, so using the parent PID would let one connection's
+cleanup stop another connection's guests. The optional Claude session
+label remains visible in `ch-microvm status`.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None, env: dict[str, str] | None = None) -> in
         # What the library says goes to stderr, since the protocol owns
         # stdout.
         instances = Instances(load(config["instances"]), kinds=mcp_kinds, out=sys.stderr)
-        holder = instances.holder_for(os.getppid(), label_from(env))
+        holder = instances.holder_for(os.getpid(), label_from(env))
     except Refused as error:
         print(f"microvm-mcp: {error}", file=sys.stderr)
         return 1

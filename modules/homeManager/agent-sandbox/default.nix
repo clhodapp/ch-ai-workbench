@@ -82,6 +82,9 @@ let
     '');
 
   githubTokenName = "github-auth-token";
+  udevMonitorEnabled = lib.any (module: module.udevMonitor) (lib.attrValues cfg.modules);
+  udevMonitorBridge = pkgs.ch-ai-workbench.udev-monitor-bridge;
+  udevMonitorSocket = "${config.xdg.stateHome}/agent-sandbox/udev-monitor.sock";
   githubKeyringEnabled = lib.any (module: module.githubKeyring) (lib.attrValues cfg.modules);
   githubTokenProgram = pkgs.writeShellScript "agent-sandbox-github-token" ''
     # The broker must not forward caller-controlled gh options or commands.
@@ -89,16 +92,23 @@ let
       echo 'github-auth-token accepts no arguments' >&2
       exit 64
     fi
+    if [ -z "''${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -n "''${XDG_RUNTIME_DIR:-}" ]; then
+      export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    fi
     exec ${lib.getExe pkgs.gh} auth token --hostname github.com
   '';
   githubCli = pkgs.writeShellScriptBin "gh" ''
-    if [ -n "''${SANDBOX_RUNTIME:-}" ] && [ -z "''${GH_TOKEN:-}''${GITHUB_TOKEN:-}" ]; then
+    # This executable is the enrolled module's gh. Resumed Codex commands
+    # can lose shell markers; credential routing must not silently fall
+    # back to an inaccessible host keyring when that happens. The socket
+    # boundary, rather than an environment flag, authorizes broker access.
+    if [ -z "''${GH_TOKEN:-}''${GITHUB_TOKEN:-}" ]; then
       case "''${1:-}" in
         --version|version|help|--help|completion) ;;
         *)
           if ! token=$(${
             trustedStub githubTokenName cfg.trustedExecutables.${githubTokenName}
-          }/bin/${githubTokenName}); then
+          }/bin/${githubTokenName} </dev/null); then
             echo 'gh: sandbox credential broker failed; check agent-sandbox-trusted-github-auth-token.socket' >&2
             exit 1
           fi
@@ -178,6 +188,10 @@ let
   runtimeShell = "${cfg.runtime.shellPackage}${cfg.runtime.shellPackage.shellPath}";
 
   landlockShim = workbenchPackage "landlock-shim";
+  nativeSocketBoundary = pkgs.writeShellScript "agent-sandbox-native-socket-boundary" ''
+    exec ${cfg.package}/bin/agent-sandbox codex-socket-boundary \
+      --landlock ${landlockShim}/bin/landlock-shim -- "$@"
+  '';
 
   # The env variable that carries a composed unix-socket allowlist to the
   # socket shell; the CLI's composer writes it (SOCKETS_ENV_VAR there).
@@ -258,6 +272,17 @@ let
   # skipped with a warning. A pattern outside /dev
   # makes the wrapper refuse to build the sandbox.
   devicesBwrap = pkgs.writeShellScriptBin "bwrap" ''
+    # Resumed chats may have the stable store PATH rather than a launch's
+    # runtime-bin prefix. Keep the native post-seccomp boundary reachable
+    # through this immutable launcher too.
+    if [ -n "''${AGENT_SANDBOX_CODEX_POLICY:-}" ] && [ "''${AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE:-}" != 1 ]; then
+      for argument in "$@"; do
+        if [ "$argument" = --apply-seccomp-then-exec ]; then
+          exec ${cfg.package}/bin/agent-sandbox codex-bwrap --policy "$AGENT_SANDBOX_CODEX_POLICY" -- "$@"
+        fi
+      done
+    fi
+    unset AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE
     real=
     IFS=: read -ra dirs <<<"$PATH"
     for dir in "''${dirs[@]}"; do
@@ -339,6 +364,7 @@ let
             baseFarm
             sshWrapper
             socketShell
+            nativeSocketBoundary
             devicesBwrap
             cfg.runtime.claudePackage
             cfg.runtime.shellPackage
@@ -370,7 +396,8 @@ let
           setsid = "${pkgs.util-linux}/bin/setsid";
           bwrap = "${devicesBwrap}/bin/bwrap";
           cli = lib.getExe cfg.package;
-          landlock = "${landlockShim}/bin/landlock-shim";
+          configMerger = lib.getExe (workbenchPackage "agent-config");
+          landlock = "${nativeSocketBoundary}";
         };
       }
       ''
@@ -397,9 +424,13 @@ let
       stubs = lib.mapAttrsToList trustedStub trusted;
       farm = pkgs.buildEnv {
         name = "agent-sandbox-module-${name}";
-        paths = module.toolset ++ lib.optional module.githubKeyring (lib.hiPrio githubCli) ++ stubs;
+        paths =
+          module.toolset
+          ++ lib.optional module.udevMonitor udevMonitorBridge
+          ++ lib.optional module.githubKeyring (lib.hiPrio githubCli)
+          ++ stubs;
       };
-      hasFarm = module.toolset != [ ] || stubs != [ ];
+      hasFarm = module.toolset != [ ] || module.udevMonitor || stubs != [ ];
       # allowNix grants the daemon socket and the client-side fetcher
       # cache: nix (the client, inside the sandbox) writes
       # $XDG_CACHE_HOME/nix even though the daemon builds outside it, and
@@ -419,6 +450,7 @@ let
           deniedDomains
           excludedCommands
           allowAllUnixSockets
+          allowLocalBinding
           devices
           allowGit
           ;
@@ -432,7 +464,9 @@ let
           lib.optional module.allowNix "${config.xdg.cacheHome}/nix"
         );
         allowUnixSockets = withAuto module.allowUnixSockets (
-          lib.optional module.allowNix "/nix/var/nix/daemon-socket/socket" ++ map trustedSocket trustedNames
+          lib.optional module.allowNix "/nix/var/nix/daemon-socket/socket"
+          ++ map trustedSocket trustedNames
+          ++ lib.optional module.udevMonitor udevMonitorSocket
         );
         trustedExecutables =
           if trusted == { } then
@@ -449,7 +483,12 @@ let
                 ;
               socket = trustedSocket te;
             }) trusted;
-        env = module.extraEnv;
+        env =
+          (if module.extraEnv == null then { } else module.extraEnv)
+          // lib.optionalAttrs module.udevMonitor {
+            LD_PRELOAD = "${udevMonitorBridge}/lib/libudev-monitor-bridge.so";
+            AGENT_SANDBOX_UDEV_SOCKET = udevMonitorSocket;
+          };
         settings = module.extraSettings;
       };
     in
@@ -664,6 +703,8 @@ let
         ".claude/settings.json"
         ".claude/settings.local.json"
         ".agent-sandbox/binding.json"
+        ".agent-sandbox/codex-config.json"
+        ".codex/config.toml"
         ".claude/claude-code-sandbox.json"
         expiringIndex
       ];
@@ -672,6 +713,8 @@ let
       "Edit(.claude/settings.json)"
       "Edit(.claude/settings.local.json)"
       "Edit(.agent-sandbox/binding.json)"
+      "Edit(.agent-sandbox/codex-config.json)"
+      "Edit(.codex/config.toml)"
       "Edit(.claude/claude-code-sandbox.json)"
       "Edit(/${expiringIndex})"
     ];
@@ -767,6 +810,27 @@ let
   # composed fragment and in the tool-managed merge domain.
   sandboxModule = lib.types.submodule {
     options = {
+      udevMonitor = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Grant host uevent monitor sockets through a narrow broker, so
+          libudev/libusb can initialize and receive host hotplug events
+          inside an isolated network namespace. Other netlink protocols
+          and socket families retain the native seccomp restrictions.
+          Device opens still require separate device/filesystem grants.
+        '';
+      };
+      allowLocalBinding = lib.mkOption {
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = ''
+          Allow local test servers inside the command sandbox. A true
+          grant from any selected module wins. Codex also bypasses its
+          HTTP proxy for local traffic; external domains remain governed
+          by allowedDomains.
+        '';
+      };
       description = lib.mkOption {
         type = lib.types.str;
         default = "";
@@ -1426,19 +1490,31 @@ in
     # One socket per trusted executable, and a service template whose
     # instances each serve one connection (Accept=yes), with the
     # connection as stdin.
-    systemd.user.sockets = lib.mapAttrs' (
-      name: executable:
-      lib.nameValuePair (trustedUnit name) {
-        Unit.Description = "agent-sandbox trusted executable ${name}";
-        Socket = {
-          ListenStream = trustedSocket name;
-          Accept = true;
-          SocketMode = "0600";
-          DirectoryMode = "0700";
+    systemd.user.sockets =
+      lib.mapAttrs' (
+        name: executable:
+        lib.nameValuePair (trustedUnit name) {
+          Unit.Description = "agent-sandbox trusted executable ${name}";
+          Socket = {
+            ListenStream = trustedSocket name;
+            Accept = true;
+            SocketMode = "0600";
+            DirectoryMode = "0700";
+          };
+          Install.WantedBy = [ "sockets.target" ];
+        }
+      ) cfg.trustedExecutables
+      // lib.optionalAttrs udevMonitorEnabled {
+        agent-sandbox-udev-monitor = {
+          Unit.Description = "Host uevent monitor sockets for enrolled sandboxes";
+          Socket = {
+            ListenStream = udevMonitorSocket;
+            SocketMode = "0600";
+            DirectoryMode = "0700";
+          };
+          Install.WantedBy = [ "sockets.target" ];
         };
-        Install.WantedBy = [ "sockets.target" ];
-      }
-    ) cfg.trustedExecutables;
+      };
 
     # A session reads its sandbox rules at launch, before its SessionStart
     # hook runs, so the hook alone would let the first session after a
@@ -1463,6 +1539,20 @@ in
             "XDG_CONFIG_HOME=${config.xdg.configHome}"
             "XDG_STATE_HOME=${config.xdg.stateHome}"
           ];
+        };
+      };
+    }
+    // lib.optionalAttrs udevMonitorEnabled {
+      agent-sandbox-udev-monitor = {
+        Unit.Description = "Issue only host NETLINK_KOBJECT_UEVENT sockets";
+        Service = {
+          ExecStart = "${udevMonitorBridge}/bin/udev-monitor-broker";
+          NoNewPrivileges = true;
+          RestrictAddressFamilies = [
+            "AF_UNIX"
+            "AF_NETLINK"
+          ];
+          UMask = "0077";
         };
       };
     }

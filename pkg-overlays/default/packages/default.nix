@@ -8,11 +8,14 @@
 { callPackage, ... }:
 {
   agent-config = callPackage ./agent-config { };
-  agent-sandbox = callPackage ./agent-sandbox { };
+  agent-sandbox = callPackage ./agent-sandbox {
+    agent-config = callPackage ./agent-config { };
+  };
   agent-sandbox-plugin = callPackage ./agent-sandbox-plugin { };
   claude-consent = callPackage ./claude-consent { };
   claude-response-judge = callPackage ./claude-response-judge { };
   landlock-shim = callPackage ./landlock-shim { };
   microvm-mcp = callPackage ./microvm-mcp { };
+  udev-monitor-bridge = callPackage ./udev-monitor-bridge { };
   trusted-exec = callPackage ./trusted-exec { };
 }

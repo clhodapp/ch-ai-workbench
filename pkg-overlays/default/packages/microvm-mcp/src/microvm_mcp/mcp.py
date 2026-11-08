@@ -22,8 +22,9 @@ guest back. When the guest stops, its connection drops, or
 `microvm_down` stops it, the server fails the calls in flight, removes
 the tools of the guest and sends `list_changed` again.
 
-The holder of what the server leases is its parent process, Claude
-Code, with that process's start time. The server stops the instances
+The holder of what the server leases is this MCP server process,
+with its start time. A shared client daemon can parent multiple servers;
+each server's cleanup must leave the other connections' guests alone. The server stops the instances
 of the session when its input ends or it receives SIGTERM or SIGHUP,
 which happens when the session ends. It queues each stop with
 `systemctl --user --no-block`, so that it exits before Claude Code
@@ -46,9 +47,9 @@ from ch_microvm.transport import Endpoint
 
 from .guests import Guest, connect_guest, read_lines
 
-SERVER_INFO = {"name": "microvm", "version": "0.3.0"}
+SERVER_INFO = {"name": "microvm", "version": "0.4.0"}
 PROTOCOL_VERSION = "2025-06-18"
-MANAGER_TOOLS = ("microvm_up", "microvm_down", "microvm_status")
+MANAGER_TOOLS = ("microvm_up", "microvm_down", "microvm_status", "microvm_guest_tools", "microvm_guest_call")
 # Claude Code reports the tools a guest served, once this server removes
 # them, as tools of a disconnected server, and it can list this
 # server's own tools among them. The text tells the session reading the
@@ -106,7 +107,8 @@ def manager_tools(instances: Instances, mcp_kinds: dict[str, dict | None]) -> li
                 "module grants a directory passed here. "
                 "An instance this session already holds is used again, with the files in its directory. "
                 "When the kind serves MCP, the tools of the guest then appear among the tools of this "
-                "server. Start a guest only when the task needs it: each takes memory and the instances of "
+                "server. If your client does not refresh its tool catalog, use microvm_guest_tools to "
+                "read a tool schema and microvm_guest_call to invoke it. Start a guest only when the task needs it: each takes memory and the instances of "
                 f"a kind are few. The kinds: {listing}."
             ),
             "inputSchema": {
@@ -155,6 +157,29 @@ def manager_tools(instances: Instances, mcp_kinds: dict[str, dict | None]) -> li
                 "properties": {"all": {"type": "boolean", "description": "Show every instance."}},
             },
             "annotations": {"readOnlyHint": True},
+        },
+        {
+            "name": "microvm_guest_tools",
+            "description": "List the tools of a running guest, or return one tool's full schema by name. Use this when the client does not refresh tools after microvm_up.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"kind": {"type": "string", "enum": kinds}, "name": {"type": "string"}},
+                "required": ["kind"],
+            },
+            "annotations": {"readOnlyHint": True},
+        },
+        {
+            "name": "microvm_guest_call",
+            "description": "Call a tool of a running guest by its original name. First read its schema with microvm_guest_tools. Start the guest with microvm_up before calling; stop it with microvm_down afterwards.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": kinds},
+                    "name": {"type": "string"},
+                    "arguments": {"type": "object", "additionalProperties": True},
+                },
+                "required": ["kind", "name", "arguments"],
+            },
         },
     ]
 
@@ -294,6 +319,30 @@ class Server:
     def call(self, msg_id: Any, params: dict[str, Any]) -> None:
         name = params.get("name")
         args = params.get("arguments") or {}
+        if name in ("microvm_guest_tools", "microvm_guest_call"):
+            kind = args.get("kind")
+            guest = self.guests.get(kind) if isinstance(kind, str) else None
+            if guest is None or guest.state != "ready":
+                self.reply(msg_id, text_result("No ready guest of that kind; call microvm_up first.", is_error=True))
+                return
+            original = args.get("name")
+            matches = [tool for tool in guest.tools if tool.get("name") == original]
+            if name == "microvm_guest_tools":
+                if original is None:
+                    result = [{"name": tool["name"], "description": tool.get("description", "")} for tool in guest.tools]
+                else:
+                    result = matches
+                self.reply(msg_id, text_result(json.dumps(result), is_error=original is not None and not matches))
+                return
+            if not matches or not isinstance(args.get("arguments"), dict):
+                self.reply(msg_id, text_result("Unknown guest tool or invalid arguments; read microvm_guest_tools first.", is_error=True))
+                return
+            forwarded = dict(params, name=original, arguments=args["arguments"])
+            try:
+                guest.request("tools/call", forwarded, ("call", msg_id))
+            except OSError:
+                self.drop(guest, "the connection to its MCP server dropped")
+            return
         if name in MANAGER_TOOLS:
             threading.Thread(target=self.work, args=(name, args, msg_id), daemon=True).start()
             return
@@ -427,7 +476,11 @@ class Server:
 
     def tools_line(self, kind: str) -> str:
         names = [name for name, (owner, _) in self.exposed.items() if owner == kind]
-        return f"the tools of its MCP server are tools of this server now: {', '.join(names) or 'none'}"
+        return (
+            f"the tools of its MCP server are tools of this server now: {', '.join(names) or 'none'}\n"
+            "If your client retains its initial tool catalog, use microvm_guest_tools with kind and name "
+            "to read the schema, then microvm_guest_call with kind, name and arguments."
+        )
 
     def answer_waiting(self, kind: str, line: str, is_error: bool = False) -> None:
         for msg_id, text in self.waiting.pop(kind, []):

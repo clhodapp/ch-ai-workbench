@@ -2,14 +2,38 @@
 """Run by real Codex inside its native command sandbox, under Nix check."""
 
 import json
+import http.server
 import os
 import socket
 import subprocess
 import sys
+import threading
+import tomllib
 import urllib.request
 from pathlib import Path
 
 root = Path.cwd()
+# Normal clients must reach servers started by the test itself, without
+# proxying namespace-local loopback to a host-side network proxy.
+class TestHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"sandbox-local")
+
+    def log_message(self, *args):
+        pass
+
+with http.server.HTTPServer(("127.0.0.1", 0), TestHandler) as local_server:
+    serving = threading.Thread(target=local_server.handle_request)
+    serving.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{local_server.server_port}/", timeout=5) as response:
+            assert response.read() == b"sandbox-local"
+    finally:
+        serving.join(timeout=6)
+    assert not serving.is_alive()
+
 (root / "native-write").write_text("allowed")
 Path(os.environ["TMPDIR"], "native-write").write_text("allowed")
 # zsh's default /tmp/zsh prefix is read-only even when TMPDIR is writable.
@@ -35,6 +59,11 @@ assert identity.returncode == 0 and int(identity.stdout.strip()) == os.getpid(),
 credential = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"], capture_output=True, text=True)
 assert credential.returncode == 0, credential.stderr
 assert credential.stdout.strip() == "sandbox-test-github-token"
+without_marker = subprocess.run(["gh", "auth", "git-credential", "get"],
+    input="protocol=https\nhost=github.com\n\n", capture_output=True, text=True,
+    env={key: value for key, value in os.environ.items() if key != "SANDBOX_RUNTIME"})
+assert without_marker.returncode == 0, without_marker.stderr
+assert "password=sandbox-test-github-token" in without_marker.stdout
 explicit = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"],
                           env={**os.environ, "GH_TOKEN": "explicit-test-token"}, capture_output=True, text=True)
 assert explicit.returncode == 0 and explicit.stdout.strip() == "explicit-test-token"
@@ -68,6 +97,13 @@ with socket.socket(socket.AF_UNIX) as sock:
 
 # An empty list must narrow even a socket the parent domain permits.
 policy = json.loads(Path(os.environ["AGENT_SANDBOX_CODEX_POLICY"]).read_text())
+enrollment = tomllib.loads((root / ".codex/config.toml").read_text())
+assert enrollment["permissions"] == policy["config"]["permissions"]
+assert enrollment["shell_environment_policy"]["set"] == {
+    "SANDBOX_RUNTIME": "1", "AGENT_SANDBOX_ROOT": str(root),
+    "PATH": policy["path"],
+}
+assert str(Path(os.environ["TMPDIR"]).parent) not in json.dumps(enrollment)
 blocked_credential = subprocess.run([
     policy["landlock"], "--restrict-sockets", "--socket-fallback", "closed", "--",
     "gh", "auth", "token", "--hostname", "github.com",

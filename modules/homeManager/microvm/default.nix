@@ -1,18 +1,16 @@
 # SPDX-License-Identifier: MIT
 #
-# Guests for Claude Code sessions. ch-microvm runs on-demand instances
+# Guests for coding-agent sessions. ch-microvm runs on-demand instances
 # of microvm.nix guests for the user of this home, with the kinds of
 # `ch-microvm.kinds`. This module imports the home-manager module of
 # ch-microvm from the registry of this layer, as `ch-microvm/microvm`,
-# and lets Claude Code sessions use some of those kinds. The option
+# and lets coding-agent sessions use some of those kinds. The option
 # `kinds` names the kinds agents may use, and the guests among them
 # that serve MCP.
 #
-# With kinds that agents may use, the module installs the Claude Code
-# plugin `microvm`, which declares the MCP server `microvm`. A session
-# leases, starts and stops instances through it. The plugin installs
-# through the claude-code module of this layer, so a home that lets
-# agents use a kind selects that module as well.
+# Enabled Claude Code homes get the `microvm` plugin; enabled Codex
+# homes get the same MCP server registered directly. The MCP client
+# leases, starts and stops instances through it.
 #
 # For each kind that agents may use and that has shares, the module
 # declares the agent-sandbox module `microvm-<kind>`. It grants
@@ -87,6 +85,8 @@ let
   };
 
   kinds = cfg.kinds;
+
+  agentEnabled = name: options.ch-ai-workbench ? ${name} && config.ch-ai-workbench.${name}.enable;
 
   agentKinds = lib.filterAttrs (_: kind: kind.agents) kinds;
 
@@ -168,11 +168,10 @@ in
         }
       '';
       description = ''
-        The kinds of `ch-microvm.kinds` that Claude Code sessions use,
+        The kinds of `ch-microvm.kinds` that coding agents use,
         by name. An agent starts an instance of a kind with the tool
-        `microvm_up` of the MCP server `microvm`. The instance belongs
-        to the session: its holder is the Claude Code process, and it
-        stops when the session ends.
+        `microvm_up` of the MCP server `microvm`. The instance is leased to the MCP client process. It stops when
+        the MCP connection closes or its holder exits.
       '';
     };
 
@@ -215,17 +214,25 @@ in
       (lib.mkIf (agentKinds != { }) {
         assertions = [
           {
-            assertion = config.ch-ai-workbench.claude-code.enable;
-            message = ''
-              ch-ai-workbench.microvm: agents may use the kinds
-              ${lib.concatStringsSep ", " (builtins.attrNames agentKinds)}, and the plugin
-              that serves them installs through the claude-code module.
-              Enable ch-ai-workbench.claude-code.
-            '';
+            assertion = agentEnabled "claude-code" || agentEnabled "codex";
+            message = "ch-ai-workbench.microvm: agent kinds require an enabled Claude Code or Codex module.";
           }
         ];
-
-        ch-ai-workbench.claude-code.skills.microvm.source = plugin;
+      })
+      (lib.optionalAttrs (options.ch-ai-workbench ? claude-code) {
+        ch-ai-workbench.claude-code.skills.microvm.source = lib.mkIf (
+          agentKinds != { } && agentEnabled "claude-code"
+        ) plugin;
+      })
+      (lib.optionalAttrs (options.ch-ai-workbench ? codex) {
+        ch-ai-workbench.codex.mcpServers.microvm = lib.mkIf (agentKinds != { } && agentEnabled "codex") {
+          command = lib.getExe command;
+          # systemctl --user needs the login's user-manager endpoint.
+          envVars = [
+            "XDG_RUNTIME_DIR"
+            "DBUS_SESSION_BUS_ADDRESS"
+          ];
+        };
       })
       (lib.optionalAttrs (options ? ch-ai-workbench.agent-sandbox) {
         ch-ai-workbench.agent-sandbox.modules = sandboxModules;

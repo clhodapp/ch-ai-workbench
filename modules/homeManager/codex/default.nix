@@ -139,29 +139,8 @@ let
     };
   };
 
-  # The shared server's /permissions catalog reads persistent config,
-  # without the launcher's per-thread CLI overrides. Register the name
-  # there, but never publish a checkout's grants globally. Selecting it
-  # on an enrolled thread reuses that thread's SessionFlags (including
-  # its compiled profile); other threads get this read-only fallback.
-  sandboxCatalog = lib.optionalAttrs sandboxed {
-    # Codex requires an explicit default once profiles are declared.
-    # Enrolled launches override this with their compiled profile.
-    default_permissions = ":workspace";
-    permissions.agent-sandbox = {
-      description = "Enrolled checkout sandbox (read-only without enrollment)";
-      extends = ":read-only";
-      filesystem = {
-        ":root" = "read";
-        ":slash_tmp" = "read";
-        ":tmpdir" = "read";
-      };
-      network.enabled = false;
-    };
-  };
-
   settings =
-    lib.recursiveUpdate sandboxCatalog cfg.settings
+    cfg.settings
     // lib.optionalAttrs (mcpServers != { }) { mcp_servers = mcpServers; }
     // hookSettings;
 in

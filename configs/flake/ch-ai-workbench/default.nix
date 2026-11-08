@@ -208,19 +208,22 @@
             # given kinds of ch-microvm and the given kinds for agents.
             # The microvm module imports the home-manager module of
             # ch-microvm, which declares `ch-microvm.kinds`.
-            microvmHome =
-              instanceKinds: agentKinds:
+            microvmHomeFor =
+              agent: instanceKinds: agentKinds:
               (inputs.home-manager.lib.homeManagerConfiguration {
                 inherit pkgs;
                 modules = [
-                  self.modules.homeManager.claude-code
+                  self.modules.homeManager.${agent}
+                  (lib.optionalAttrs (agent == "codex") {
+                    ch-ai-workbench.codex.package = pkgs.codex;
+                  })
                   self.modules.homeManager.agent-sandbox
                   self.modules.homeManager.microvm
                   {
                     home.username = "tester";
                     home.homeDirectory = "/home/tester";
                     home.stateVersion = "25.05";
-                    ch-ai-workbench.claude-code.enable = true;
+                    ch-ai-workbench.${agent}.enable = true;
                     ch-microvm.kinds = instanceKinds;
                     ch-ai-workbench.microvm.kinds = agentKinds;
                   }
@@ -265,6 +268,8 @@
               };
               quiet.agents = true;
             };
+            microvmHome = microvmHomeFor "claude-code";
+            microvmCodexHome = microvmHomeFor "codex" microvmInstanceKinds microvmAgentKinds;
             microvmFullHome = microvmHome microvmInstanceKinds microvmAgentKinds;
             microvmHiddenHome = microvmHome microvmInstanceKinds { };
             microvmBareHome = microvmHome { } { };
@@ -502,6 +507,7 @@
                     ];
                     # Codex's native domain policies are host-scoped.
                     allowedDomains = [ "127.0.0.2" ];
+                    allowLocalBinding = true;
                   };
                   modules.git = {
                     description = "Git repository writes";
@@ -631,6 +637,11 @@
                 assert sandboxModulesOf microvmHiddenHome == { };
                 assert sandboxModulesOf microvmBareHome == { };
                 assert microvmFullHome.ch-ai-workbench.claude-code.skills ? microvm;
+                assert
+                  microvmCodexHome.ch-ai-workbench.codex.mcpServers.microvm.command
+                  == lib.getExe microvmCodexHome.ch-ai-workbench.microvm.package;
+                assert (sandboxModulesOf microvmCodexHome).microvm-probe.allowWrite == probeShareDirs;
+                assert builtins.all (entry: entry.assertion) microvmCodexHome.assertions;
                 assert !(microvmHiddenHome.ch-ai-workbench.claude-code.skills ? microvm);
                 assert builtins.elem microvmHiddenHome.ch-microvm.package microvmHiddenHome.home.packages;
                 assert !(microvmBareHome.ch-ai-workbench.claude-code.skills ? microvm);
@@ -681,7 +692,7 @@
                     } | "$command" > mcp.jsonl 2> mcp.err
                     jq -s -e 'map(.id) | sort == [1, 2, 3, 4]' mcp.jsonl
                     jq -s -e 'map(select(.id == 1))[0].result.serverInfo.name == "microvm"' mcp.jsonl
-                    jq -s -e 'map(select(.id == 2))[0].result.tools | map(.name) == ["microvm_up", "microvm_down", "microvm_status"]' mcp.jsonl
+                    jq -s -e 'map(select(.id == 2))[0].result.tools | map(.name) == ["microvm_up", "microvm_down", "microvm_status", "microvm_guest_tools", "microvm_guest_call"]' mcp.jsonl
                     jq -s -e 'map(select(.id == 2))[0].result.tools[0].inputSchema.properties.kind.enum == ["probe", "quiet"]' mcp.jsonl
                     jq -s -e 'map(select(.id == 2))[0].result.tools[1].inputSchema.properties.instance.enum == ["probe-1", "probe-2", "quiet-1"]' mcp.jsonl
                     jq -s -e 'map(select(.id == 3))[0].result | .isError and (.content[0].text | test("unknown kind .hidden."))' mcp.jsonl
@@ -929,6 +940,12 @@
                   '';
 
               agent-config-home =
+                assert workbenchHome.config.ch-ai-workbench.codex.mcpServers.emacs.envVars == [ "XDG_RUNTIME_DIR" ];
+                assert
+                  workbenchHome.config.ch-ai-workbench.opencode.mcpServers.emacs.envVars == [
+                    "SANDBOX_RUNTIME"
+                    "AGENT_SANDBOX_EMACS_MCP"
+                  ];
                 assert lib.hasInfix "agent-shell-anthropic-claude-acp-command" agentShellInit;
                 assert lib.hasInfix "agent-shell-openai-codex-acp-command" agentShellInit;
                 assert lib.hasInfix ''/bin/opencode" "acp"'' agentShellInit;
@@ -961,11 +978,8 @@
                     ${lib.getExe pkgs.python3} -c '
                     import pathlib, os, tomllib
                     settings = tomllib.loads(pathlib.Path(os.environ["HOME"], ".codex/config.toml").read_text())
-                    profile = settings["permissions"]["agent-sandbox"]
-                    assert profile["extends"] == ":read-only"
-                    assert set(profile["filesystem"].values()) == {"read"}
-                    assert profile["network"]["enabled"] is False
-                    assert settings["default_permissions"] == ":workspace"
+                    assert "agent-sandbox" not in settings.get("permissions", {})
+                    assert "default_permissions" not in settings
                     '
                     CODEX_HOME="$HOME/.codex" "$codex" mcp get emacs --json \
                       | jq -e '.transport.command == "/home/tester/.nix-profile/bin/emacs-mcp-stdio"'
@@ -1089,10 +1103,28 @@
                     cp ${self}/tests/agent-sandbox/native-probe.py native-probe.py
                     timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:native-probe.py' < /dev/null
                     test -e native-probe-passed
+                    cp .codex/config.toml "$TMPDIR/enrollment-before.toml"
                     cp ${self}/tests/agent-sandbox/native-denied-network.py native-denied-network.py
                     timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:native-denied-network.py' < /dev/null
                     test ! -e native-network-escaped
+                    cmp .codex/config.toml "$TMPDIR/enrollment-before.toml"
                     grep -q 'Network access to.*127.0.0.3.*was blocked' "$TMPDIR/requests.jsonl"
+
+                    git worktree add -qb native-linked ../linked HEAD
+                    cp ${self}/tests/agent-sandbox/native-worktree-probe.py ../linked/native-worktree-probe.py
+                    (
+                      cd ../linked
+                      timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:native-worktree-probe.py' < /dev/null
+                      test -e native-worktree-passed
+                      test ! -e .agent-sandbox/binding.json
+                    )
+                    mkdir -p ../linked/.scratch/nested-probe
+                    cp ${self}/tests/agent-sandbox/native-worktree-nested-probe.py ../linked/.scratch/nested-probe/
+                    (
+                      cd ../linked/.scratch/nested-probe
+                      timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:native-worktree-nested-probe.py' < /dev/null
+                      test -e nested-passed
+                    )
 
                     # Inside, the checkout is writable and the home is not.
                     agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch inside' < /dev/null
@@ -1163,6 +1195,16 @@
                   self.modules.homeManager.emacs-integration
                   self.modules.homeManager.opencode
                 ];
+              };
+
+              github-keyring-vm = import "${self}/tests/github-keyring-vm.nix" {
+                inherit
+                  pkgs
+                  lib
+                  self
+                  llmAgents
+                  ;
+                inherit (inputs) home-manager;
               };
 
               ai-commit-ert = pkgs.runCommand "ai-commit-ert" { } ''

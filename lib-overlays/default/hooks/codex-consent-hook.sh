@@ -9,8 +9,9 @@
 # claude-queue starts each Codex task with CLAUDE_QUEUE_TASK set to
 # the task id and writes the task's territory record under that id
 # before the process starts.  A session without the variable is not a
-# queued task, and the hook prints nothing, so Codex decides as it
-# would without the hook.  For a queued task the hook always decides:
+# queued task, and (except for inter-chat messages) the hook prints
+# nothing, so Codex decides as it would without the hook.
+# For a queued task the hook always decides:
 # with no decision Codex would hand the question to its automatic
 # reviewer, a model, so every failure here is a deny.
 
@@ -24,17 +25,23 @@ emit() { # $1 = allow or deny, $2 = message; always a clean exit
   exit 0
 }
 
+field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null || true; }
+
+# The user authorizes communication between existing Codex chats. Match
+# only this MCP tool; creating tasks and all other approvals stay unchanged.
+tool=$(field '.tool_name')
+case "$tool" in
+  mcp__codex_tui__send_message_to_thread) emit allow "" ;;
+esac
+
 task="${CLAUDE_QUEUE_TASK:-}"
 [ -n "$task" ] || exit 0
-
-field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null || true; }
 
 runtime="${XDG_RUNTIME_DIR:-}"
 [ -n "$runtime" ] || emit deny "no XDG_RUNTIME_DIR, so the consent spool cannot be reached; the call stays inside the sandbox"
 record="$runtime/claude-consent/territory/$task.json"
 [ -f "$record" ] || emit deny "no consent territory record for queued task $task; the call stays inside the sandbox"
 
-tool=$(field '.tool_name')
 command=$(field '.tool_input.command')
 case "$tool" in
   apply_patch)

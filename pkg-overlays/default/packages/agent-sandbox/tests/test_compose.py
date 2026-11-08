@@ -35,6 +35,26 @@ class ComposeTest(unittest.TestCase):
     def test_single_module(self):
         self.assertEqual(self.compose({"work": WORK}, ["work"]), WORK_FRAGMENT)
 
+    def test_local_binding_is_an_opt_in_composed_grant(self):
+        modules = {"plain": part("plain"), "no": part("no", allowLocalBinding=False),
+                   "yes": part("yes", allowLocalBinding=True)}
+        absent = self.compose(modules, ["plain"])
+        self.assertNotIn("allowLocalBinding", absent["sandbox"].get("network", {}))
+        denied = self.compose(modules, ["plain", "no"])
+        self.assertFalse(denied["sandbox"]["network"]["allowLocalBinding"])
+        allowed = self.compose(modules, ["no", "yes"])
+        self.assertTrue(allowed["sandbox"]["network"]["allowLocalBinding"])
+
+    def test_internet_is_opt_in_and_keeps_other_restrictions(self):
+        modules = {"work": {**WORK, "allowWrite": ["/work"]}, "internet": part("internet", allowedDomains=["*"])}
+        restricted = self.compose(modules, ["work"])
+        opened = self.compose(modules, ["work", "internet"])
+        self.assertNotIn("*", restricted["sandbox"].get("network", {}).get("allowedDomains", []))
+        self.assertIn("*", opened["sandbox"]["network"]["allowedDomains"])
+        self.assertEqual(opened["sandbox"]["filesystem"]["denyRead"], restricted["sandbox"]["filesystem"]["denyRead"])
+        self.assertEqual(opened["sandbox"]["filesystem"]["allowWrite"], restricted["sandbox"]["filesystem"]["allowWrite"])
+        self.assertFalse(opened["sandbox"]["allowUnsandboxedCommands"])
+
     def test_list_grants_union_and_null_stays_absent(self):
         fragment = self.compose(
             {

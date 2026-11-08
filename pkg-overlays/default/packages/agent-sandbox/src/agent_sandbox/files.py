@@ -239,6 +239,38 @@ def update_json(
     )
 
 
+def _is_native_worktree_placeholder(root: Path, sidecar: Path) -> bool:
+    """An empty native missing-file guard is not a local enrollment.
+    Accept only a previously managed, back-registered inherited worktree;
+    a real local binding/abandonment or a primary-root corruption still
+    fails closed. This also tolerates concurrent native guard lifetimes.
+    """
+    try:
+        if sidecar.is_symlink() or sidecar.read_bytes() != b"":
+            return False
+        managed = json.loads((root / ".agent-sandbox/codex-config.json").read_text())
+        if managed.get("target") != str(root / ".codex/config.toml"):
+            return False
+        gitfile = root / ".git"
+        pointer = gitfile.read_text().strip()
+        if not pointer.startswith("gitdir:"):
+            return False
+        metadata = (root / pointer.removeprefix("gitdir:").strip()).resolve()
+        common = (metadata / (metadata / "commondir").read_text().strip()).resolve()
+        backlink = (metadata / (metadata / "gitdir").read_text().strip()).resolve()
+        owner = common.parent
+        applied = managed["applied"]
+        if applied:
+            claimed = Path(applied["shell_environment_policy"]["set"]["AGENT_SANDBOX_ROOT"]).resolve()
+            if claimed != owner:
+                return False
+        elif applied != {}:
+            return False
+        return owner != root.resolve() and common == owner / ".git" and metadata.parent == common / "worktrees" and backlink == gitfile.resolve()
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def read_sidecar(root: Path) -> dict[str, Any] | None:
     """The checkout's binding, normalized to ``modules`` (the sorted
     chosen names, or None when abandoned), ``applied`` (the fragment this
@@ -260,7 +292,7 @@ def read_sidecar(root: Path) -> dict[str, Any] | None:
     fragment (the merge base for re-enrollment) until someone enrolls it
     with modules."""
     sidecar = sidecar_path(root)
-    if not sidecar.exists():
+    if not sidecar.exists() or _is_native_worktree_placeholder(root, sidecar):
         return None
     value = read_json(sidecar)
     applied = value.get("applied")

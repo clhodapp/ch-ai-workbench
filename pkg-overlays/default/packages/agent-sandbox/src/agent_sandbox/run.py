@@ -52,6 +52,7 @@ import json
 import os
 import select
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -75,7 +76,8 @@ def runtime_dir() -> Path:
 
 
 def srt_settings(
-    fragment: dict[str, Any], root: Path, guards: list[str], scratch: Path, bwrap: str | None
+    fragment: dict[str, Any], root: Path, guards: list[str], scratch: Path, bwrap: str | None,
+    *, project_root: Path | None = None,
 ) -> dict[str, Any]:
     """The srt settings for a composed fragment, in the checkout ``root``.
     ``guards`` are write-guarded paths, relative ones taken from ``root``."""
@@ -88,13 +90,16 @@ def srt_settings(
         "allowWrite": [str(root), str(scratch), *(fs.get("allowWrite") or [])],
         "denyWrite": [g if g.startswith("/") else str(root / g) for g in guards],
     }
+    if project_root is not None and project_root != root:
+        filesystem["allowWrite"].append(str(project_root))
+        filesystem["denyWrite"].extend(str(project_root / g) for g in guards if not g.startswith("/"))
     # srt refuses a settings file whose network table lacks either domain
     # list.
     network: dict[str, Any] = {
         "allowedDomains": list(net.get("allowedDomains") or []),
         "deniedDomains": list(net.get("deniedDomains") or []),
     }
-    for key in ("allowUnixSockets", "allowAllUnixSockets"):
+    for key in ("allowUnixSockets", "allowAllUnixSockets", "allowLocalBinding"):
         if key in net:
             network[key] = net[key]
     settings: dict[str, Any] = {"filesystem": filesystem, "network": network}
@@ -181,25 +186,72 @@ def relay(argv: list[str], env: dict[str, str]) -> int:
 
 
 def _prune_scratch(directory: Path) -> None:
-    """Remove the directories of runs whose process is gone."""
-    if not directory.is_dir():
+    """Best-effort housekeeping must never prevent an agent launch.
+
+    Build trees can contain read-only directories. Do not change their
+    permissions or follow symlinks to make cleanup succeed: leave a tree
+    we cannot remove and let the new run proceed with its own scratch.
+    """
+    try:
+        entries = list(directory.iterdir())
+    except FileNotFoundError:
         return
-    for entry in directory.iterdir():
-        if not entry.name.startswith("run-"):
-            continue
+    except OSError as error:
+        print(f"agent-sandbox: could not inspect old scratch directories: {error}; continuing launch", file=sys.stderr)
+        return
+    for entry in entries:
         try:
-            os.kill(int(entry.name[4:]), 0)
-            continue
-        except (ValueError, ProcessLookupError):
+            if not entry.name.startswith("run-") or not entry.name[4:].isdigit():
+                continue
+            if entry.is_symlink():
+                continue
+            # Shared-server threads can still use these helpers after the
+            # dashboard's launcher exits. Its PID is not a lifetime lease.
+            # Keep native runtimes for this boot instead of breaking chats.
+            if (entry / "codex.json").is_file():
+                continue
+            try:
+                os.kill(int(entry.name[4:]), 0)
+                continue
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                continue
+            # shutil's fd-based implementation rejects symlink swaps
+            # rather than traversing outside the selected scratch tree.
+            shutil.rmtree(entry)
+        except FileNotFoundError:
             pass
-        except PermissionError:
-            continue
-        for path in sorted(entry.rglob("*"), reverse=True):
-            if path.is_dir() and not path.is_symlink():
-                path.rmdir()
-            else:
-                path.unlink()
-        entry.rmdir()
+        except OSError as error:
+            print(f"agent-sandbox: could not remove old scratch {entry}: {error}; continuing launch", file=sys.stderr)
+
+
+def native_enrollment_root(project: Path) -> Path:
+    """Find a local/ancestor enrollment, or the primary registered worktree's.
+
+    Local abandonment is authoritative. A .git pointer alone is not an
+    inheritance grant: the worktree registration must point back to it.
+    """
+    for candidate in [project, *project.parents]:
+        if read_sidecar(candidate) is not None:
+            return candidate
+    git = project / ".git"
+    if git.is_file():
+        try:
+            pointer = git.read_text().strip()
+            if not pointer.startswith("gitdir:"):
+                return project
+            metadata = (project / pointer[len("gitdir:"):].strip()).resolve()
+            common = (metadata / (metadata / "commondir").read_text().strip()).resolve()
+            backlink = (metadata / (metadata / "gitdir").read_text().strip()).resolve()
+            if (backlink == git.resolve() and metadata.parent == common / "worktrees"
+                    and common.name == ".git"):
+                for candidate in [common.parent, *common.parent.parents]:
+                    if read_sidecar(candidate) is not None:
+                        return candidate
+        except (OSError, ValueError):
+            pass
+    return project
 
 
 def prepare(
@@ -212,9 +264,19 @@ def prepare(
     root = find_repo_root(directory)
     if root is None:
         return None
+    project_root = root
     migrate_state()
     migrate_checkout(root)
     sidecar = read_sidecar(root)
+    registry = None
+    if sidecar is None:
+        inherited = native_enrollment_root(root)
+        if inherited != root:
+            registry = load_registry()
+            if (registry.get("agents") or {}).get(agent_name, {}).get("backend") != "codex":
+                return None
+            root = inherited
+            sidecar = read_sidecar(root)
     if sidecar is None or sidecar["modules"] is None:
         return None
     from .cli import due_modules, expire_due
@@ -225,7 +287,7 @@ def prepare(
         if sidecar is None or sidecar["modules"] is None:
             return None
 
-    registry = load_registry()
+    registry = registry or load_registry()
     agents = registry.get("agents") or {}
     if agent_name not in agents:
         raise ToolError(
@@ -269,9 +331,11 @@ def prepare(
         grant_socket(fragment, str(socket_path))
         env.update(fragment["env"])
         env[EMACS_MCP_ENV_VAR] = str(socket_path)
-        server = EmacsMcpServer(socket_path, emacs_mcp, root, dict(os.environ))
+        server = EmacsMcpServer(socket_path, emacs_mcp,
+                                project_root if native else root, dict(os.environ))
 
-    settings = srt_settings(fragment, root, registry.get("guards") or [], scratch, base.get("bwrap"))
+    settings = srt_settings(fragment, root, registry.get("guards") or [], scratch, base.get("bwrap"),
+                            project_root=project_root if native else None)
     # srt can grant only a path that exists, and inside the sandbox the
     # parent of a missing directory is read-only, so an agent could not
     # create its own state directory on first use.
@@ -287,7 +351,8 @@ def prepare(
             git_write = any(part.get("allowGit", False) for part in resolve(
                 registry, [*sidecar["modules"], *(agent.get("modules") or [])]
             ).values())
-            args = prepare_native(settings, root, scratch, base, env, git_write=git_write)
+            args = prepare_native(settings, root, scratch, base, env, git_write=git_write,
+                                  project_root=project_root, module_env=fragment["env"])
         except Exception:
             if server is not None:
                 server.close()

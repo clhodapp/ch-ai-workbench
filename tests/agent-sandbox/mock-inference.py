@@ -73,6 +73,11 @@ def outside_patch(body):
 
 def shell_probe(body):
     """Exercise a real shell command, rather than only the MCP transport."""
+    items = body.get("input") or []
+    users = [index for index, item in enumerate(items)
+             if isinstance(item, dict) and item.get("role") == "user"]
+    if users:
+        body = {**body, "input": items[users[-1]:]}
     if tool_results(body):
         return None
     found = re.search(r"SHELL-PROBE:([A-Za-z0-9_./-]+)", json.dumps(body.get("input") or []))

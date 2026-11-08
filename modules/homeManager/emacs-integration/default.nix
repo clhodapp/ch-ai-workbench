@@ -323,7 +323,20 @@ in
         ch-ai-workbench = lib.genAttrs otherAgents (
           name:
           lib.mkIf (cfg.skill.enable && integrated name) {
-            mcpServers = emacsServer;
+            # Native Codex starts MCP in its trusted parent. Its shared
+            # manager must not capture a launch-specific sandbox socket.
+            mcpServers =
+              if name == "codex" then
+                {
+                  emacs = {
+                    command = emacsServer.emacs.command;
+                    # emacsclient discovers the user's server under this
+                    # stable login directory; Codex does not inherit it by default.
+                    envVars = [ "XDG_RUNTIME_DIR" ];
+                  };
+                }
+              else
+                emacsServer;
             skills = emacsSkills;
           }
         );
