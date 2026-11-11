@@ -49,12 +49,13 @@
   # home-manager configuration.  A determiner before "home" makes it a
   # noun, so a bare "home" in "go home" passes; "homed" and "$HOME" do
   # not match the word.  The ignore pattern removes hyphenated
-  # compounds such as "home-manager", the compounds "home directory",
+  # compounds such as "home-manager", the project name "Home Manager",
+  # the compounds "home directory",
   # "home area", "home page" and their like, and text in double or
   # curly quotation marks before this entry is matched.
   home-shorthand = {
     pattern = "\\b(a|the|each|every|this|that|one|another|its|their|your|which)[[:space:]]+homes?\\b|\\bhomes\\b";
-    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bhome-[[:alnum:]_-]*|\\bhome[[:space:]]+(directory|directories|dir|dirs|folder|folders|area|areas|page|pages|path|paths|screen|row|network|server)\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bhome-[[:alnum:]_-]*|\\bhome[[:space:]]+(manager|directory|directories|dir|dirs|folder|folders|area|areas|page|pages|path|paths|screen|row|network|server)\\b";
     rule = "write \"a home-manager configuration\" (\"the home-manager configuration inside desktop-2\"), not \"a home\", \"the home\", or \"homes\"";
   };
   # A possessive followed by "own" as emphasis ("home-manager's own

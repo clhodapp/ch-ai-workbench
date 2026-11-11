@@ -1384,6 +1384,7 @@
                     passes home-shorthand 'The file lands in the home directory.'
                     passes home-shorthand 'Each user has a home area.'
                     passes home-shorthand 'The home-manager configuration sets nix.package.'
+                    passes home-shorthand 'The Home Manager module declares the hooks.'
                     passes home-shorthand 'The homed service manages the user.'
                     passes home-shorthand 'The path under $HOME is fixed.'
                     passes home-shorthand 'The home page lists the release.'
