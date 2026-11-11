@@ -27,7 +27,7 @@ let
   cfg = config.ch-ai-workbench.codex;
 
   # Where Home Manager's codex module puts CODEX_HOME: the XDG directory
-  # when the home prefers XDG directories, ~/.codex otherwise. It exports
+  # when the home-manager configuration prefers XDG directories, ~/.codex otherwise. It exports
   # CODEX_HOME in the first case, which activation does not see, so the
   # merge names the directory itself.
   codexHome =
@@ -176,7 +176,7 @@ in
       internal = true;
       description = ''
         The command that starts `acpPackage`, through agent-sandbox when
-        this home enables it. The emacs-integration module hands it to
+        this home-manager configuration enables it. The emacs-integration module hands it to
         agent-shell.
       '';
     };
@@ -252,7 +252,7 @@ in
         Codex runs a user hook only when config.toml marks it trusted,
         so each declared hook also gets its trust entry under
         `hooks.state`. Hooks added by hand to config.toml come after the
-        declared ones and need their own trust.
+        declared ones and need a trust entry each.
       '';
     };
 

@@ -13,7 +13,7 @@
 ;; A buffer is embedded as its clipped contents behind a contextualizing
 ;; prefix.  When that exceeds what a model accepts (`/v1/models' reports
 ;; each model's token cap), it is split into chunks that each repeat
-;; the buffer's opening as scoping context, every chunk gets its own
+;; the buffer's opening as scoping context, every chunk gets a separate
 ;; vector, and the buffer scores as its best chunk; averaging chunk
 ;; vectors would dilute the one passage a description is about.
 ;;
@@ -35,7 +35,7 @@
 ;; "it just happened" case.
 ;;
 ;; The embedding client is also a small API for other packages that
-;; rank their own corpora by description (`semantic-finder-embed',
+;; rank other corpora by description (`semantic-finder-embed',
 ;; `semantic-finder-clip', `semantic-finder-rank'); claude-queue's
 ;; agent finder ranks session transcripts through it.
 ;;
@@ -169,8 +169,8 @@ empty answer, so the server is left alone until the cache expires.")
 
 (defvar semantic-finder--models-refresh nil
   "Token for the outstanding asynchronous `/v1/models' refresh, or nil.
-A fresh (TIME) list per request; the callback clears only its own
-token, and a token older than `semantic-finder-request-timeout'
+A fresh (TIME) list per request; the callback clears only the token
+of its request, and a token older than `semantic-finder-request-timeout'
 counts as lost, freeing the next caller to ask again.")
 
 (defvar semantic-finder--scan-timer nil)
@@ -178,8 +178,8 @@ counts as lost, freeing the next caller to ask again.")
 
 (defvar semantic-finder--inflight nil
   "Token for the outstanding asynchronous embed request, or nil.
-A fresh (TIME) list per request; the callback clears only its own
-token, and a token older than `semantic-finder-request-timeout'
+A fresh (TIME) list per request; the callback clears only the token
+of its request, and a token older than `semantic-finder-request-timeout'
 counts as lost, which `semantic-finder--drip' treats as a failure:
 a server that accepts connections and never answers must not wedge
 indexing forever.")
@@ -660,7 +660,7 @@ boilerplate the documents share (their contextualizing prefix minus
 any per-document part), QUERY-PREFIX the one prepended to DESCRIPTION.
 
 Scores are cosine similarities between boilerplate-subtracted
-residuals: each side first sheds an embedded anchor of its own bare
+residuals: each side first sheds the embedded anchor of the side's bare
 prefix (`semantic-finder--anchors').  Raw CLS cosines share a large
 common component fed by the contextualizing boilerplate, so thin
 documents that are mostly prefix hub near every query.  Corpus

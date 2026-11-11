@@ -66,7 +66,7 @@ argument of those tools empty; only the user's answer fills it.
 Tools that take a `file` resolve it to a buffer: existing buffer
 (reverted if stale and unmodified), else `find-file-noselect`, which
 boots LSP via the normal mode hooks. Auto-open covers files in your
-session's own territory unconditionally (worktree checkouts included),
+session's territory unconditionally (worktree checkouts included),
 plus files under a project that already has buffers in the session
 (`ch-mcp-server-auto-open-scope`, default `session-projects`;
 `any-project` opens anything readable).
@@ -215,7 +215,7 @@ Recipes:
 (indent-region (point-min) (point-max))
 ```
 
-## buffer-file / land-buffer-file: edit a buffer with your own tools
+## buffer-file / land-buffer-file: edit a buffer with your native tools
 
 For a buffer you would rather work on with ripgrep, sed, or your
 native file tools than with elisp: `buffer-file (name)` writes the
@@ -228,7 +228,7 @@ text lands. Edit the file, then `land-buffer-file (name, save)` puts
 its text into the buffer and returns the unified diff; it is refused
 if the buffer changed since the file was written (ask for the file
 again), if the buffer is read-only or has a process, if a placeholder
-was altered or invented, or if the buffer's own file is outside your
+was altered or invented, or if the file the buffer visits is outside your
 territory. The file is removed
 either way, so a stale copy never lands later. Reading the file and
 never landing it is a plain read. Editing the file changes nothing in

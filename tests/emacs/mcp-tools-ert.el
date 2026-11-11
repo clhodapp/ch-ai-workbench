@@ -74,7 +74,7 @@ so a bare `.git' directory suffices without a git binary."
       (make-temp-file "mcp-tools-test-history" nil ".eld"))
 
 (defmacro ch-mcp-tests--with-history (&rest body)
-  "Run BODY against a history store of its own, empty at entry.
+  "Run BODY against a separate history store, empty at entry.
 The session-wide store above keeps tests out of the user's real file;
 this isolates one test's revisions from every other test's."
   (declare (indent 0))
@@ -1248,7 +1248,7 @@ buffer squatting on the name is refused, not erased."
     (ch-mcp-tests--in-territory
       (should (ch-mcp-server--buffer-readable-p buffer)))
     (let ((default-directory (file-name-as-directory elsewhere)))
-      ;; No session buffer in the temp file's own project, and the client
+      ;; No session buffer in the project of the temp file, and the client
       ;; sits elsewhere, so the default session-projects scope hides it.
       (should-not (ch-mcp-server--buffer-readable-p buffer))
       (let ((ch-mcp-server-auto-open-scope 'any-project))
@@ -1656,7 +1656,7 @@ The latch keeps module-level markers; tests must not leak them."
 
 
 (ert-deftest ch-mcp-tools-history-records-every-write ()
-  "Each present is a revision of its own, so a superseded one survives."
+  "Each present is a separate revision, so a superseded one survives."
   (ch-mcp-tests--with-history
     (ch-mcp-server--present "ert-hist" "# v1" "markdown" "no")
     (ch-mcp-server--present "ert-hist" "# v2" "markdown" "no")

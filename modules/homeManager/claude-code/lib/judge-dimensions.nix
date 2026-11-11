@@ -27,7 +27,7 @@ in
   # before it, but not rebut what existed only in the chat or in a
   # draft that never landed.
   arguing-with-ghosts = {
-    instructions = "Is the new text written as a correction to its author's own earlier version instead of for a new reader who sees only the result? Look for comments, docs, or tests that argue a difference from something the code no longer does or that was chosen not to be done: saying what is not set, not published, not used, or not done anymore, or rebutting an approach that appears only in the replaced text or in the user's messages. A new reader would not have thought of that approach and does not need it ruled out.";
+    instructions = "Is the new text written as a correction to its author's earlier version instead of for a new reader who sees only the result? Look for comments, docs, or tests that argue a difference from something the code no longer does or that was chosen not to be done: saying what is not set, not published, not used, or not done anymore, or rebutting an approach that appears only in the replaced text or in the user's messages. A new reader would not have thought of that approach and does not need it ruled out.";
     criteria.true = "A comment, doc sentence, or test contrasts the result with a removed or rejected alternative that only someone who saw the old code or the conversation would know about, for example a comment echoing what the user's message corrected, or a test asserting that a mistake from an earlier draft stays absent.";
     criteria.false = "Every sentence would be written by someone who never saw the old version or the conversation: it says what the code or design is, what it does, and where things are, and none answers the replaced text or the user's messages. A commit message or pull request text may say what the change removes or replaces relative to the code before it.";
     rule = "do not argue with ghosts: write for a new reader of the code, saying what it is, what it does, and where things are; a sentence that only makes sense to someone who saw the removed, corrected, or rejected version goes, and usually belongs nowhere else either, a commit message or PR body carrying it only when a reviewer needs it to judge the change";
@@ -49,7 +49,7 @@ in
     rule = "close with a recap a reader who sees only the last message can act on: what was found, what changed, what failed or was skipped, and what happens next";
     targets = [ "reply" ];
   };
-  # Numbers reported for their own sake: tallies of edits, lines,
+  # Numbers reported as ends in themselves: tallies of edits, lines,
   # files, sections, checks, or attempts, where the reader needed to
   # know what changed or what was found.  A pattern has no handle on
   # this, since the same number is the finding in one sentence and
@@ -60,7 +60,7 @@ in
     criteria.false = "Every number answers the reader's question or is needed to act on it, or the text has no numbers.";
     rule = "report what changed and what it means, not tallies of the work (edits, lines, files, sections, checks); give a number only when the number is the finding";
   };
-  # Clipped verdicts delivered as a sentence of their own for effect.
+  # Clipped verdicts delivered as a separate sentence for effect.
   # The line between this and fragments is whether the clipped text
   # carries a fact: a pronouncement grades or punctuates and carries
   # none, so the fix is to drop it or say the fact it grades; a fragment
@@ -93,10 +93,10 @@ in
     criteria.false = "The text answers directly, and any agreement is carried by what it goes on to say.";
     rule = "do not grade the point or the result; answer it, and let what follows show whether it holds";
   };
-  # The story of the assistant's own earlier mistake, told to the
+  # The story of the assistant's earlier mistake, told to the
   # reader instead of the corrected content.
   self-correction-narration = {
-    instructions = "Does the text narrate the author's own earlier mistake or framing, such as \"My earlier framing was muddled.\", \"I had it framed too broadly.\", \"You are right, and I should have said so when I presented it.\", or \"Neither is quite what I meant.\", instead of simply giving the corrected content?";
+    instructions = "Does the text narrate the author's earlier mistake or framing, such as \"My earlier framing was muddled.\", \"I had it framed too broadly.\", \"You are right, and I should have said so when I presented it.\", or \"Neither is quite what I meant.\", instead of simply giving the corrected content?";
     criteria.true = "A sentence tells the story of the author's earlier error, framing, or omission where stating the corrected content would serve the reader.";
     criteria.false = "Corrections are given as the corrected content, and a mistake is mentioned only where the reader needs to know that something they relied on was wrong.";
     rule = "give the corrected content, not the story of the earlier mistake; say only what the reader relied on that was wrong";

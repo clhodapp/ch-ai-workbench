@@ -75,7 +75,7 @@ let
   # a sidecar under the XDG state dir records what was last applied,
   # and only entries in one of those two are ever touched -- so a
   # hook deleted from Nix is pruned, and a hand-added hook survives.
-  # The emacs module's consent-gate registration keeps its own entry.
+  # The emacs module registers its consent gate in a separate entry.
   claudeHooksRegister = import ./lib/claude-hooks-register.nix { inherit pkgs; };
 
   hooksSidecar = "${config.xdg.stateHome}/claude-hooks-register/applied.json";
@@ -306,7 +306,7 @@ let
   # The description is emitted as a JSON string, which is a valid YAML
   # double-quoted scalar, so colons and quotes in it cannot break the
   # header. One file per style: the CLI's /config picker lists every
-  # file under output-styles/ by its own name, so a second file for
+  # file under output-styles/ as a separate row, so a second file for
   # the same style is a second, duplicate picker row, not an alias
   # (found 2026-08-24 after shipping exactly that). displayName, when
   # set, becomes the frontmatter name field on the SAME file. The
@@ -375,7 +375,7 @@ in
       description = ''
         Entries installed into ~/.claude/skills/ (personal scope).
         Merged across all modules that set it, so a downstream config
-        can add its own entries or switch an upstream one off with
+        can add entries or switch an upstream one off with
         <name>.enable = false. This module seeds ch-lsp, the plugin
         carrying the shared language-server table.
       '';
@@ -402,7 +402,7 @@ in
               example = "Peer Programmer";
               description = ''
                 Initial-Caps label for the /config picker, matching the
-                CLI's own built-in styles (Default, Explanatory,
+                CLI's built-in styles (Default, Explanatory,
                 Learning): rendered as the frontmatter name field of
                 this style's one file. The CLI keys a style by that
                 field when present, so setting displayName means
@@ -419,7 +419,7 @@ in
               type = lib.types.bool;
               default = true;
               description = ''
-                Keep Claude Code's own software-engineering instructions
+                Keep the software-engineering instructions of Claude Code
                 in the system prompt and append the style after them.
                 False drops those instructions and leaves only the style
                 text (the CLI's default for a bare file), the shape for
@@ -433,7 +433,7 @@ in
               description = ''
                 Markdown sections concatenated, in merge order, into the
                 style body. Merged across all modules that set it (list
-                concatenation), so a downstream config grafts its own
+                concatenation), so a downstream config grafts more
                 sections onto a seeded style by adding to this list; the
                 seeded body carries lib.mkBefore, so plain additions land
                 after it, and lib.mkOrder places a part precisely.
@@ -599,8 +599,8 @@ in
         Emacs side registered by claude-consent-mode, or a terminal
         running `claude-consent watch`) renders it as a menu, and the
         answer comes back to the hook as JSON. With no answerer
-        attached a hook may fall back to the CLI's own permission
-        prompt (`--fallback ask`), or the question is stored and
+        attached a hook may fall back to the permission prompt of the
+        CLI (`--fallback ask`), or the question is stored and
         answered later in a terminal with `claude-consent answer
         TOKEN`, the token naming the session. `ask --async -- CMD`
         returns at once and re-runs CMD with the answer when it lands.
@@ -648,7 +648,7 @@ in
         declared ones. A declared scalar replaces a value changed by
         hand, and the activation reports it. `hooks` and
         `permissions.deny` come from the `hooks` and `permissions.deny`
-        options, which keep their own merge, so this option may not set
+        options, which are merged separately, so this option may not set
         them.
       '';
     };
@@ -1075,8 +1075,8 @@ in
             the assistant coined. claude-coinage-check finds "the <word>"
             phrases at their second use when the assistant used them first,
             the user has used none of their words in any session, and
-            earlier sessions rarely use them; the judge then scores each
-            candidate's opacity on its own state.
+            earlier sessions rarely use them; the judge then scores the
+            opacity of each candidate, with one judge state per candidate.
           '';
         };
 
@@ -1480,7 +1480,7 @@ in
     # The declared settings and user-scope MCP servers, merged into the
     # two files Claude Code rewrites at runtime. The settings merge
     # never touches `hooks` or `permissions.deny` (asserted above), so
-    # it and the hooks register above each keep their own keys.
+    # it and the hooks register above write disjoint keys.
     home.activation.claudeCodeSettings = closure-lib.ch-ai-workbench.mkAgentConfigActivation {
       inherit lib pkgs config;
       name = "claude-code-settings";

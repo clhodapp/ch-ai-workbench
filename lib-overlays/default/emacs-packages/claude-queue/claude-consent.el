@@ -15,7 +15,7 @@
 ;; While `claude-consent-mode' is on, Emacs is registered as an
 ;; attached answerer (handlers/emacs.json, keyed by this process's
 ;; pid); a hook that finds an attached answerer waits for its answer,
-;; and one that finds none falls back to the CLI's own prompt or to a
+;; and one that finds none falls back to the CLI's permission prompt or to a
 ;; stored answer given later in a terminal (`claude-consent answer').
 ;; Emacs never talks to the CLI -- the waiting hook process is the
 ;; verdict courier -- so an Emacs restart just re-reads the spool.

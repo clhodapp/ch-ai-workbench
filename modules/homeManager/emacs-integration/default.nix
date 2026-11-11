@@ -2,8 +2,8 @@
 #
 # Optional Emacs integration: registers the MCP server, the hooks and
 # the agent-tools skills that let a coding agent's session talk to a
-# live Emacs, and points Emacs's agent-shell at the agents this home
-# installs. Enabling this alongside the agent modules is the whole
+# live Emacs, and points Emacs's agent-shell at the agents this
+# home-manager configuration installs. Enabling this alongside the agent modules is the whole
 # setup; the Emacs side needs no knowledge of any agent, which is why
 # this module lives here rather than there.
 #
@@ -13,7 +13,7 @@
 #     claude module, and the emacs-tools and ghostel-terminals skills;
 #   - the agent-shell command that starts the agent over the Agent
 #     Client Protocol, by store path, so a session in Emacs runs the
-#     build and the declared configuration the agent's own command does.
+#     build and the declared configuration the agent's command does.
 #
 # For Claude Code, which has hooks, it also wires up:
 #   - a cwd hook, so a session's working directory follows into Emacs
@@ -23,7 +23,7 @@
 #     headless sessions, asking the user through the claude-code
 #     module's claude-consent tool (Emacs answers while
 #     claude-consent-mode is on; without an answerer the hook falls
-#     back to the CLI's own prompt), plus the deny rule that keeps
+#     back to the permission prompt of the CLI), plus the deny rule that keeps
 #     sessions out of the spool it reads;
 #   - the mermaid hook, which renders diagrams as Claude displays them.
 #
@@ -67,7 +67,7 @@ let
 
   # The prompt API every consent hook and plugin asks through: the
   # package the claude-code module names, or the package of this layer
-  # when the home leaves that module out.
+  # when the home-manager configuration leaves that module out.
   claudeConsent =
     config.ch-ai-workbench.claude-code.consentPackage or pkgs.ch-ai-workbench.claude-consent;
 
@@ -79,7 +79,7 @@ let
   };
 
   # Renders mermaid blocks as Claude displays them. merman supplies the
-  # mmdc-compatible renderer on the hook's own PATH, so this works with
+  # mmdc-compatible renderer on the PATH of the hook, so this works with
   # no browser and nothing installed globally.
   mermaidDisplayHook = pkgs.writeShellApplication {
     name = "claude-mermaid-display-hook";
@@ -115,9 +115,10 @@ let
     ghostel-terminals = ./skills/ghostel-terminals;
   };
 
-  # The agent modules of this layer that the home imports beside this
-  # one, other than claude-code: each gets the server and the skills
-  # when it is enabled. A home that leaves one out has no option to set.
+  # The agent modules of this layer that the home-manager configuration
+  # imports beside this one, other than claude-code: each gets the server
+  # and the skills when it is enabled. A home-manager configuration that
+  # leaves one out has no option to set.
   otherAgents = lib.filter (name: options.ch-ai-workbench ? ${name}) [
     "codex"
     "opencode"
@@ -131,8 +132,8 @@ let
 
   # The ACP command agent-shell starts each enabled agent with, as the
   # agent's module builds it: by exact store path, so a session in Emacs
-  # runs the build this home installs, reads the same declared
-  # configuration as the agent's own command, and runs inside a
+  # runs the build this home-manager configuration installs, reads the
+  # same declared configuration as the agent's command, and runs inside a
   # checkout's sandbox the same way.
   acpCommands =
     lib.filter (entry: integrated entry.agent && entry.command != null && entry.command != [ ])
@@ -153,7 +154,7 @@ let
         ]
       );
 
-  # Appended to the agent-shell bundle's own init. The `defvar`s declare
+  # Appended to the init of the agent-shell bundle. The `defvar`s declare
   # the variables to the byte compiler, which compiles the init before
   # agent-shell's per-agent files load; `setq` before that load wins over
   # the `defcustom` defaults.
@@ -170,8 +171,9 @@ let
   };
   codexConsent = cfg.sessionHooks.enable && integrated "codex";
 
-  # The OpenCode counterpart, a plugin for the major version this home
-  # runs. OpenCode 2 runs a queued task as its own server
+  # The OpenCode counterpart, a plugin for the major version this
+  # home-manager configuration runs. OpenCode 2 runs a queued task as a
+  # separate server
   # (--standalone): a run on the shared background server would have
   # its plugins run in that server's environment, which does not name
   # the task.
@@ -183,15 +185,15 @@ let
     version = opencodeVersion;
   };
 
-  # The agent claude-queue dispatches to when the home has no Claude
-  # Code: Codex, else OpenCode, else none.
+  # The agent claude-queue dispatches to when the home-manager
+  # configuration has no Claude Code: Codex, else OpenCode, else none.
   queueDefault = lib.findFirst integrated null [
     "codex"
     "opencode"
   ];
 
   # Appended to the claude-queue bundle's init: queued Codex and
-  # OpenCode tasks run the commands this home installs, by store path,
+  # OpenCode tasks run the commands this home-manager configuration installs, by store path,
   # and Codex tasks may ask to leave their sandbox where the consent
   # hook is installed to answer.
   queueInit = lib.concatStrings (
@@ -215,7 +217,8 @@ let
       (defvar claude-queue-opencode-standalone)
       (setq claude-queue-opencode-standalone t)
     ''
-    # Without Claude Code, plain dispatch goes to an agent the home has.
+    # Without Claude Code, plain dispatch goes to an agent the
+    # home-manager configuration installs.
     ++ lib.optional (!(integrated "claude-code") && queueDefault != null) ''
       (defvar claude-queue-default-agent)
       (setq claude-queue-default-agent '${queueDefault})

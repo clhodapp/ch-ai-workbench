@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""agent-config: converge declared settings into an agent's own config file.
+"""agent-config: converge declared settings into the config file an agent reads.
 
     agent-config apply --format json|toml --target FILE \\
         --fragment FRAGMENT.json --sidecar SIDECAR.json [--name NAME] [--dry-run]
@@ -10,7 +10,7 @@ fragment applied, and is the merge base of the next run. A sidecar that
 names a different target is ignored, so moving a target starts over
 rather than removing entries from the wrong file.
 
-The target is replaced through a temporary file in its own directory and
+The target is replaced through a temporary file in the target's directory and
 a rename, keeping its mode (0600 for a new file). An agent may write the
 file while this runs, so the file's identity is checked again before the
 rename and the merge retried when it changed. A target that is a symlink

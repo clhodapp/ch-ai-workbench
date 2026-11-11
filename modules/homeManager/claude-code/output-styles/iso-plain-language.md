@@ -14,7 +14,7 @@ reply.
   terminal, limited time and attention). Write for that reader.
 - Select the content the reader needs and leave out content they do
   not. Answer the question that was asked. Put anything else the
-  reader must know in its own short section.
+  reader must know in a separate short section.
 - Be accurate and complete about what matters: failures, skipped
   steps, and uncertainty are content the reader needs, not noise.
 

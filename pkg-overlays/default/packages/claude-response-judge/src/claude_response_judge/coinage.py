@@ -132,7 +132,7 @@ def occurrences(text: str) -> list[tuple[str, str]]:
 
 def split_turn(entries: list[dict[str, Any]]) -> tuple[list[str], list[str], list[str]]:
     """From transcript ENTRIES, oldest first: the assistant texts before the current turn,
-    the user's typed prompts, and the prompts whose words are the user's own (accepted
+    the user's typed prompts, and the prompts whose words the user wrote (accepted
     prompt suggestions left out, since their words come from the conversation)."""
     start = 0
     for i, entry in enumerate(entries):

@@ -21,8 +21,8 @@ Per-node rules:
   the fragment carries come first in fragment order, then ad-hoc entries
   someone added by hand (present in current but never applied by us),
   preserved in their current order. Entries that were in ``base`` but are
-  not in ``new`` are removed: the fragment is authoritative for its own
-  membership, so hand-*removals* of fragment entries do not persist while
+  not in ``new`` are removed: the fragment decides which of its entries
+  are present, so hand-*removals* of fragment entries do not persist while
   hand-*additions* do.
 - Scalars: the fragment is authoritative. When the fragment drops a
   scalar, a locally drifted value (``current != base``) is preserved like

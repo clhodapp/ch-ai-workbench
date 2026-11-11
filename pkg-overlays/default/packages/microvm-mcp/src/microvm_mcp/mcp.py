@@ -13,8 +13,8 @@ status` shows them and `ch-microvm reap` stops them.
 When `microvm_up` brings up a guest of a kind that serves MCP, the
 server connects to the vsock port of the guest through the hybrid vsock
 socket in the directory of its instance, initializes the MCP server of
-the guest, and adds the tools of that server to its own tools, under
-their own names. A name that a tool of this server or of a guest
+the guest, and adds the tools of that server to the tools of this server, under
+the names the guest gives them. A name that a tool of this server or of a guest
 connected earlier already has gets the prefix `<kind>_`. The server
 then sends `notifications/tools/list_changed`. It forwards a call of
 such a tool to its guest, and the progress and log notifications of the
@@ -52,7 +52,7 @@ PROTOCOL_VERSION = "2025-06-18"
 MANAGER_TOOLS = ("microvm_up", "microvm_down", "microvm_status", "microvm_guest_tools", "microvm_guest_call")
 # Claude Code reports the tools a guest served, once this server removes
 # them, as tools of a disconnected server, and it can list this
-# server's own tools among them. The text tells the session reading the
+# the tools of this server among them. The text tells the session reading the
 # report that this server stays connected.
 TOOLS_REMOVED = (
     "When this server removes the tools of a stopped guest, Claude Code may report that the "
@@ -98,7 +98,7 @@ def manager_tools(instances: Instances, mcp_kinds: dict[str, dict | None]) -> li
             "description": (
                 "Lease a guest virtual machine of a kind to this session, start it as a unit of the user's "
                 "systemd manager, and wait until it answers. The guest runs as an instance named "
-                "<kind>-<n>, in a directory of its own. The result names the instance, its directory, its "
+                "<kind>-<n>, in a separate directory. The result names the instance, its directory, its "
                 "vsock port and its share directories on the host. Without directory, the instance runs in "
                 "its default directory, which is emptied when this session newly leases the instance. With "
                 "directory, an absolute path, the instance runs there: the directory is created when it is "
@@ -195,7 +195,7 @@ class Server:
     """One MCP session over `instances`, for `holder`. `mcp_kinds` gives
     the MCP server of the guest of each kind, or None. Every message
     goes through `events`; the thread that calls `run` handles them in
-    order. The tools of this server run in threads of their own, so a
+    order. The tools of this server run in separate threads, so a
     guest that boots does not hold up the calls of other guests."""
 
     def __init__(
@@ -359,7 +359,7 @@ class Server:
     # The tools of this server.
 
     def work(self, name: str, args: dict[str, Any], msg_id: Any) -> None:
-        """Run a tool of this server, in a thread of its own, and hand
+        """Run a tool of this server in a separate thread, and hand
         the outcome to the loop."""
         error = None
         with self.instances.capture() as out:

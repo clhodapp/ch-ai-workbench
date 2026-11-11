@@ -48,7 +48,7 @@ parse defensively. Consumer today: the `claude-queue` Emacs package
   chat lives in the TUI process itself, whose cwd then IS the
   session's and follows its `/cd`s. Process shapes for tree-walking: an
   interactive session is `claude [flags] [prompt]` under the user's
-  shell; `attach <id>` processes are viewer clients whose own cwd is
+  shell; `attach <id>` processes are viewer clients whose cwd is
   meaningless (map the id through the listing); `--bg*` flags mark
   daemon plumbing (pty hosts, spare-pool workers), never sessions to
   follow. The nix wrapper leaves `.claude-wrapped` as argv[0]'s
@@ -137,7 +137,7 @@ on the command line:
   so a task can delegate to another model) and the emacs server's
   tools: the read-only tools, the comment system, `present`,
   `edit-buffer`, and also `edit-file`, `transform`, and `eval-elisp`.
-  The last three rely on the server's own filters
+  The last three rely on the security filters of the emacs server
   (`emacs-mcp-agent-tools.md` § Security filters): writes are confined
   to the client's territory, the project of the bridge's launch
   directory, and elisp runs only when `unsafep` proves it
@@ -397,7 +397,7 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   read 2026-09-09; not probed here): it fires after PreToolUse when a
   call needs a permission decision, matches on tool name, and takes
   `permissionDecision` allow/deny through JSON only (exit 2 is not
-  honored for it). It is the natural tap for routing the CLI's own
+  honored for it). It is the natural tap for routing the CLI's
   permission prompts (a command outside the sandbox, say) into the
   consent spool; whether it fires in headless sessions is unverified.
 - **Consumer note:** a session blocked in a synchronous PreToolUse
@@ -414,8 +414,8 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   tic table, once. It keys a marker on `session_id` plus a hash of
   `{tool_name, tool_input}` under `$XDG_RUNTIME_DIR/claude-tic-check/
   seen/`, so the identical re-issue abstains (legitimate use costs one
-  retry) while a rewritten re-issue is a new hash and is checked on
-  its own.
+  retry) while a rewritten re-issue is a new hash and is checked
+  again.
 - **A PostToolUse hook replaces what the model sees.** Its
   `hookSpecificOutput.updatedToolOutput` stands in for the tool result
   before it reaches the model, for built-in and MCP tools alike; the
@@ -437,7 +437,7 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   flow still decides the call. Probe-verified 2.1.259 (2026-09-28): a
   hook that rewrote a Bash `command` from `echo SENTINEL-ORIGINAL` to
   `echo SENTINEL-REWRITTEN` produced a tool result and a model reply
-  carrying only the rewritten sentinel, while the model's own
+  carrying only the rewritten sentinel, while the model's
   `tool_use` record in the transcript kept the original command. The
   reveal hook stands on both halves: it adds an `approval` token to an
   approved MCP read, and the model never sees the token.
@@ -540,7 +540,7 @@ output-style rule that needs judgment (seeded from
   `ch-local-llms.decision-server` runs that server as a user service
   started at login.
 - **The whole turn.** In a turn with tool calls, each stretch of
-  text between calls is its own assistant message, and the Stop
+  text between calls is a separate assistant message, and the Stop
   payload's `last_assistant_message` holds only the final one. This
   session showed it: a regex match in a message written between tool
   calls did not appear in the finished turn's check. So the Stop hook
@@ -664,8 +664,8 @@ output-style rule that needs judgment (seeded from
   `judge.proseExtensions`, code otherwise. Each dimension's `targets`
   lists the kinds it is asked of, and most target replies and prose
   only. `arguing-with-ghosts` targets prose and code. It asks whether a
-  comment, doc, or test is written as a correction to the author's own
-  earlier version, arguing a difference from what was removed or
+  comment, doc, or test is written as a correction to an
+  earlier version by the same author, arguing a difference from what was removed or
   rejected, instead of for a new reader. For that question the request
   carries the edit's replaced text (`old_string`) and the user's last
   three typed messages, read from the tail of `transcript_path`
@@ -818,13 +818,13 @@ system prompt while the style is selected. Probed 2026-08-23 against
   replacing the attribute name as the selectable key.
 - Frontmatter fields present in the 2.1.241 binary:
   `description` (picker text), `keep-coding-instructions` (boolean,
-  default false: the CLI's own engineering instructions are *dropped*
+  default false: the CLI's built-in engineering instructions are *dropped*
   and only the style text remains; `true` keeps them and appends the
   style), and `force-for-plugin` (plugin-shipped styles only). The
   frontmatter is parsed as YAML, not line-split: a double-quoted
   `description` containing colons and escaped inner quotes loaded and
   the style activated, so a generator can emit descriptions as JSON
-  strings without escaping rules of its own.
+  strings without a separate escaping scheme.
 - What `keep-coding-instructions` gates (read out of the 2.1.241
   binary's prompt assembly): exactly the section `# Doing tasks`,
   which holds the software-engineering framing (interpret vague asks as code

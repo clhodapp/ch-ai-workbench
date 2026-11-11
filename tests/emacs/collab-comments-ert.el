@@ -6,7 +6,7 @@
 ;; Batch-run against the full init, like mcp-tools-ert.el: the
 ;; add-comment/list-comments MCP tools with their edit-contract anchor
 ;; matching, and threads surviving the re-renders of `present' and the
-;; claude-queue transcript views.  The package's own suite (model,
+;; claude-queue transcript views.  The test suite of the package (model,
 ;; anchors under replacement, thread view, persistence) runs in its
 ;; repository, github:clhodapp/collab-comments.
 
@@ -86,8 +86,8 @@
 (ert-deftest ch-collab-present-does-not-re-enter-the-major-mode ()
   "`present' leaves a mode it has already set alone.
 A major mode function runs `change-major-mode-hook' even when the
-buffer is already in that mode, and a mode that keeps overlays of its
-own (Emacs 31's `markdown-ts-mode') cleans up there with
+buffer is already in that mode, and a mode that manages overlays
+itself (Emacs 31's `markdown-ts-mode') cleans up there with
 `remove-overlays', deleting every thread in the buffer outright rather
 than collapsing it.  The threads survive only because `present' skips
 the redundant call, so check that directly: an overlay still attached

@@ -11,7 +11,7 @@ executables, domains, unix sockets and writable paths. A checkout opts
 into the set of modules its work needs by *enrollment*, which composes
 them into Claude Code's native sandbox rules through two files: the
 co-owned `.claude/settings.local.json` (tool-owned `sandbox`/`env` keys
-merged alongside Claude Code's own keys) and the sidecar
+merged alongside the keys Claude Code writes) and the sidecar
 `.agent-sandbox/binding.json` (the chosen modules and the last-applied
 blob).
 

@@ -13,8 +13,8 @@
 # from the store in an earlier generation is already gone, or is still
 # the link and is replaced by a regular file holding its content.
 #
-# Arguments: `lib` and `pkgs` of the home, `config` for the state
-# directory, and per file a `name`
+# Arguments: `lib` and `pkgs` of the home-manager configuration,
+# `config` for the state directory, and per file a `name`
 # (the sidecar's name and the label of report lines), `format` ("json"
 # or "toml"), `target` (an absolute path string, which may use $HOME),
 # and `settings` (an attribute set; TOML has no null).
@@ -33,7 +33,7 @@ let
       ${name} needs pkgs.ch-ai-workbench.agent-config: apply
       ch-ai-workbench's package overlay (`overlays.default`; a caisson
       consumer lists the flake in `projects`) to the package set this
-      home evaluates with.
+      home-manager configuration evaluates with.
     '');
   fragment = pkgs.writeText "agent-config-${name}.json" (builtins.toJSON settings);
   sidecar = "${config.xdg.stateHome}/ch-ai-workbench/agent-config/${name}.json";

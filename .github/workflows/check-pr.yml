@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 #
-# The pull request's own check: this file is the pull request's copy,
+# The check that runs from the pull request: this file is the pull
+# request's copy,
 # run in the pull request's context, where any cache it saves is
 # scoped to the request's merge ref and can be restored only by that
 # request's later runs, never by main.
@@ -10,12 +11,13 @@
 # succeeds at once for those. A request that changes .github/ is
 # exactly the one check.yml declines to build, and the only one whose
 # new pipeline needs exercising; it is built here, restoring main's
-# entry and saving under its own scope. Between the two files, each
+# entry and saving under the request's scope. Between the two files, each
 # push is built exactly once.
 #
 # The roots and the priority pruning are the same as in check.yml, with
 # one difference: this run's token cannot delete cache entries, so it
-# never touches another scope's and does not purge its own; entries in
+# touches no entry of another scope and purges none in the request's
+# scope; entries in
 # a request's scope go when the request closes (cache-cleanup.yml) or
 # when GitHub expires them.
 
@@ -65,8 +67,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Restores the newest entry this run can see (its own earlier one,
-      # else main's); the save, under this request's scope, one entry
+      # Restores the newest entry this run can see (an earlier entry of
+      # this request, else the entry of main); the save, under this request's scope, one entry
       # per head commit, is the last step. cache-cleanup.yml removes
       # them all when the request closes.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -239,9 +241,9 @@ jobs:
           }
 
           # 5. Keep the highest-priority roots that fit, drop the rest.
-          #    This run deletes nothing outside its own scope; if not
-          #    even the current main fits, it is saved anyway and
-          #    GitHub's own eviction is the backstop.
+          #    This run deletes nothing outside the request's scope; if
+          #    not even the current main fits, it is saved anyway and
+          #    the cache eviction of GitHub is the backstop.
           kept=()
           for d in "${ordered[@]}"; do
             size=$(entry_size "${kept[@]}" "$d")

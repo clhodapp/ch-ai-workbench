@@ -42,8 +42,8 @@
   # Emacs packages against the Emacs the editor configures, since they
   # load into it. `merman-nix/default` brings pkgs.merman-nix, the
   # headless mermaid renderer the Emacs and Claude integrations spawn.
-  # The flake exports its own entry as `pkgOverlays` and as plain
-  # `overlays`; the entries of consumed projects are applied, not
+  # The flake exports the entry of this layer as `pkgOverlays` and as
+  # plain `overlays`; the entries of consumed projects are applied, not
   # exported.
 
   # packages.* is deliberately not partitioned: consumers take these
@@ -204,8 +204,9 @@
                 ];
               }).config.home-files;
 
-            # Homes of `tester` that select the microvm module with the
-            # given kinds of ch-microvm and the given kinds for agents.
+            # Home-manager configurations of `tester` that select the
+            # microvm module with the given kinds of ch-microvm and the
+            # given kinds for agents.
             # The microvm module imports the home-manager module of
             # ch-microvm, which declares `ch-microvm.kinds`.
             microvmConfigurationFor =
@@ -280,9 +281,10 @@
               agentKinds:
               !(builtins.tryEval (microvmConfiguration microvmInstanceKinds agentKinds).home.packages).success;
 
-            # A home of `tester` whose judge has one endpoint, the stub
-            # System One server the tic-check check starts on a fixed
-            # port of the build sandbox's own loopback. Its hooks are the
+            # A home-manager configuration of `tester` whose judge has one
+            # endpoint, the stub System One server the tic-check check
+            # starts on a fixed port of the loopback inside the build
+            # sandbox. Its hooks are the
             # packages the module builds from the real tables.
             judgeHooks =
               (inputs.home-manager.lib.homeManagerConfiguration {
@@ -380,8 +382,8 @@
             };
 
             # The activation entries that merge the declared settings into
-            # the agents' own files, rewritten from the test home's
-            # directory to $HOME, which a build can write.
+            # the configuration files of the agents, rewritten from the
+            # home directory of `tester` to $HOME, which a build can write.
             agentConfigActivation =
               lib.concatMapStrings
                 (
@@ -398,8 +400,8 @@
 
             agentShellInit = workbenchConfiguration.config.programs.nemacs.settings.bundles.agent-shell.init;
 
-            # A home that wires OpenCode into Emacs and leaves Codex out,
-            # and that has no Claude Code at all.
+            # A home-manager configuration that wires OpenCode into Emacs
+            # and leaves Codex out, and that has no Claude Code at all.
             selectiveConfiguration = inputs.home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
               modules = [
@@ -432,8 +434,8 @@
               ];
             };
 
-            # A home whose Codex and OpenCode run whole inside a checkout's
-            # sandbox under the real srt, against a mock model API on
+            # A home-manager configuration whose Codex and OpenCode run
+            # whole inside the sandbox of a checkout under the real srt, against a mock model API on
             # 127.0.0.2. srt sends a sandboxed request through its proxy
             # unless the host is localhost or 127.0.0.1, and lets the
             # proxy reach a loopback address only when the address is
@@ -708,8 +710,8 @@
 
               # The CLI composing the parts the home-manager module
               # builds, end to end: the registry and parts come from the
-              # files of a real home-manager configuration, with the home
-              # directory paths of the registry pointed at those files.
+              # files of a real home-manager configuration, with the
+              # home directory paths of the registry pointed at those files.
               agent-sandbox-compose =
                 pkgs.runCommand "agent-sandbox-compose"
                   {
@@ -771,8 +773,8 @@
                     agent-sandbox status -C repo
 
                     # A whole agent in the enrolled checkout runs under srt,
-                    # with the checkout's modules and its own (the
-                    # searcher), write access to the checkout, and the
+                    # with the checkout's modules and the module of the
+                    # agent (the searcher), write access to the checkout, and the
                     # baseline's write guards; outside a checkout it runs
                     # unchanged.
                     export XDG_RUNTIME_DIR="$TMPDIR/run" SRT_PROBE="$TMPDIR/probe"
@@ -1008,7 +1010,7 @@
                     kill %1
 
                     # OpenCode 1 prints the resolved configuration; OpenCode
-                    # 2 lists the documents it loaded, each in its own
+                    # 2 lists the documents it loaded, each in a different
                     # shape (the model as provider and model, the servers
                     # under `mcp.servers`).
                     cd "$HOME/work"
@@ -1021,8 +1023,8 @@
                     touch $out
                   '';
 
-              # Codex and OpenCode, run by their own commands in an enrolled
-              # checkout, inside the real srt, against the mock model API.
+              # Codex and OpenCode, run by the commands their modules
+              # install in an enrolled checkout, inside the real srt, against the mock model API.
               # The mock answers with a call to the MCP tool `mark`, which
               # the stand-in Emacs bridge serves from outside the sandbox:
               # the call reaches it through the socket of the run, and the
@@ -1138,7 +1140,8 @@
                       test -e nested-passed
                     )
 
-                    # Inside, the checkout is writable and the home is not.
+                    # Inside, the checkout is writable and the
+                    # home directory is not.
                     agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch inside' < /dev/null
                     test -e inside
                     if agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch /build/home/outside' < /dev/null; then
@@ -1155,8 +1158,8 @@
                     test "$(cat "$FAKE_MCP_MARKS")" = "$root"
                     jq -e -s 'map(select(.path | endswith("/chat/completions"))) | length >= 2' "$TMPDIR/requests.jsonl"
 
-                    # OpenCode 2, through the opencode module's own command,
-                    # reaches the MCP server through its Code Mode tool
+                    # OpenCode 2, through the command the opencode module
+                    # installs, reaches the MCP server through its Code Mode tool
                     # `execute`, once the server has connected (the mock
                     # retries).
                     rm "$FAKE_MCP_MARKS"
@@ -1167,7 +1170,7 @@
                     # same commands, here and in a checkout that is not
                     # enrolled, where writes outside the root ask this Emacs.
                     # Codex's workspace-write sandbox also opens TMPDIR, so
-                    # the tasks get a TMPDIR of their own, apart from the
+                    # the tasks get a separate TMPDIR, apart from the
                     # outside directory.
                     cd "$TMPDIR"
                     git init -q plain
@@ -1300,7 +1303,7 @@
               # The collab-comments integration: the add-comment and
               # list-comments MCP tools with their edit-contract anchor
               # matching, and threads surviving present and transcript
-              # re-renders. The package's own suite runs in its
+              # re-renders. The test suite of the package runs in its
               # repository (github:clhodapp/collab-comments).
               collab-comments-ert = pkgs.runCommand "collab-comments-ert" { } ''
                 export HOME="$TMPDIR"
@@ -1397,8 +1400,7 @@
                     fires possessive-own 'The fix goes in its own commit.'
                     fires possessive-own "The users' own keys are kept."
                     fires possessive-own 'This uses home-manager’s own commands.'
-                    passes possessive-own 'The script runs on its own.'
-                    passes possessive-own "The home-manager module's owner signs it."
+                    passes possessive-own 'The script runs on its own.'                    passes possessive-own "The home-manager module's owner signs it."
                     passes possessive-own 'The log shows `its own commit` twice.'
                     passes possessive-own 'The user called "its own commit" a tic.'
                     passes possessive-own 'The user called “its own commit” a tic.'

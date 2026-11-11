@@ -19,7 +19,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--prepare":
 
 
 def prepare_launcher(root, codex):
-    # Each launcher has its own PID and runtime, as real terminal clients do.
+    # Each launcher has a separate PID and runtime, as real terminal clients do.
     result = subprocess.run([sys.executable, __file__, "--prepare", str(root), codex],
                             text=True, capture_output=True, check=True)
     return json.loads(result.stdout)

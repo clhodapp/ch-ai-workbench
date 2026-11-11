@@ -43,7 +43,7 @@ same way for both.
 
 Exposure grants reading. Sending input to a ghostel terminal (simulated
 keystrokes, `ghostel--send-encoded`) types into the user's **live**
-session; that is stateful and needs its own explicit say-so first, per
+session; that is stateful and needs a separate explicit say-so first, per
 the `live-emacs-safety` skill.
 
 ## When this comes up

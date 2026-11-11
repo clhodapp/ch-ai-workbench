@@ -23,10 +23,10 @@
 # to ask the user.  The hash leaves out the `approval' argument, which
 # the reveal hook adds after the user allows, so the marked call and the
 # approved one share a key.  An MCP result was already redacted by the
-# server, so this hook finds nothing in it; the server's own note marks
+# server, so this hook finds nothing in it; the server's redaction note marks
 # it instead.  When the user has allowed, an approved marker exists for
 # the key; this hook consumes it and lets that one result through
-# unredacted (for an MCP read, the server skipped its own redaction for
+# unredacted (for an MCP read, the server skipped its redaction for
 # the same call).
 
 payload=$(cat) || exit 0

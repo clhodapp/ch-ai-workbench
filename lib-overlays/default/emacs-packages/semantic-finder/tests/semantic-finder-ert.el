@@ -150,7 +150,7 @@ prefixed chunks to one whose cap it exceeds."
      (should (semantic-finder--stale-p buf)))))
 
 (ert-deftest semantic-finder-entries-are-per-model ()
-  "Each model's vector has its own tick; refreshing one leaves the other."
+  "Each model's vector has a separate tick; refreshing one leaves the other."
   (semantic-finder-test--with-table
    (semantic-finder-test--with-buffer "sf-models" "v1"
      (let ((tick (buffer-chars-modified-tick buf)))
@@ -391,7 +391,7 @@ must match exactly one entry."
 
 (ert-deftest semantic-finder-ensure-index-regroups-chunks ()
   "One request carries every chunk of every missing buffer, and each
-buffer gets back exactly its own vectors."
+buffer gets back exactly the vectors of its chunks."
   (let ((semantic-finder-chars-per-token 1)
         (semantic-finder-chunk-reserve-chars 0)
         (semantic-finder-chunk-head-chars 10))
@@ -439,7 +439,7 @@ pair; a different pair (another finder's prefixes) caches separately."
       (should (= 2 requests))
       (semantic-finder--anchors "doc: " "query: ")
       (should (= 2 requests))
-      ;; another model embeds its own anchors
+      ;; another model embeds separate anchors
       (semantic-finder--anchors "doc: " "query: " "other-model")
       (should (= 3 requests)))))
 

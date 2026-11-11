@@ -31,7 +31,7 @@ class CandidatesTest(unittest.TestCase):
         self.assertEqual(found, [{"sentence": "The registry of this configuration is unchanged.", "source": "negation"}])
 
     def test_a_negation_with_nothing_to_answer(self):
-        # A limit stated for its own sake shares no word with what the user said.
+        # A limit stated with no correction behind it shares no word with what the user said.
         self.assertEqual(candidates("The parser does not follow symlinks.", ["add a lexer"]), [])
 
     def test_narration(self):

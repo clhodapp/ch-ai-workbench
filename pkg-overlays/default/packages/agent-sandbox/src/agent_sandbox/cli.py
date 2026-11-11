@@ -6,7 +6,7 @@ A sandbox module says what one kind of tooling needs inside the sandbox:
 its executables, domains, sockets and writable paths. A checkout chooses
 the set of modules its work needs. Enrollment composes them into one
 fragment, writes it into the checkout's co-owned
-``.claude/settings.local.json`` (three-way merge; Claude Code's own keys
+``.claude/settings.local.json`` (three-way merge; the keys Claude Code writes
 are never touched), and records the chosen set and what was applied in
 the sidecar ``.agent-sandbox/binding.json``. A session reads its
 sandbox rules at launch, so a change reaches a running session only
@@ -582,7 +582,7 @@ def redirect_job_tmp(root: Path) -> str | None:
     tree, under .agent-sandbox/jobs/<id>/tmp: a plain
     directory entry the sandbox resolves into space the checkout
     already owns, so nothing is granted and the isolation unit stays
-    the checkout, which is the sandbox's own unit (every session in a
+    the checkout, which is the unit the sandbox isolates (every session in a
     checkout can already write its working tree). Per worktree by
     construction, alive as long as the checkout, excluded from git
     status via the per-clone exclude file. Sandboxed commands cannot

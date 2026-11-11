@@ -7,7 +7,7 @@
 #
 # A queued task carries CLAUDE_QUEUE_TASK, the id its territory record
 # is filed under; a session without it is not a queued task and is
-# allowed, so OpenCode's own permissions decide as they would without
+# allowed, so the OpenCode permission settings decide as they would without
 # the plugin.  A queued task's writes inside its territory are allowed
 # at once.  A write outside becomes a question to the user through
 # `claude-consent ask'.  For a queued task every failure is a deny:

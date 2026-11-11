@@ -2,7 +2,7 @@
 """The agent tools: an MCP server on stdio, started by Claude Code from
 the skills-dir plugin.
 
-A sandboxed agent cannot inspect or change its own sandbox from Bash: in
+A sandboxed agent cannot inspect or change the sandbox it runs in from Bash: in
 a masked enrollment the registry and parts are unreadable, the settings
 and sidecar files are write-guarded, and the consent spool is outside
 the write scope. Claude Code starts MCP servers outside the Bash

@@ -112,7 +112,7 @@ def apply_project_config(root: Path, config: dict[str, Any], base: dict[str, Any
         raise ToolError("the sandbox registry needs configMerger; activate the updated home-manager configuration")
     if config:
         # Native missing-file guards need their parent directory to exist.
-        # Inherited worktrees have no Claude settings file of their own.
+        # An inherited worktree has no separate Claude settings file.
         (root / ".claude").mkdir(exist_ok=True)
     result = subprocess.run(
         [merger, "apply", "--format", "toml", "--target", str(root / ".codex/config.toml"),

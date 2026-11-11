@@ -47,7 +47,7 @@ from . import sessions
 from .cli import REMINDER, first_answer, transcript_entries, typed_prompt
 
 READER = (
-    "The reader is the person who typed user_messages. They saw the assistant's replies and their own messages, "
+    "The reader is the person who typed user_messages. They saw the assistant's replies and the messages they typed, "
     "but never saw tool output, file edits the assistant made, other Claude sessions or subagents."
 )
 RESOLVABLE = {

@@ -3,8 +3,8 @@
 # The in-tree Emacs packages this layer adds, as an overlay on the
 # editor's nemacs package set: each is built with the set's
 # `nemacsBuild`, at the version of its Emacs, and lands in the set under
-# its own name. The set is one fixed point with the editor's own
-# packages, so gh-review-claude reaches the editor's gh-review through
+# the package's name. The set is one fixed point with the package set
+# of the editor, so gh-review-claude reaches the editor's gh-review through
 # `final`.
 final: _prev:
 let

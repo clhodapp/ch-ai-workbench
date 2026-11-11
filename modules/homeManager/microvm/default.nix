@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: MIT
 #
 # Guests for coding-agent sessions. ch-microvm runs on-demand instances
-# of microvm.nix guests for the user of this home, with the kinds of
+# of microvm.nix guests for the user of this home-manager configuration,
+# with the kinds of
 # `ch-microvm.kinds`. This module imports the home-manager module of
 # ch-microvm from the registry of this layer, as `ch-microvm/microvm`,
 # and lets coding-agent sessions use some of those kinds. The option
 # `kinds` names the kinds agents may use, and the guests among them
 # that serve MCP.
 #
-# Enabled Claude Code homes get the `microvm` plugin; enabled Codex
-# homes get the same MCP server registered directly. The MCP client
+# A home-manager configuration with Claude Code enabled gets the
+# `microvm` plugin; one with Codex enabled gets the same MCP server
+# registered directly. The MCP client
 # leases, starts and stops instances through it.
 #
 # For each kind that agents may use and that has shares, the module
@@ -18,8 +20,8 @@
 # instance of the kind in its default directory, as
 # `ch-microvm.instances` lists them. A checkout that chooses it can put
 # targets into the `in` share of an instance and read its `out` share.
-# The module declares these sandbox modules when the home also selects
-# the agent-sandbox module of this layer.
+# The module declares these sandbox modules when the home-manager
+# configuration also selects the agent-sandbox module of this layer.
 #
 # docs/development/microvm-guests.md describes the whole mechanism.
 { closure-lib, ... }:
@@ -41,7 +43,7 @@ let
       ch-ai-workbench.microvm needs pkgs.ch-ai-workbench.${name}:
       apply ch-ai-workbench's package overlay (`overlays.default`; a
       caisson consumer lists the flake in `projects`) to the package set
-      this home evaluates with.
+      this home-manager configuration evaluates with.
     '');
 
   kindType = lib.types.submodule {
@@ -52,8 +54,8 @@ let
         description = ''
           Whether agents may use the kind. The MCP server `microvm`
           offers only the kinds that set this. When the kind has shares
-          and the home selects the agent-sandbox module of this
-          layer, the sandbox module `microvm-<kind>` grants read and
+          and the home-manager configuration selects the agent-sandbox
+          module of this layer, the sandbox module `microvm-<kind>` grants read and
           write access to the share directories that
           `ch-microvm.instances.<kind>` lists. The Bash commands of a
           checkout that chooses it reach the share directories of the
@@ -78,7 +80,7 @@ let
           Whether the guest serves MCP on the `vsockPort` of its kind in
           `ch-microvm.kinds`. When `microvm_up` brings up such a guest,
           the MCP server `microvm` connects to it and offers the tools of
-          the guest as tools of its own.
+          the guest beside the tools it serves itself.
         '';
       };
     };
@@ -181,7 +183,7 @@ in
       defaultText = lib.literalExpression "pkgs.ch-ai-workbench.microvm-mcp";
       description = ''
         The program `microvm-mcp` before the module bakes the kinds of
-        this home into it.
+        this home-manager configuration into it.
       '';
     };
 
@@ -189,9 +191,9 @@ in
       type = lib.types.package;
       readOnly = true;
       default = command;
-      defaultText = lib.literalMD "the program `microvm-mcp` with the kinds of this home baked in";
+      defaultText = lib.literalMD "the program `microvm-mcp` with the kinds of this home-manager configuration baked in";
       description = ''
-        The MCP server `microvm` of this home, with the kinds agents may
+        The MCP server `microvm` of this home-manager configuration, with the kinds agents may
         use baked in. The plugin `microvm` runs it.
       '';
     };

@@ -49,8 +49,8 @@ def find_repo_root(start: Path) -> Path | None:
 
 
 def git_dir(root: Path) -> Path | None:
-    """The checkout's own git directory (a worktree's private one for
-    linked worktrees). None when git cannot tell us."""
+    """The git directory of the checkout (for a linked worktree, the
+    private one of that worktree). None when git cannot tell us."""
     try:
         out = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--absolute-git-dir"],
@@ -65,7 +65,7 @@ def git_dir(root: Path) -> Path | None:
 
 def ensure_excluded(root: Path, pattern: str) -> None:
     """Keep a file this tool writes out of `git status` via the per-clone
-    exclude file (never the repository's own .gitignore)."""
+    exclude file (never the .gitignore the repository tracks)."""
     directory = git_dir(root)
     if directory is None:
         return
@@ -92,7 +92,7 @@ def settings_path(root: Path) -> Path:
 
 
 def sandbox_dir(root: Path) -> Path:
-    """The checkout's own directory for this tool: the binding, the
+    """The directory of this tool inside the checkout: the binding, the
     credentials and the job scratch."""
     return root / SANDBOX_DIR_NAME
 

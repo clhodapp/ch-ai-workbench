@@ -58,7 +58,7 @@ emit semver footers such as BREAKING CHANGE:.
 
 Subject: imperative mood, concise.  Add a short body only when the
 why is not obvious from the diff.  Match the style of the recent
-commit subjects provided.  If the repository declares its own
+commit subjects provided.  If the repository declares
 commit conventions (e.g. in CLAUDE.md), those take precedence.
 
 The input contains recent commit subjects and the staged diff.

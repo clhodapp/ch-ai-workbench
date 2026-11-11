@@ -5,7 +5,7 @@
 # without naming one vendor (comment threads, the semantic finder,
 # parenting, the ACP agent shell, commit messages, the ghostel
 # environment handoff), and the Emacs packages this layer builds. The
-# nemacs modules `gptel` and `claude` add their own bundles on top. Every
+# nemacs modules `gptel` and `claude` add more bundles on top. Every
 # bundle is on by default, so a plain `enable = false` elsewhere turns
 # one off.
 { closure-lib, ... }:

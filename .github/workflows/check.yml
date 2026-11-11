@@ -10,7 +10,7 @@
 #
 # This repository pulls from the clhodapp cache and does not push to
 # it yet: what consumers get from that cache is the editor's closure,
-# published by ch-emacs-config's own pipeline. The workbench's closure
+# published by the pipeline of ch-emacs-config. The workbench's closure
 # lives only in this repository's Actions cache for now.
 #
 # Only a few triggers may write the cache in main's scope (push,
@@ -27,7 +27,7 @@
 # builds). The one route from a request to the runner's store outside
 # the sandbox is this pipeline itself, so a request that touches
 # .github/ gets no build here; check-pr.yml builds it instead, under
-# its own cache scope, which main can never restore. The result is
+# the request's cache scope, which main can never restore. The result is
 # posted to the request's head commit as the "check" status.
 #
 # One cache entry, holding a union of builds as a Nix binary cache on
@@ -38,11 +38,11 @@
 # a tree of roots the entry carries: main/<sha> for main's builds,
 # pr/<number>/<sha> for requests', each listing the store paths of that
 # build's closure that the upstream cache did not serve. Each run adds
-# its own, drops the lowest-priority roots until the union fits the
+# a root for its build, drops the lowest-priority roots until the union fits the
 # repository's 10 GB of cache, and then every path no surviving root
 # lists goes. The priority order, highest first: the current main; each
 # open request's newest build; older mains; closed requests. Requests
-# that changed the pipeline have entries of their own in their scope,
+# that changed the pipeline have separate entries in their scope,
 # which this run only ever deletes, closed ones first, when space is
 # short. Older entries in this scope are removed by the `prune` job,
 # after the new entry is confirmed to exist, never before.
@@ -58,7 +58,7 @@ on:
   workflow_dispatch:
     inputs:
       head:
-        description: Commit to check (a pull request's head); main's own when empty
+        description: Commit to check (a pull request's head); the head of main when empty
         required: false
         type: string
       pr:
@@ -77,7 +77,7 @@ permissions:
 # Every run that writes main's cache entry (a push, or a dispatched
 # build of a request) waits for the previous one: two writers at once
 # each restore the same entry and the last save wins, dropping the
-# other's roots. The dispatch hop has its own group per request, so a
+# other's roots. The dispatch hop has a separate group per request, so a
 # newer push to a request supersedes an older pending dispatch, and so
 # the hop is not cancelled by the very build it started.
 concurrency:
@@ -311,8 +311,8 @@ jobs:
           done
 
           # 4. The budget: the repository's 10 GB, less the entries of
-          #    requests that changed the pipeline (they live in their own
-          #    scopes), less this scope's current entry, which coexists
+          #    requests that changed the pipeline (they live in the
+          #    scopes of those requests), less this scope's current entry, which coexists
           #    with the new one until the `prune` job removes it. Sizes
           #    are the compressed sizes the narinfo files record, which
           #    is what the entry is made of.
