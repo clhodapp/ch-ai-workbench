@@ -7,6 +7,7 @@ import io
 import os
 import socket
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -172,6 +173,23 @@ class RunTest(unittest.TestCase):
             "PATH": policy["path"],
         })
         self.assertNotIn(str(Path(env["TMPDIR"]).parent), json.dumps(persisted))
+
+    def test_codex_enrollment_stays_out_of_git_status(self):
+        # The fixture's bare `.git` directory is enough for root discovery
+        # but not for `git rev-parse`; make it a real repository.
+        shutil.rmtree(self.root / ".git")
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        base = {**RUN_BASE, "cli": "/bin/agent-sandbox", "landlock": "/bin/landlock"}
+        write_registry(self.config, {"work": WORK, "agent": self.agent_part}, base=base,
+                       extra={**EXTRA, "agents": {"codex": {"backend": "codex", "modules": ["agent"]}}})
+        self.enroll("work")
+        self.enroll("work")
+        self.assertTrue((self.root / ".codex/config.toml").is_file())
+        exclude = (self.root / ".git/info/exclude").read_text()
+        self.assertEqual(exclude.splitlines().count("/.codex/config.toml"), 1)
+        status = subprocess.run(["git", "-C", str(self.root), "status", "--porcelain", "--", ".codex"],
+                                capture_output=True, text=True, check=True).stdout
+        self.assertEqual(status, "")
 
     def test_codex_acp_child_gets_the_same_native_profile(self):
         base = {**RUN_BASE, "cli": "/bin/agent-sandbox", "landlock": "/bin/landlock"}

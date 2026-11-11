@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -45,6 +46,41 @@ def find_repo_root(start: Path) -> Path | None:
         if (candidate / ".git").exists():
             return candidate
     return None
+
+
+def git_dir(root: Path) -> Path | None:
+    """The checkout's own git directory (a worktree's private one for
+    linked worktrees). None when git cannot tell us."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--absolute-git-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return Path(out) if out else None
+
+
+def ensure_excluded(root: Path, pattern: str) -> None:
+    """Keep a file this tool writes out of `git status` via the per-clone
+    exclude file (never the repository's own .gitignore)."""
+    directory = git_dir(root)
+    if directory is None:
+        return
+    exclude = directory / "info" / "exclude"
+    try:
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if pattern in existing.splitlines():
+            return
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a", encoding="utf-8") as fh:
+            if existing and not existing.endswith("\n"):
+                fh.write("\n")
+            fh.write(pattern + "\n")
+    except OSError:
+        return
 
 
 def claude_dir(root: Path) -> Path:

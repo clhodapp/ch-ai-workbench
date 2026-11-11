@@ -19,7 +19,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from .files import ToolError, update_json, write_text_atomic
+from .files import ToolError, ensure_excluded, update_json, write_text_atomic
 
 POLICY_ENV = "AGENT_SANDBOX_CODEX_POLICY"
 PROJECT_SIDECAR = ".agent-sandbox/codex-config.json"
@@ -121,6 +121,8 @@ def apply_project_config(root: Path, config: dict[str, Any], base: dict[str, Any
     )
     if result.returncode:
         raise ToolError(f"cannot apply composed Codex enrollment: {result.stderr.strip()}")
+    # The enrollment is per clone, like Claude Code's settings.local.json.
+    ensure_excluded(root, "/.codex/config.toml")
 
 
 def inheriting_worktrees(root: Path) -> list[Path]:

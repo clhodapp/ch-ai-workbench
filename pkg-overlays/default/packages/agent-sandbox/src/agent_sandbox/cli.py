@@ -19,7 +19,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,6 +28,7 @@ from .compose import check_known, compose, module_names
 from .files import (
     DURATIONS,
     ToolError,
+    ensure_excluded,
     expiring_checkouts,
     find_repo_root,
     index_expiring,
@@ -509,21 +509,6 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def _git_dir(root: Path) -> Path | None:
-    """The checkout's own git directory (a worktree's private one for
-    linked worktrees). None when git cannot tell us."""
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--absolute-git-dir"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return Path(out) if out else None
-
-
 SCRATCH_SUBDIR = Path(".agent-sandbox") / "jobs"
 CREDS_SUBDIR = Path(".agent-sandbox") / "creds"
 # Job scratch of a checkout bound before the rename; live jobs' tmp
@@ -583,24 +568,8 @@ def provision_creds(root: Path) -> list[str]:
 
 
 def _ensure_excluded(root: Path) -> None:
-    """Keep the scratch tree out of `git status` via the per-clone
-    exclude file (never the repository's own .gitignore)."""
-    git_dir = _git_dir(root)
-    if git_dir is None:
-        return
-    exclude = git_dir / "info" / "exclude"
-    line = f"/{SCRATCH_SUBDIR.parent.as_posix()}/"
-    try:
-        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        if line in existing.splitlines():
-            return
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        with exclude.open("a", encoding="utf-8") as fh:
-            if existing and not existing.endswith("\n"):
-                fh.write("\n")
-            fh.write(line + "\n")
-    except OSError:
-        return
+    """Keep the scratch tree out of `git status`."""
+    ensure_excluded(root, f"/{SCRATCH_SUBDIR.parent.as_posix()}/")
 
 
 def redirect_job_tmp(root: Path) -> str | None:
