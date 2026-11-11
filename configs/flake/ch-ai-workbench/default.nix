@@ -1349,6 +1349,61 @@
                     touch $out
                   '';
 
+              # The regex table entries that carry an ignore pattern,
+              # through the Stop hook with the judge down: each entry
+              # fires on its positive sentences and stays silent on the
+              # compounds, idioms, backtick spans, and quotations its
+              # ignore pattern and the matcher remove.
+              claude-tic-check-table =
+                pkgs.runCommand "claude-tic-check-table"
+                  {
+                    nativeBuildInputs = [ pkgs.jq ];
+                  }
+                  ''
+                    hook=${lib.getExe judgeHooks.tic-check.package}
+                    export XDG_RUNTIME_DIR="$TMPDIR/run"
+                    mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    reasons() { jq -cn --arg m "$1" '{session_id: "0123456789abcdef", stop_hook_active: false, last_assistant_message: $m}' | "$hook" | jq -r '.reason // empty'; }
+                    fires() {
+                      res=$(reasons "$2")
+                      grep -q -- "- $1 (1): " <<<"$res" || { echo "$1 missed: $2" >&2; exit 1; }
+                    }
+                    passes() {
+                      res=$(reasons "$2")
+                      ! grep -q -- "- $1 (" <<<"$res" || { echo "$1 fired: $2" >&2; exit 1; }
+                    }
+
+                    fires home-shorthand 'The change touches a home inside desktop-2.'
+                    fires home-shorthand 'The home sets nix.package.'
+                    fires home-shorthand 'Both homes build.'
+                    fires home-shorthand 'Each home builds its profile.'
+                    fires home-shorthand 'Every home builds its profile.'
+                    fires home-shorthand 'This home builds its profile.'
+                    fires home-shorthand 'That home builds its profile.'
+                    fires home-shorthand "The home's packages are listed."
+                    passes home-shorthand 'The file lands in the home directory.'
+                    passes home-shorthand 'Each user has a home area.'
+                    passes home-shorthand 'The home-manager configuration sets nix.package.'
+                    passes home-shorthand 'The homed service manages the user.'
+                    passes home-shorthand 'The path under $HOME is fixed.'
+                    passes home-shorthand 'The home page lists the release.'
+                    passes home-shorthand 'The agent goes home.'
+                    passes home-shorthand 'Set `the home` in the module.'
+                    passes home-shorthand 'The user wrote "a home" in the title.'
+                    passes home-shorthand 'The user wrote “each home” in the title.'
+
+                    fires possessive-own "This uses home-manager's own mechanism."
+                    fires possessive-own 'The fix goes in its own commit.'
+                    fires possessive-own "The users' own keys are kept."
+                    fires possessive-own 'This uses home-manager’s own commands.'
+                    passes possessive-own 'The script runs on its own.'
+                    passes possessive-own "The home-manager module's owner signs it."
+                    passes possessive-own 'The log shows `its own commit` twice.'
+                    passes possessive-own 'The user called "its own commit" a tic.'
+                    passes possessive-own 'The user called “its own commit” a tic.'
+                    touch $out
+                  '';
+
               # The tic-check hooks with the judge, against a stub System
               # One server: with the judge down the regex table decides
               # alone; the judge pushes back on a dimension at or above
@@ -1451,12 +1506,12 @@
                     # correction, judged with the replaced text and the
                     # user's latest message beside it.
                     answers '{"arguing-with-ghosts": 0.95}'
-                    jq -cn '{type: "user", message: {role: "user", content: "drop nix.package from the homes"}}' > transcript.jsonl
+                    jq -cn '{type: "user", message: {role: "user", content: "drop nix.package from the machines"}}' > transcript.jsonl
                     res=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "home.nix", old_string: "nix.package = pkgs.nix;", new_string: "# nix.package is not set here."}}' | "$edit")
                     [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.95): '
                     tail -n 1 requests.log | jq -e '.state["replaced text"] == "nix.package = pkgs.nix;"'
-                    tail -n 1 requests.log | jq -e '[.state | to_entries[] | select(.key | contains("latest messages")) | .value] == [["drop nix.package from the homes"]]'
+                    tail -n 1 requests.log | jq -e '[.state | to_entries[] | select(.key | contains("latest messages")) | .value] == [["drop nix.package from the machines"]]'
 
                     # A prose file is asked the prose dimensions.
                     answers '{"fragments": 0.95}'
@@ -1477,18 +1532,18 @@
                     # user's latest message is judged separately, with the
                     # replaced text beside it.
                     answers '{"ghost-sentence": 0.7}'
-                    ghost() { jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" --arg n "$1" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/homes.md", old_string: "Each home sets nix.package.", new_string: $n}}' | "$edit"; }
-                    res=$(ghost 'A home builds its profile. The homes do not set nix.package.')
+                    ghost() { jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" --arg n "$1" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/machines.md", old_string: "Each machine sets nix.package.", new_string: $n}}' | "$edit"; }
+                    res=$(ghost 'A machine builds its profile. The machines do not set nix.package.')
                     [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$res")" = deny ]
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- arguing-with-ghosts (judge 0.7): '
-                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- 'sentence: The homes do not set nix.package.'
-                    grep '"ghost-sentence"' requests.log | tail -n 1 | jq -e '.state["the sentence"] == "The homes do not set nix.package." and .state["replaced text"] == "Each home sets nix.package."'
+                    jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- 'sentence: The machines do not set nix.package.'
+                    grep '"ghost-sentence"' requests.log | tail -n 1 | jq -e '.state["the sentence"] == "The machines do not set nix.package." and .state["replaced text"] == "Each machine sets nix.package."'
                     # Below the push-back level the write goes through, and
                     # the sentence reaches the model after the call.
                     answers '{"ghost-sentence": 0.5}'
-                    [ -z "$(ghost 'A home builds its profile. The homes never set nix.package.')" ]
-                    ctx=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/homes.md", old_string: "Each home sets nix.package.", new_string: "A home builds its profile. The homes never set nix.package."}, tool_response: {}}' | ${lib.getExe judgeHooks.tic-check-turn.package} | jq -r .hookSpecificOutput.additionalContext)
-                    grep -q -- '- arguing-with-ghosts sentence (judge 0.5): "The homes never set nix.package."' <<<"$ctx"
+                    [ -z "$(ghost 'A machine builds its profile. The machines never set nix.package.')" ]
+                    ctx=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/machines.md", old_string: "Each machine sets nix.package.", new_string: "A machine builds its profile. The machines never set nix.package."}, tool_response: {}}' | ${lib.getExe judgeHooks.tic-check-turn.package} | jq -r .hookSpecificOutput.additionalContext)
+                    grep -q -- '- arguing-with-ghosts sentence (judge 0.5): "The machines never set nix.package."' <<<"$ctx"
 
                     # The whole turn: a finding in a message written
                     # between tool calls, and a final message that leaves

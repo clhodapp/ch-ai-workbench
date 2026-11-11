@@ -3,8 +3,10 @@
 # peer-programmer style's banned phrasings that a regex can catch
 # with few false positives.  Patterns are GNU grep EREs matched
 # case-insensitively against the finished message with code fences
-# and backtick spans removed; the rule is the one-line reminder the
-# model gets back.  A hit is a trigger, not a verdict: the model
+# and backtick spans removed; an entry's ignore pattern, when set,
+# removes more text before that entry alone is matched.  The rule is
+# the one-line reminder the model gets back.  A hit is a trigger, not
+# a verdict: the model
 # answers the check with clean when the match is legitimate.
 {
   # The ownership handoff: a possessive left dangling at the end of a
@@ -42,6 +44,29 @@
   grows = {
     pattern = "\\bgr(ow|ows|ew|own|owing)\\b";
     rule = "say what happens (\"if we add a title hook\", \"once the parser handles nested lists\"), not that something \"grows\" a capability";
+  };
+  # "a home", "the home", "each home", or "homes" as the noun for a
+  # home-manager configuration.  A determiner before "home" makes it a
+  # noun, so a bare "home" in "go home" passes; "homed" and "$HOME" do
+  # not match the word.  The ignore pattern removes hyphenated
+  # compounds such as "home-manager", the compounds "home directory",
+  # "home area", "home page" and their like, and text in double or
+  # curly quotation marks before this entry is matched.
+  home-shorthand = {
+    pattern = "\\b(a|the|each|every|this|that|one|another|its|their|your|which)[[:space:]]+homes?\\b|\\bhomes\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bhome-[[:alnum:]_-]*|\\bhome[[:space:]]+(directory|directories|dir|dirs|folder|folders|area|areas|page|pages|path|paths|screen|row|network|server)\\b";
+    rule = "write \"a home-manager configuration\" (\"the home-manager configuration inside desktop-2\"), not \"a home\", \"the home\", or \"homes\"";
+  };
+  # A possessive followed by "own" as emphasis ("home-manager's own
+  # mechanism", "its own commit").  The possessive is a noun with an
+  # apostrophe (straight or curly, as in elliptical-possessive) or a
+  # possessive pronoun.  The ignore pattern removes the idiom "on its
+  # own" with any possessive pronoun, and text in double or curly
+  # quotation marks, before this entry is matched.
+  possessive-own = {
+    pattern = "(^|[^'’[:alnum:]])([[:alnum:]][[:alnum:]_-]*('s|’s|s'|s’)|its|their|his|her|our|your|my|whose)[[:space:]]+own\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bon[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own\\b";
+    rule = "drop the emphatic \"own\" and name the thing (\"home-manager's useUserPackages mechanism\", \"a separate commit\"), not \"X's own\" or \"its own\"; keep \"own\" only where the sentence contrasts two owners";
   };
   performed-enthusiasm = {
     pattern = "\\b(happy|glad) to\\b";

@@ -96,6 +96,13 @@ most of the codebase. Write for that person.
 - No "grows" for a system gaining a capability or a person adding a
   feature. Say what happens: "if we add a title hook to ghostel",
   "once the parser handles nested lists".
+- No "a home", "the home", or "homes" for a home-manager configuration.
+  Write "a home-manager configuration", or "the home-manager
+  configuration inside desktop-2" for one declared inside a machine.
+- No "X's own" or "its own" as emphasis: "home-manager's own
+  mechanism", "its own commit". Drop "own" and name the thing:
+  "home-manager's `useUserPackages` mechanism", "a separate commit".
+  Keep "own" only where the sentence contrasts two owners.
 - No "never" as emphatic dressing on a flat negation or a contrast.
   Use "not" or "rather than" instead: "do not skip the build step",
   "commit the change, rather than leaving it staged". "Never" is

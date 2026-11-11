@@ -89,7 +89,7 @@ let
   # message (script: lib/claude-tic-check-hook.sh).
   ticCheckTable = lib.mapAttrsToList (name: check: {
     inherit name;
-    inherit (check) pattern rule;
+    inherit (check) pattern ignore rule;
   }) (lib.filterAttrs (_name: check: check.enable) cfg.ticChecks);
 
   # The judge: a System One decision model that scores every finished
@@ -725,6 +725,19 @@ in
               description = "GNU grep extended regex, matched case-insensitively against the finished message's prose.";
             };
 
+            ignore = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              example = "\"[^\"]*\"|\\bhome[[:space:]]+directory\\b";
+              description = ''
+                GNU extended regex whose matches are removed from the prose,
+                case-insensitively, before this entry's pattern is matched.
+                The other entries see the prose unchanged. Use it for the
+                phrases a pattern would otherwise catch, such as quoted text
+                or a compound noun. The empty string removes nothing.
+              '';
+            };
+
             rule = lib.mkOption {
               type = lib.types.str;
               example = "a handoff names the next action, not the owner";
@@ -766,7 +779,8 @@ in
         across all modules that set it. This module seeds the
         peer-programmer style's bans on a word or a character
         (lib/tic-checks.nix): elliptical-possessive, em-dash, click,
-        arrow, relationship-words, grows, performed-enthusiasm.
+        arrow, relationship-words, grows, home-shorthand,
+        possessive-own, performed-enthusiasm.
       '';
     };
 
