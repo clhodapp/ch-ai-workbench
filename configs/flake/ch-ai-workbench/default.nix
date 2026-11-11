@@ -1400,7 +1400,8 @@
                     fires possessive-own 'The fix goes in its own commit.'
                     fires possessive-own "The users' own keys are kept."
                     fires possessive-own 'This uses home-manager’s own commands.'
-                    passes possessive-own 'The script runs on its own.'                    passes possessive-own "The home-manager module's owner signs it."
+                    passes possessive-own 'The script runs on its own.'
+                    passes possessive-own 'A count reported for its own sake says nothing.'                    passes possessive-own "The home-manager module's owner signs it."
                     passes possessive-own 'The log shows `its own commit` twice.'
                     passes possessive-own 'The user called "its own commit" a tic.'
                     passes possessive-own 'The user called “its own commit” a tic.'

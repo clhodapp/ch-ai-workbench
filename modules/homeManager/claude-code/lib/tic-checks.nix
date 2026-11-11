@@ -61,12 +61,12 @@
   # A possessive followed by "own" as emphasis ("home-manager's own
   # mechanism", "its own commit").  The possessive is a noun with an
   # apostrophe (straight or curly, as in elliptical-possessive) or a
-  # possessive pronoun.  The ignore pattern removes the idiom "on its
-  # own" with any possessive pronoun, and text in double or curly
-  # quotation marks, before this entry is matched.
+  # possessive pronoun.  The ignore pattern removes the idioms "on its
+  # own" and "for its own sake" with any possessive pronoun, and text
+  # in double or curly quotation marks, before this entry is matched.
   possessive-own = {
     pattern = "(^|[^'’[:alnum:]])([[:alnum:]][[:alnum:]_-]*('s|’s|s'|s’)|its|their|his|her|our|your|my|whose)[[:space:]]+own\\b";
-    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bon[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bon[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own\\b|\\bfor[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own[[:space:]]+sake\\b";
     rule = "drop the emphatic \"own\" and name the thing (\"home-manager's useUserPackages mechanism\", \"a separate commit\"), not \"X's own\" or \"its own\"; keep \"own\" only where the sentence contrasts two owners";
   };
   performed-enthusiasm = {
