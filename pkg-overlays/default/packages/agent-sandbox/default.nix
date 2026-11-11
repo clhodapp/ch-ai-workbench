@@ -16,7 +16,10 @@ python3Packages.buildPythonApplication {
 
   # The session-start hook locates a checkout's git dir via `git
   # rev-parse`; the tests exercise it against a real repository.
-  nativeCheckInputs = [ git agent-config ];
+  nativeCheckInputs = [
+    git
+    agent-config
+  ];
 
   checkPhase = ''
     runHook preCheck

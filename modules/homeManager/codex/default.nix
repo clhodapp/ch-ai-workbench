@@ -140,9 +140,7 @@ let
   };
 
   settings =
-    cfg.settings
-    // lib.optionalAttrs (mcpServers != { }) { mcp_servers = mcpServers; }
-    // hookSettings;
+    cfg.settings // lib.optionalAttrs (mcpServers != { }) { mcp_servers = mcpServers; } // hookSettings;
 in
 {
   options.ch-ai-workbench.codex = {

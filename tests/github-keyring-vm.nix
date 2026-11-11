@@ -1,17 +1,26 @@
 # SPDX-License-Identifier: MIT
 # Real Secret Service and gh, with disposable credentials and a VM-local GitHub.
-{ pkgs, lib, self, home-manager, llmAgents }:
+{
+  pkgs,
+  lib,
+  self,
+  home-manager,
+  llmAgents,
+}:
 let
-  certificates = pkgs.runCommand "github-keyring-vm-certificate" {
-    nativeBuildInputs = [ pkgs.openssl ];
-  } ''
-    mkdir "$out"
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-      -subj /CN=api.github.com \
-      -addext 'subjectAltName=DNS:api.github.com,DNS:github.com' \
-      -addext 'basicConstraints=critical,CA:TRUE' \
-      -keyout "$out/key.pem" -out "$out/cert.pem"
-  '';
+  certificates =
+    pkgs.runCommand "github-keyring-vm-certificate"
+      {
+        nativeBuildInputs = [ pkgs.openssl ];
+      }
+      ''
+        mkdir "$out"
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+          -subj /CN=api.github.com \
+          -addext 'subjectAltName=DNS:api.github.com,DNS:github.com' \
+          -addext 'basicConstraints=critical,CA:TRUE' \
+          -keyout "$out/key.pem" -out "$out/cert.pem"
+      '';
   sandbox = self.packages.${pkgs.stdenv.hostPlatform.system}.agent-sandbox;
 in
 pkgs.testers.runNixOSTest {
@@ -22,14 +31,23 @@ pkgs.testers.runNixOSTest {
     boot.kernelPackages = pkgs.linuxPackages_latest;
     virtualisation.memorySize = 3072;
     virtualisation.cores = 2;
-    users.users.alice = { isNormalUser = true; uid = 1000; linger = true; };
+    users.users.alice = {
+      isNormalUser = true;
+      uid = 1000;
+      linger = true;
+    };
     services.dbus.enable = true;
     services.dbus.packages = [ pkgs.gnome-keyring ];
     security.pki.certificateFiles = [ "${certificates}/cert.pem" ];
     networking.extraHosts = ''
       127.0.0.2 api.github.com github.com
     '';
-    environment.systemPackages = [ pkgs.curl pkgs.libsecret pkgs.python3 pkgs.git ];
+    environment.systemPackages = [
+      pkgs.curl
+      pkgs.libsecret
+      pkgs.python3
+      pkgs.git
+    ];
     systemd.services.fake-github = {
       wantedBy = [ "multi-user.target" ];
       serviceConfig.ExecStart = "${lib.getExe pkgs.python3} ${self}/tests/agent-sandbox/github-api-fixture.py ${certificates}/cert.pem ${certificates}/key.pem";
@@ -40,7 +58,10 @@ pkgs.testers.runNixOSTest {
     };
     home-manager.useGlobalPkgs = true;
     home-manager.users.alice = {
-      imports = [ self.modules.homeManager.agent-sandbox self.modules.homeManager.codex ];
+      imports = [
+        self.modules.homeManager.agent-sandbox
+        self.modules.homeManager.codex
+      ];
       home.stateVersion = "25.05";
       programs.git.enable = true;
       home.file.".config/gh/hosts.yml".text = ''
@@ -68,18 +89,27 @@ pkgs.testers.runNixOSTest {
         trustedExecutables.github-auth-token.environment.DBUS_SESSION_BUS_ADDRESS = "";
         modules = {
           vm-runtime = {
-            toolset = [ pkgs.python3 pkgs.git ];
+            toolset = [
+              pkgs.python3
+              pkgs.git
+            ];
             allowedDomains = [ "127.0.0.3" ];
             allowLocalBinding = true;
           };
           github = {
             toolset = [ pkgs.gh ];
             githubKeyring = true;
-            allowedDomains = [ "github.com" "api.github.com" ];
+            allowedDomains = [
+              "github.com"
+              "api.github.com"
+            ];
           };
           bare-gh = {
             toolset = [ pkgs.gh ];
-            allowedDomains = [ "github.com" "api.github.com" ];
+            allowedDomains = [
+              "github.com"
+              "api.github.com"
+            ];
           };
         };
       };
