@@ -31,8 +31,8 @@ in
     # from this init, so a configuration with only this module has it
     # too.
     mcp-server = {
-      # The programs the init spawns are appended to this bundle's own
-      # init rather than to the configuration-wide init, so the `defvar`s
+      # The programs the init spawns are appended to the init of this
+      # bundle rather than to the configuration-wide init, so the `defvar`s
       # above them are in scope when the file compiles. The bare-name
       # defaults in the init find a program only if something else
       # installed one.

@@ -5,7 +5,7 @@
 # vendor (comment threads, the semantic finder, parenting, the ACP
 # agent shell, commit messages, the ghostel environment handoff), plus
 # the local packages two of them need. The gptel and claude modules
-# beside this one add their own bundles on top. The bundles are the
+# beside this one add more bundles on top. The bundles are the
 # nemacs module `emacs`, added to the editor's nemacs configuration
 # (`programs.nemacs.settings`), so a configuration importing both gets
 # one Emacs with both layers' bundles rather than two configurations

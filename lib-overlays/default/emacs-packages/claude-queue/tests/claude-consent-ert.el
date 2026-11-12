@@ -6,7 +6,7 @@
 ;; reads with stale pruning (dead waiter, expired stored record),
 ;; session matching by agent-id prefix, answer delivery, option keys,
 ;; and the detail rendering.  The hook side (classification, the ask,
-;; verdict emission) is bash and Python, exercised by their own checks;
+;; verdict emission) is bash and Python, exercised by separate checks;
 ;; nothing here talks to them.
 ;;; Code:
 

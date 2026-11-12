@@ -3,7 +3,8 @@
 ;;; Commentary:
 ;; Run by the agent-sandbox-agents check in batch Emacs, against the
 ;; mock model API.  It queues tasks for the real Codex and OpenCode
-;; commands of the check's homes, through claude-queue's own dispatch,
+;; commands of the home-manager configurations of the check, through
+;; the dispatch of claude-queue,
 ;; and checks each task's end state, session and transcript.  In a
 ;; checkout that is not enrolled in agent-sandbox, a Codex task asks to
 ;; write outside its root; this Emacs is the consent answerer, and the
@@ -148,7 +149,7 @@ the model."
         (claude-queue-opencode-standalone t))
     (cqa--expect-done (cqa--run 'opencode enrolled "Call the tool mark.") "marked"))
 
-  ;; Outside agent-sandbox, Codex's own sandbox confines the task, and
+  ;; Outside agent-sandbox, the native sandbox of Codex confines the task, and
   ;; a write outside the root is a question to the user.
   (let ((claude-queue-codex-consent t)
         (claude-queue-opencode-consent t)

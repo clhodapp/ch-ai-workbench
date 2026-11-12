@@ -9,7 +9,7 @@ given.
 ## The problem
 
 Today `eval-elisp` evaluates a form in the live Emacs after a syntactic
-gate: `unsafep` over Emacs's own safety metadata, extended by an
+gate: `unsafep` over the safety metadata Emacs ships, extended by an
 allowlist of function symbols. The gate has two shortcomings, and they
 are different in kind.
 
@@ -75,11 +75,11 @@ per request under the two contracts below.
 **The agent's CLI** gets a second editing mode, the CLI transform (see
 "What runs where"), without sharing the child's filesystem view: a
 buffer's inert text is written as a file into the calling client's
-territory, under the directory the CLI's own sandbox uses as
+territory, under the directory the CLI's sandbox uses as
 per-checkout scratch (`.agent-sandbox/`, which sandboxed
 commands can write and the clone's exclude file keeps out of `git
 status`), and the agent edits it with its ordinary command-line tools
-(ripgrep, sed, its own ranged reads and writes) with no Emacs
+(ripgrep, sed, the CLI's ranged reads and writes) with no Emacs
 round-trip; the edited text lands through the same back contract as an
 elisp transform. The file passes the same filters as every copy, so
 what the agent sees is exactly the redacted, in-scope, unlatched text
@@ -232,7 +232,7 @@ content arrives. A file cannot set this variable through a file-local:
 only nil is accepted, so a file can never expose itself.
 
 This flag governs the buffer surfaces (the read tools and the copies).
-It does not reach a file the agent's own CLI opens inside the sandbox;
+It does not reach a file the agent's CLI opens inside the sandbox;
 a file is kept from the CLI by not binding its directory into the jail
 (see the back contract's territory and the sandbox bind list), which is
 the isolation boundary, not this flag. The two together are the cover:
@@ -277,7 +277,7 @@ variable, so a synced variable is an effect.
   registry retired with the gate). The **CLI transform**
   (`buffer-file` and `land-buffer-file`) writes the buffer as a
   file under the client's territory and hands the agent that path; the
-  agent edits the file with its own command-line tools, and the file's
+  agent edits the file with its command-line tools, and the file's
   text is what lands. A read is the CLI transform with no landing: ask
   for the file, read it. The file is a copy, so leaving it changed lands
   nothing on its own; only the landed text crosses the back contract,
@@ -294,13 +294,13 @@ variable, so a synced variable is an effect.
   evaluator in the parent.
 
 The child holds copies only, so it cannot answer questions about the
-parent's own runtime state either, which is why those tools exist
+parent's runtime state either, which is why those tools exist
 rather than an escape hatch.
 
 ## Redaction covers every file view, and is not a boundary
 
 betterleaks runs on every path by which content reaches the agent's
-context, not only the copies, and including the CLI's own built-in
+context, not only the copies, and including the CLI's built-in
 tools (`Read` and `Bash` alike), not only the MCP tools. Any tool
 result that would put bytes in the agent's context passes through it
 first; on a finding the content is returned redacted, the agent is told,
@@ -315,7 +315,7 @@ that makes redacting the copy pointless (reading `~/.env` directly, or
 `cat`-ing it, would defeat a redacted copy of it).
 
 There are two enforcement points, in two repos. The MCP server runs
-betterleaks over its own reads before returning them and redacts the
+betterleaks over the text its tools read before returning it and redacts the
 matched spans in place (workbench). The CLI's built-in tools are
 handled by a hook in the `claude-code` module, and this covers `Bash`
 as well as `Read`: a shell command's output is a tool result before it
@@ -326,7 +326,7 @@ distinction that matters is not tool-read versus shell-read; it is
 whether the bytes pass through the harness at all.
 
 What genuinely escapes is only what never becomes a tool result: a
-subprocess the agent's own code spawns whose output the harness does
+subprocess the agent's code spawns whose output the harness does
 not capture, or a byte stream routed around the tool channel entirely.
 That is a narrow residue, and the sandbox bind list covers it, not
 betterleaks: a secret in a directory never bound into the jail cannot be
@@ -356,7 +356,7 @@ the approval, and the model must not be able to claim one. On allow,
 the CLI's reveal hook writes a random token into a file under
 `$XDG_RUNTIME_DIR/claude-redact/mcp-approved/` and adds it to the call
 as the `approval` argument, through PreToolUse `updatedInput`; the
-model's own record of the call keeps the original input, so it never
+record of the call in the model's context keeps the original input, so it never
 sees the token. The server consumes the token file and skips its
 redaction for that one call; a token with no file is a tool error. The
 skip is bound around the single call, so it cannot outlive a call that
@@ -464,7 +464,7 @@ program can print a secret into a log.
 - **parenting** gains a `:sandbox` keyword: a declarative spec
   (environment pass-through list, read-only and read-write binds,
   network on or off) that the package turns into a bwrap command line,
-  always binding its own socket directory and library directory,
+  always binding the socket directory and library directory of parenting,
   passing `--die-with-parent`, and mounting the system directories the
   binary needs plus `/nix/store` read-only when present. These are facts
   the package already owns (`:child-socket-path`,
@@ -517,7 +517,7 @@ program can print a secret into a log.
 
 ## Landing order
 
-The pieces landed in this order, each as its own pull request, so
+The pieces landed in this order, each as a separate pull request, so
 that every step stood alone.
 
 1. Parent side only: the buffer predicate at every resolver with
@@ -547,4 +547,4 @@ that every step stood alone.
    note beside it, `Bash` with no retry, and the resubmit-to-approve
    prompt for `Read` through the `claude-consent` spool. This completed
    "every tool result into context passes through betterleaks" for the
-   CLI's own tools.
+   CLI's built-in tools.

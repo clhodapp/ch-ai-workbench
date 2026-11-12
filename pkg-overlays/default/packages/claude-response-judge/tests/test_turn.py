@@ -84,7 +84,7 @@ class TurnTextTest(unittest.TestCase):
         self.assertEqual(text, head + "Found it.\n\nFixing the tab case.")
         text, _ = progress_text(ENTRIES[:8], set(seen), 10000)
         self.assertEqual(text, "")
-        # A new turn starts from its own prompt.
+        # A new turn starts from the prompt that opened it.
         text, _ = progress_text([*ENTRIES, prompt("next"), say("Starting.", tool())], set(seen), 10000)
         self.assertEqual(text, head + "Starting.")
 

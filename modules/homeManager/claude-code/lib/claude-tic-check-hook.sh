@@ -40,7 +40,7 @@
 #      at 8 on top.
 #
 # The MessageDisplay hook (claude-tic-check-display-hook.sh) renders
-# the verdict tokens as status lines; the hook's own reasons reach the
+# the verdict tokens as status lines; the reasons of this hook reach the
 # screen as "Stop hook feedback" events, which only a consumer can
 # restyle.  A hook cannot withdraw or edit a message already shown
 # (its only channel back is the reason string), so the regenerated

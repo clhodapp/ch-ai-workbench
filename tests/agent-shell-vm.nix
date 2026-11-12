@@ -11,7 +11,7 @@
 # then shows the diagram as an image below its source.
 #
 # A terminal in the same session runs a command through `agent-sandbox
-# run`, which gives it a pseudo-terminal of its own; resizing the
+# run`, which gives it a separate pseudo-terminal; resizing the
 # terminal must reach the command inside the sandbox.
 {
   pkgs,

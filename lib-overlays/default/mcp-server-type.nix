@@ -2,7 +2,7 @@
 #
 # The type of a stdio MCP server as the claude-code, codex and opencode
 # modules take it in their `mcpServers` option. Each module renders it
-# into its agent's own shape (`mcpServers` in ~/.claude.json,
+# into the shape its agent reads (`mcpServers` in ~/.claude.json,
 # `mcp_servers` in Codex's config.toml, `mcp` in OpenCode's config), so
 # a module that serves every agent, emacs-integration for one, declares
 # a server once per agent with the same value.
@@ -31,7 +31,7 @@ lib.types.submodule {
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Variables of the agent's own environment the server needs.
+        Variables of the agent's environment the server needs.
         Codex starts a server with a cleaned environment and passes
         these on (its `env_vars`). Claude Code and OpenCode pass their
         whole environment on, so they need no list.

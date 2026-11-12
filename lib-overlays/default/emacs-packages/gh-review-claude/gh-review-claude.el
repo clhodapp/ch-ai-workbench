@@ -954,14 +954,14 @@ the user is asked."
 TO-ORIGIN is non-nil for the conversation that opened PR."
   (concat
    (if to-origin
-       (format "Review of %s (%s): it is safe to merge, and it is being merged.  These follow-ups came out of the review; make each one on a new branch from %s with its own pull request:\n\n"
+       (format "Review of %s (%s): it is safe to merge, and it is being merged.  These follow-ups came out of the review; make each one on a new branch from %s with a separate pull request:\n\n"
                (gh-review-pr-url pr) (gh-review-pr-title pr) (gh-review-pr-base-ref pr))
-     (format "Follow-ups from the review of %s (%s), which is safe to merge and is being merged.  Make each one on a new branch from %s with its own pull request:\n\n"
+     (format "Follow-ups from the review of %s (%s), which is safe to merge and is being merged.  Make each one on a new branch from %s with a separate pull request:\n\n"
              (gh-review-pr-url pr) (gh-review-pr-title pr) (gh-review-pr-base-ref pr)))
    (gh-review-claude--items-text (plist-get verdict :follow-ups))))
 
 (defun gh-review-claude-fixes-message (pr verdict)
-  "The message sending VERDICT's blockers back to PR's own conversation."
+  "The message sending VERDICT's blockers back to the conversation of PR."
   (format "Review of %s (%s): it is not safe to merge yet.  Fix these on the pull request's branch %s and push to it:\n\n%s"
           (gh-review-pr-url pr) (gh-review-pr-title pr) (gh-review-pr-head-ref pr)
           (gh-review-claude--items-text (plist-get verdict :blockers))))
@@ -1268,7 +1268,7 @@ taken back."
 ;; Pull requests an agent puts in front of the user, through the emacs
 ;; MCP server's review-pull-request tool.  Surfacing one never takes
 ;; the user's focus: it adds a row to the inbox, shows the inbox in a
-;; window of its own, and fetches the pull request in the background,
+;; separate window, and fetches the pull request in the background,
 ;; so that Claude's review (with `gh-review-claude-auto-review') is
 ;; under way by the time the user opens it.
 

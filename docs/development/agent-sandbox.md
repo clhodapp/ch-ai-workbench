@@ -36,7 +36,7 @@ Where things live in this repository:
   credential copies (`creds/`) and job scratch (`jobs/`), and the
   home-manager module ignores it globally in git.
 - **Co-ownership, not ownership.** `.claude/settings.local.json` is
-  Claude Code's own writable state (permission saves, MCP consent, the
+  also state that Claude Code writes (permission saves, MCP consent, the
   /sandbox panel). The three-way merge touches only the paths it
   applied; everything else passes through, including foreign keys
   inside subtrees this tool also writes.
@@ -46,14 +46,14 @@ Where things live in this repository:
 
 ## What it does
 
-Each project needs its own combination of tooling, while what it means
+Each project needs a different combination of tooling, while what it means
 to use a given tool (git needs `git`, `ssh` and GitHub's domains; nix
 needs `nix`, the daemon socket and an unmasked store) is the same in
 every project. A sandbox module states the second once; a checkout
 picks the first by naming modules.
 
 The home-manager module compiles every sandbox module into a *part*:
-the module's own bin farm (a `buildEnv` of its toolset), the closure of
+the module's bin farm (a `buildEnv` of its toolset), the closure of
 that farm, and the grants it declares. One *base* part holds what every
 enrollment carries: the base farm (`runtime.basePackages` and the CLI),
 the ssh wrapper, the pinned shells, the Claude Code package and the
@@ -93,7 +93,7 @@ make enrollment fail with both values named; two modules that put the
 same command on PATH resolve to the module whose name sorts first.
 
 Enrolling a checkout (`agent-sandbox enroll git nix`) merges the
-fragment into the repo's own `.claude/settings.local.json`, a file
+fragment into the checkout's `.claude/settings.local.json`, a file
 co-owned with Claude Code, which saves permission approvals there. The
 merge is three-way with the last-applied blob as base and touches only
 the paths it applied: Claude Code's keys, and anything added by hand
@@ -124,7 +124,7 @@ directory, or the one containing `DIR` with `-C DIR`.
 | `run AGENT -- COMMAND` | Run a whole agent in this checkout's sandbox, or unchanged when the checkout is not enrolled (see "Whole agents") |
 
 The CLI is on every enrollment's PATH, so a sandboxed agent can run
-`agent-sandbox status` to verify its own enrollment. Inside a
+`agent-sandbox status` to verify the enrollment it runs under. Inside a
 masked enrollment the registry and parts (store symlinks) are
 unreadable, so status there reports the modules and settings integrity
 with freshness marked unknown rather than guessing.
@@ -180,7 +180,7 @@ cleanly because the old applied blob is the merge base.
 
 ## Agent tools
 
-An agent inside the sandbox cannot inspect or change its own sandbox
+An agent inside the sandbox cannot inspect or change the sandbox it runs in
 from Bash: in a masked enrollment the registry and parts are
 unreadable, the settings and sidecar files are write-guarded, and the
 consent spool (`$XDG_RUNTIME_DIR/claude-consent`) is outside the write
@@ -233,8 +233,8 @@ a permission rule allows `mcp__plugin_agent-sandbox_sandbox`.
 
 ## Codex's native sandbox and whole-agent OpenCode
 
-`agent-sandbox run` composes the checkout's modules and the agent's own
-modules at launch. In unenrolled checkouts and outside checkouts it runs
+`agent-sandbox run` composes the checkout's modules and the modules the
+agent declares at launch. In unenrolled checkouts and outside checkouts it runs
 the command unchanged. `agents.<name>.backend` selects the enforcement:
 `codex` compiles native permission profiles; `srt` runs the whole agent
 under sandbox-runtime. The Codex and OpenCode modules select their
@@ -346,7 +346,7 @@ scope-only ruleset whose inherited denial cannot be relaxed by a build.
 
 Approval policy is `on-request`: commands within the generated policy
 run normally, and requests beyond it still require approval. This does
-not grant approval to MCP tools; their own annotations, approval
+not grant approval to MCP tools; the tools' annotations, approval
 settings and consent hooks apply separately. Headless `codex exec`
 keeps its usual noninteractive approval behavior.
 
@@ -380,7 +380,7 @@ the Claude Code fragment:
   an agent can create its state directory on first use.
 - The baseline's write guards (the checkout's settings files and
   sidecar, the old sidecar path, the index of expiring checkouts) go to
-  `denyWrite`, because a whole agent writes files with its own tools,
+  `denyWrite`, because a whole agent writes files with its built-in tools,
   which no permission rule governs.
 - The composed `PATH`, `SHELL` and `AGENT_SANDBOX_*` variables are set
   in the agent's environment. With a socket allowlist, the agent itself
@@ -442,7 +442,7 @@ and stays untested.
 A trusted executable is a program that a sandboxed command runs outside
 Claude Code's sandbox. The home-manager option
 `trustedExecutables.<name>` declares the program, and a sandbox module
-grants it by listing the name in its own `trustedExecutables`. A
+grants it by listing the name in the module's `trustedExecutables`. A
 checkout that chooses the module gets a stub named `<name>` on PATH.
 Running the stub runs the program on the other side of a unix socket,
 with stdin, stdout and stderr streamed over that socket.
@@ -486,8 +486,8 @@ connection as stdin. The instance runs `trusted-exec serve`, which
 starts the program with the settings in `serviceConfig` applied. The
 socket lives under the state directory because composition writes
 socket paths into the checkout's settings at enroll time, and
-`$XDG_RUNTIME_DIR` contains the uid, which the home evaluation does not
-know.
+`$XDG_RUNTIME_DIR` contains the uid, which the evaluation of the
+home-manager configuration does not know.
 
 The grant is the socket. A granting module adds the socket to its
 `allowUnixSockets`, so the composer's Landlock narrowing admits it, and
@@ -501,7 +501,7 @@ caller the arguments (after the declared `args`), stdin, the working
 directory (only when `workingDirectory` is null), and the values of the
 variables listed in `passEnv`. The program, the rest of its
 environment, and its restrictions come from the declaration. The
-service also refuses a peer whose uid differs from its own, a request
+service also refuses a peer whose uid differs from the uid of the service, a request
 over 4 MiB, and a NUL byte in an argument, a variable or the directory.
 
 A trusted program can still be steered by what the agent writes. With
@@ -599,8 +599,8 @@ The source path for the selected route is:
 3. The selected module's `gh` wrapper calls the fixed broker with stdin
    redirected from `/dev/null`, preserving Git's credential request for gh.
 4. `trusted-exec` crosses only the explicitly granted Unix socket. The host
-   program runs `gh auth token --hostname github.com` with its own gh config
-   and session bus, then returns the token to that gh process.
+   program runs `gh auth token --hostname github.com` with the user's gh config
+   and session bus outside the sandbox, then returns the token to that gh process.
 5. gh's [keyring implementation](https://github.com/cli/cli/blob/v2.102.0/internal/keyring/keyring.go)
    uses Secret Service on Linux. Its
    [Git credential helper](https://github.com/cli/cli/blob/v2.102.0/pkg/cmd/auth/gitcredential/helper.go)
@@ -680,8 +680,8 @@ auto-sync); the design is correct without it.
   sandbox, per worktree by construction, alive as long as the checkout,
   and kept out of `git status` through the clone's `.git/info/exclude`.
   Nothing is granted, and the isolation unit stays the checkout, the
-  sandbox's own (every session in a checkout can already write its
-  working tree). Scratch of vanished jobs is pruned.
+  unit the sandbox already isolates (every session in a checkout can
+  already write its working tree). Scratch of vanished jobs is pruned.
 - Unix-socket narrowing: upstream's Linux seccomp filter is
   all-or-nothing, so the union of the chosen modules' `allowUnixSockets`
   lists is made real by opening that filter (`allowAllUnixSockets`) and
@@ -732,7 +732,7 @@ auto-sync); the design is correct without it.
   sandbox is built, and inserts `--dev-bind-try NODE NODE` for every
   matching character or block device right after the first
   `--dev /dev`. Then it execs the next `bwrap` on PATH. A match that is
-  a symlink binds the device it resolves to, at that device's own path.
+  a symlink binds the device it resolves to, at the path of that device.
   This is how a module names one USB device: libusb opens it at
   `/dev/bus/usb/BBB/DDD`, a path that changes whenever the device
   re-enumerates, so a udev `SYMLINK` rule gives the module a stable
@@ -777,7 +777,7 @@ auto-sync); the design is correct without it.
   elicitation advertised (verified 2026-10-22).
 - **MCP server** (`mcp.py`): JSON-RPC over stdio, stdlib only. A reader
   thread queues incoming messages, so a call waiting on a prompt still
-  sees its own cancellation and the client's elicitation response;
+  sees a cancellation of that call and the client's elicitation response;
   other requests that arrive meanwhile are served after it. Parts carry
   `packages` and `commands` (the farm's `bin` entries, wrapper
   internals excluded) for `describe-module` and the prompt.

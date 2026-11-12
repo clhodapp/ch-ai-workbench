@@ -23,14 +23,14 @@ let
   cfg = config.ch-ai-workbench.claude;
 
   # What the editor's nemacs configuration builds. The bridge below takes
-  # its script from the editor's own package set, so it matches the
+  # its script from the package set of the editor, so it matches the
   # mcp-server-lib the editor loads.
   editor = config.programs.nemacs.settings.build;
 
   # The MCP stdio bridge: a stable command MCP clients register through
   # the home-manager profile, ~/.nix-profile/bin/emacs-mcp-stdio (the
   # directory is home.profileDirectory). The emacs-integration module
-  # registers it with each agent this home configures. The profile path keeps
+  # registers it with each agent this home-manager configuration sets up. The profile path keeps
   # working across package updates, and unlike a bare name it does not
   # depend on PATH: a checkout enrolled in agent-sandbox sets the
   # Claude Code process's PATH to its sandbox farms. Defaults target the "emacs" server

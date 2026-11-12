@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """`agent-sandbox run`: the srt settings and the command a whole agent
-runs under, composed from the checkout's modules and the agent's own."""
+runs under, composed from the modules of the checkout and the modules of the agent."""
 
 import json
 import io

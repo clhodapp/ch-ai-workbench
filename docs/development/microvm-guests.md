@@ -8,7 +8,7 @@ MCP, the session uses its tools as tools of the MCP server `microvm`.
 The instances come from ch-microvm (`github:clhodapp/ch-microvm`). Its
 home-manager module declares the kinds of guests in
 `ch-microvm.kinds.<kind>`, runs each instance as units of the user's
-systemd manager in a directory of its own, and leases instances to
+systemd manager in a separate directory, and leases instances to
 holder processes. Its documentation, `docs/development/instances.md`
 in that repository, describes the kinds, the directories, the units,
 the leases, the reap timer and the unprivileged virtiofsd. This layer
@@ -21,8 +21,8 @@ the sandbox modules for the share directories.
   then holds its home-manager module as `ch-microvm/microvm`, and its
   package overlay as `ch-microvm/default`.
 - The module `microvm` of this layer imports `ch-microvm/microvm` from
-  that registry. A home that selects `microvm` therefore has the
-  options `ch-microvm.*`.
+  that registry. A home-manager configuration that selects `microvm`
+  therefore has the options `ch-microvm.*`.
 - The package overlay of this layer imports `ch-microvm/default`. Every
   package set that applies this layer's overlay has
   `pkgs.ch-microvm.ch-microvm`, the command `ch-microvm` with its
@@ -47,7 +47,8 @@ the sandbox modules for the share directories.
 An assertion refuses a kind that `ch-microvm.kinds` lacks, and a kind
 that sets `mcp` while its `vsockPort` is null. The other options are
 `programPackage`, the program before the module wraps it, and
-`package` (read-only), the program with the kinds of the home baked in.
+`package` (read-only), the program with the kinds of the home-manager configuration
+baked in.
 
 ## The MCP server
 
@@ -108,7 +109,7 @@ agent-sandbox do. Its tools are:
   its holder.
 
 The results are the text the library prints. A tool of the server runs
-in a thread of its own, so a guest that boots does not hold up the
+in a separate thread, so a guest that boots does not hold up the
 calls to other guests. The server starts a guest only when
 `microvm_up` asks for it.
 
@@ -138,8 +139,8 @@ checkout. The result of `microvm_up` says which of the two applies.
 
 There is one sandbox module per kind, so a checkout that works with
 one kind reaches the share directories of that kind and of no other.
-The module declares the sandbox modules only when the home also
-selects the agent-sandbox module of this layer, since the option
+The module declares the sandbox modules only when the home-manager
+configuration also selects the agent-sandbox module of this layer, since the option
 they go in comes from that module.
 
 ### Guests that serve MCP
@@ -149,8 +150,8 @@ its vsock port answers, the server connects to the port through
 `ch_microvm.transport.connect`, with the hybrid vsock socket in the
 directory of the instance. It sends `initialize` and
 `notifications/initialized` to the MCP server of the guest, then
-fetches its `tools/list`. It adds those tools to its own `tools/list`
-under their own names and sends Claude Code
+fetches its `tools/list`. It adds those tools to the `tools/list` of the
+server, under the names the guest gave them, and sends Claude Code
 `notifications/tools/list_changed`. The result of `microvm_up` names
 the tools.
 
@@ -161,8 +162,8 @@ under the name the guest gave it, with a request ID of the server. The
 reply comes back with the ID of Claude Code. The server forwards the
 `notifications/progress` and `notifications/message` of the guest, and
 a cancellation of a forwarded call. A `notifications/tools/list_changed`
-of the guest makes the server fetch the tools again and send its own
-`list_changed`.
+of the guest makes the server fetch the tools again and send a
+`list_changed` of the server.
 
 When `microvm_down` stops the instance, the guest stops, or the
 connection drops, the server fails the calls in flight with a JSON-RPC
@@ -202,12 +203,14 @@ That home-manager configuration sets `ch-microvm.kinds.<kind>` for
 each guest, and sets `ch-ai-workbench.microvm.kinds.<kind>` with
 `agents = true`, and with `mcp` for a kind whose guests serve MCP.
 
-- declares a home for the user that selects this module beside
+- declares a home-manager configuration for the user that selects
+  this module beside
   `claude-code`, with `claude-code` enabled, sets
   `ch-microvm.kinds.<kind>` for each guest, and sets
   `ch-ai-workbench.microvm.kinds.<kind>` with `agents = true` and `mcp`
   for a kind whose guests serve MCP;
-- selects `agent-sandbox` in that home as well when the Bash
+- selects `agent-sandbox` in that home-manager configuration as well
+  when the Bash
   commands of agents should reach the share directories, and chooses
   `microvm-<kind>` in the checkouts that work with the kind.
 
@@ -229,12 +232,12 @@ the plugin with the server `microvm`, whose tools
 over stdio list only the kinds for agents and refuse the others. The
 configuration baked into the program names the configuration file of
 ch-microvm and carries the MCP server of each kind for agents. That
-home also gets the sandbox module `microvm-probe`, whose read and
+configuration also gets the sandbox module `microvm-probe`, whose read and
 write paths are exactly the share directories that
 `ch-microvm.instances` lists for the two instances of `probe`, and no
-sandbox module for `quiet`, which has no shares. A home whose kinds are
-not for agents gets the command of ch-microvm, no plugin and no
-sandbox module. A home without kinds gets none of it. A kind outside
+sandbox module for `quiet`, which has no shares. A configuration whose
+kinds are not for agents gets the command of ch-microvm, no plugin and
+no sandbox module. A configuration without kinds gets none of it. A kind outside
 `ch-microvm.kinds`, and a kind with `mcp` and no port, fail an
 assertion.
 

@@ -18,10 +18,10 @@ following a session's working directory as it moves. It queues tasks
 for Claude Code, Codex and OpenCode alike: a Codex or OpenCode task runs
 the agent's headless command from Emacs, with its event stream as the
 transcript and its session resumable in a terminal. `agent-shell` and
-`acp` speak to agents over their own protocols. `parenting` spawns and
+`acp` speak to agents over the Agent Client Protocol. `parenting` spawns and
 supervises child Emacs instances.
 
-**An MCP server.** Emacs exposes its own tools (diagnostics, references,
+**An MCP server.** Emacs exposes editor tools (diagnostics, references,
 buffer text, edits) to an agent over MCP, with a stable `emacs-mcp-stdio`
 command that clients register once and keeps working across updates.
 
@@ -57,8 +57,8 @@ merged at activation into the files each agent rewrites at runtime
 (`~/.claude/settings.json` and `~/.claude.json`, Codex's
 `config.toml`) by `agent-config`, which changes only what was declared
 and keeps comments and hand edits. OpenCode reads them as an extra
-configuration layer named by `OPENCODE_CONFIG`, so its own
-`opencode.json` stays untouched.
+configuration layer named by `OPENCODE_CONFIG`, so the
+`opencode.json` file stays untouched.
 
 **agent-sandbox configures Claude Code's sandbox.** It declares named
 sandbox modules, each saying what one kind of tooling needs (a closed
@@ -69,17 +69,18 @@ rules. Claude Code enforces the rules and Nix authors the
 configuration. Codex receives a native permission profile from the same
 modules and applies Landlock after constructing each command sandbox.
 OpenCode runs whole under sandbox-runtime, with the same modules plus
-its own. The design and boundaries are in
+a module for OpenCode itself. The design and boundaries are in
 [`docs/development/agent-sandbox.md`](docs/development/agent-sandbox.md).
 
-**Guests for sessions.** A home declares kinds of microvm guests with
+**Guests for sessions.** A home-manager configuration declares kinds of microvm guests with
 [ch-microvm](https://github.com/clhodapp/ch-microvm), which runs
 on-demand instances of microvm.nix guests as units of the user's
 systemd manager. A session leases an instance of a kind through the MCP
 server `microvm`, which starts it in a directory of the instance and
 stops it when the session ends. The server also offers the tools of a
 guest that serves MCP. Agents get only the kinds marked for them. For
-each such kind with share directories, the home declares the sandbox
+each such kind with share directories, the home-manager configuration
+declares the sandbox
 module `microvm-<kind>`, and the Bash commands of a checkout that
 chooses it can write and read the share directories of the instances in
 their default directories. The user controls every kind with the
@@ -90,7 +91,7 @@ their default directories. The user controls every kind with the
 Emacs; hooks ask the user questions through the `claude-consent` spool,
 where Emacs answers from a menu, a terminal can answer instead
 (`claude-consent watch`, or `claude-consent answer TOKEN` later), and a
-plain allow/deny with nobody attached falls back to the CLI's own
+plain allow/deny with nobody attached falls back to the CLI's permission
 prompt; mermaid blocks render in message display; and the
 `emacs-tools` skill documents the MCP tools for the agent reading them.
 Codex and OpenCode get the same MCP server and skills, and agent-shell
@@ -98,7 +99,7 @@ starts all three agents over the Agent Client Protocol by store path and
 shows the mermaid diagrams of their replies as images. A queued Codex or
 OpenCode task asks through the same spool before it writes outside its
 checkout: Codex through a `PermissionRequest` hook, OpenCode through a
-plugin. Each agent's part is switched on its own with
+plugin. Each agent's part is switched on separately with
 `emacs-integration.agents.<agent>.enable`.
 
 ## Use it
@@ -120,7 +121,7 @@ plugin. Each agent's part is switched on its own with
 }
 ```
 
-The Emacs half contributes to the editor's own options, so both layers
+The Emacs half contributes to the editor's options, so both layers
 produce one Emacs with one init rather than two configurations
 competing.
 
@@ -168,7 +169,7 @@ all of these instead of building them:
 | `https://numtide.cachix.org` | `numtide.cachix.org-1:2ps1kLBUWjxIneOy1Ik6cQjb41X0iXVXeHigGmycPPE=` |
 | `https://cache.numtide.com` | `niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=` |
 
-A flake that consumes this one as an input must add them to its own
+A flake that consumes this one as an input must add them to its
 `extra-substituters` and `extra-trusted-public-keys`; Nix does not carry
 an input's settings into the consumer.
 

@@ -27,7 +27,7 @@
 let
   cfg = config.ch-ai-workbench.opencode;
 
-  # With agent-sandbox enabled in this home, OpenCode runs whole inside
+  # With agent-sandbox enabled in this home-manager configuration, OpenCode runs whole inside
   # a checkout's sandbox when the checkout is enrolled (`agent-sandbox
   # run`), and as it is elsewhere. The wrapper reads the provider keys
   # before that, so the key files need not be readable inside.
@@ -75,7 +75,7 @@ let
   # The name keeps the version and passthru stays, because Home
   # Manager's module reads both from the package (the version to pick a
   # configuration shape, passthru.jsonschema to validate the file).
-  # A launch that sets OPENCODE_CONFIG itself names its own file, and
+  # A launch that sets OPENCODE_CONFIG itself names a different file, and
   # gets none of the declared settings.
   wrapped = pkgs.symlinkJoin {
     name = "${lib.getName cfg.package}-workbench-${lib.getVersion cfg.package}";
@@ -92,7 +92,7 @@ let
         ${lib.concatMapStringsSep " " (provider: "--run ${lib.escapeShellArg (readKey provider)}") (
           lib.attrValues keyed
         )}
-      # The OpenCode this home runs is `opencode`, whatever its package
+      # The OpenCode this home-manager configuration runs is `opencode`, whatever its package
       # names the command (llm-agents' OpenCode 2 is `opencode2`).
       if [ ! -e $out/bin/opencode ]; then
         ln -s ${cfg.package.meta.mainProgram} $out/bin/opencode
@@ -289,7 +289,7 @@ in
     lib.mkMerge [
       (lib.optionalAttrs (options.ch-ai-workbench ? agent-sandbox) {
         # What OpenCode itself needs inside a checkout's sandbox: its
-        # package, its own directories (sessions, logs, plugins and the
+        # package, the directories of OpenCode (sessions, logs, plugins and the
         # config `opencode mcp add` writes), the model catalog and the
         # plugin registry, the providers' APIs, and the store, where the
         # declared settings, its skills and AGENTS.md are.

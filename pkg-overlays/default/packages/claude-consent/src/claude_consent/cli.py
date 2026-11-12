@@ -18,7 +18,7 @@ Three shapes of ask, chosen by the hook:
   later (open a pull request, say).
 * Fallback (``--fallback VALUE``): when no answerer is attached, skip
   the spool and report VALUE.  A PreToolUse hook passes ``--fallback
-  ask`` so a plain allow/deny question becomes the CLI's own prompt.
+  ask`` so a plain allow/deny question becomes the permission prompt of the CLI.
 
 With no answerer attached and no fallback, the question is stored
 and ``ask`` reports ``pending`` with a token: the user answers in a

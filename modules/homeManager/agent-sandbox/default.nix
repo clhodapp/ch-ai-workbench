@@ -60,7 +60,7 @@
 # `pkgs.ch-ai-workbench` in the evaluation: a caisson consumer that
 # lists this flake in `projects` applies it by default
 # (`ch-ai-workbench/default`), and any other applies `overlays.default`
-# to the package set its home evaluates with.
+# to the package set its home-manager configuration evaluates with.
 { ... }:
 {
   config,
@@ -78,7 +78,7 @@ let
       ch-ai-workbench.agent-sandbox needs pkgs.ch-ai-workbench.${name}:
       apply ch-ai-workbench's package overlay (`overlays.default`; a
       caisson consumer lists the flake in `projects`) to the package set
-      this home evaluates with.
+      this home-manager configuration evaluates with.
     '');
 
   githubTokenName = "github-auth-token";
@@ -272,7 +272,7 @@ let
   # sandboxed command cannot add a device. Each pattern is a shell glob
   # expanded every time a sandbox is built, so renumbered and hot-plugged
   # devices are found. A match that is a symlink binds the node it
-  # resolves to, at that node's own path: libusb, for one, opens a USB
+  # resolves to, at the path of that node: libusb, for one, opens a USB
   # device at /dev/bus/usb/BBB/DDD, a path that changes whenever the
   # device re-enumerates, so a udev symlink is how a module names one
   # USB device. A pattern that matches nothing binds nothing, so a module
@@ -385,8 +385,8 @@ let
         spec = builtins.toJSON {
           # The ssh wrapper's bin goes first so its `ssh` is found ahead of
           # any farm's openssh: an ordinary PATH precedence, not a buildEnv
-          # override; a user who fronts their own ssh knows what they are
-          # doing.
+          # override; a user who puts a different ssh first on PATH knows
+          # what they are doing.
           pathFirst = [ "${sshWrapper}/bin" ];
           # The device wrapper's bin goes ahead of the sandbox tools, so
           # Claude Code's lookup of `bwrap` finds the wrapper, and the
@@ -581,8 +581,8 @@ let
 
   # The socket of each trusted executable. Composition writes socket
   # paths into a checkout's settings at enroll time, so the path must be
-  # known at evaluation. $XDG_RUNTIME_DIR holds the uid, which a home
-  # evaluation does not know, so the sockets live under the state
+  # known at evaluation. $XDG_RUNTIME_DIR holds the uid, which the
+  # evaluation of a home-manager configuration does not know, so the sockets live under the state
   # directory instead.
   trustedSocketDir = "${config.xdg.stateHome}/agent-sandbox/trusted";
   trustedSocket = name: "${trustedSocketDir}/${name}.sock";
@@ -815,7 +815,7 @@ let
   };
 
   # Every list grant below is unioned across the modules a checkout
-  # chooses, so a module states only what its own tooling needs. The
+  # chooses, so a module states only what the tooling it adds needs. The
   # uniform missing-ness convention: null (the default) contributes
   # nothing; any non-null value, including [] or {}, puts the key in the
   # composed fragment and in the tool-managed merge domain.
@@ -982,8 +982,8 @@ let
           /dev/kfd. Each matching character or block device is bound with
           device access at the same path inside the sandbox, by the bwrap
           wrapper every enrollment's PATH finds first. A match that is a
-          symlink binds the device it resolves to, at that device's own
-          path. A udev `SYMLINK` rule therefore selects one USB device,
+          symlink binds the device it resolves to, at the path of that
+          device. A udev `SYMLINK` rule therefore selects one USB device,
           which libusb opens at its /dev/bus/usb path. The globs are
           expanded each time a sandbox is built, so a device that
           re-enumerates during a command appears in the sandbox of the
@@ -1034,8 +1034,8 @@ let
         description = ''
           Deep-merged into the composed fragment: freeform passthrough
           (RFC-42 style) for settings keys this module does not
-          generate, e.g. autoAllowBashIfSandboxed. Claude Code's own
-          loader validates the keys. Lists union across modules; two
+          generate, e.g. autoAllowBashIfSandboxed. The settings
+          loader of Claude Code validates the keys. Lists union across modules; two
           chosen modules that set one scalar to different values make
           enrollment fail. Generated keys (the fail-closed posture, the
           mask, env) may not be overridden here: the part's build fails
@@ -1125,7 +1125,7 @@ in
           certificates, and the JSON and search tools agent sessions
           reach for whatever modules a checkout chooses. On NixOS even
           /bin/sh and /etc/ssl resolve into the store, so a farm without
-          shell, coreutils and cacert is not a Unix. The module's own
+          shell, coreutils and cacert is not a Unix. The agent-sandbox
           CLI is also in the base farm, so sandboxed agents can run
           `agent-sandbox status`.
         '';
@@ -1231,7 +1231,7 @@ in
         signals and exit status over the connection. The program starts
         with the access of the user, a superset of what Claude Code's
         sandbox allows, and `serviceConfig` locks it down. A sandbox module grants the executable by
-        listing its name in its own `trustedExecutables`. A checkout
+        listing its name in the module's `trustedExecutables`. A checkout
         choosing that module then gets a stub named `<name>` on PATH
         and the socket in its unix-socket allowlist.
 
@@ -1296,8 +1296,8 @@ in
               default = [ ];
               description = ''
                 Arguments inserted after the agent's program when it
-                runs inside the sandbox, such as one that turns off a
-                sandbox of the agent's own.
+                runs inside the sandbox, such as one that turns off the
+                sandbox built into the agent.
               '';
             };
             env = lib.mkOption {

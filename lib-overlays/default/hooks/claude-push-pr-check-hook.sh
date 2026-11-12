@@ -17,7 +17,7 @@
 # $XDG_RUNTIME_DIR/claude-push-pr-check/seen/ (per login, ephemeral).
 #
 # What counts as a push: the word git, any number of global options
-# (-C dir, -c key=value, --no-pager, ...), then push as its own word,
+# (-C dir, -c key=value, --no-pager, ...), then push as a separate word,
 # anywhere on a line of the command -- so "cd x && git push",
 # "git -C projects/foo push origin topic", and "git push
 # --force-with-lease" fire, while "git commit -m 'push later'" and

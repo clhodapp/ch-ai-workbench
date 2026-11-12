@@ -48,7 +48,7 @@ in
     programs.nemacs.settings = {
       imports = [ closure-lib.caisson.libManifest.modules.nemacs.gptel ];
       # The backend and model choices, set on the variables the gptel
-      # init declares for them. Appended to that bundle's own init, so
+      # init declares for them. Appended to the init of that bundle, so
       # they are in the same file as the declarations (the byte compiler
       # sees them) and run at load, before gptel's deferred config reads
       # them.

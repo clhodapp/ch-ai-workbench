@@ -3,7 +3,7 @@
 one settings fragment.
 
 The home-manager module compiles every declared sandbox module into a
-*part* (its own bin farm, the closure of that farm, and the grants it
+*part* (a bin farm of the module's toolset, the closure of that farm, and the grants it
 declares) and the always-present runtime into the *base* part. Nix cannot
 know which combinations checkouts will choose, so the combination happens
 here, at enroll and sync time, by union:

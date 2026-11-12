@@ -9,7 +9,7 @@ remaining description concerns the whole-agent srt backend (OpenCode).
 Claude Code applies the composed rules itself, to each Bash command.
 For the srt backend, ``agent-sandbox run AGENT -- COMMAND``
 runs the whole agent process under sandbox-runtime (``srt``), the sandbox
-Claude Code's own rules are written for. The rules come from the same
+that the sandbox rules in Claude Code settings are written for. The rules come from the same
 composition: the checkout's chosen modules, ``baseModules``, and the
 modules the registry lists for AGENT (its package, state directories and
 API hosts). What differs from the Claude Code fragment:
@@ -41,8 +41,8 @@ API hosts). What differs from the Claude Code fragment:
   process therefore stays the parent of the sandbox for the whole run.
 
 A checkout that is not enrolled with modules runs the command unchanged:
-enrolling is the user's act, and an agent outside every checkout keeps its
-own behaviour.
+enrolling is the user's act, and an agent outside every checkout runs as
+it would without agent-sandbox.
 """
 
 from __future__ import annotations
@@ -191,7 +191,7 @@ def _prune_scratch(directory: Path) -> None:
 
     Build trees can contain read-only directories. Do not change their
     permissions or follow symlinks to make cleanup succeed: leave a tree
-    we cannot remove and let the new run proceed with its own scratch.
+    we cannot remove and let the new run proceed with a fresh scratch directory.
     """
     try:
         entries = list(directory.iterdir())
@@ -350,7 +350,7 @@ def prepare(
                             project_root=project_root if native else None)
     # srt can grant only a path that exists, and inside the sandbox the
     # parent of a missing directory is read-only, so an agent could not
-    # create its own state directory on first use.
+    # create its state directory on first use.
     for path in settings["filesystem"]["allowWrite"]:
         Path(path).mkdir(parents=True, exist_ok=True)
     from .cli import provision_creds

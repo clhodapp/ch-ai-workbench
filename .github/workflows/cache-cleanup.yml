@@ -3,7 +3,7 @@
 # GitHub allows 10 GB of Actions cache per repository and evicts by last
 # access once that is exceeded. main keeps one entry (check.yml purges
 # the older ones after each save), but a pull request that changes the
-# pipeline saves entries under its own merge ref, and those would sit
+# pipeline saves entries under the request's merge ref, and those would sit
 # for seven days after the request closes. Dropping them at close time
 # keeps the total near one entry, so main's is never the one evicted.
 #

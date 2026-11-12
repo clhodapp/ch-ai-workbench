@@ -25,7 +25,7 @@
       criteria = [
         "Nothing beyond general programming."
         "The ecosystem: the tools, languages and libraries it works with (Nix flakes, home-manager, GitHub), not this repository."
-        "This codebase: the repository's own modules, files, options and conventions."
+        "This codebase: the repository's modules, files, options and conventions."
         "This conversation or task: only the chat or the work showed it, such as a name coined during the work, an earlier draft, tool output, a review, a plan, or a decision made in the chat."
       ];
     };
@@ -39,7 +39,7 @@
   references = {
     resolvable = {
       type = "noul";
-      instructions = "The reader is the person who typed user_messages. They saw the assistant's replies and their own messages, but never saw tool output, file edits the assistant made, other Claude sessions or subagents. reader_saw holds everything they were shown that mentions the candidate (or 'nothing'). Reading the sentence, can they tell what the candidate refers to, either from this message itself or from reader_saw?";
+      instructions = "The reader is the person who typed user_messages. They saw the assistant's replies and the messages they typed, but never saw tool output, file edits the assistant made, other Claude sessions or subagents. reader_saw holds everything they were shown that mentions the candidate (or 'nothing'). Reading the sentence, can they tell what the candidate refers to, either from this message itself or from reader_saw?";
       criteria.true = "The reader can tell what it refers to: the message defines or describes it, reader_saw shows it, or it is common knowledge for a programmer.";
       criteria.false = "The reader cannot tell what it refers to: it points at something they were not shown and the message does not explain it.";
     };

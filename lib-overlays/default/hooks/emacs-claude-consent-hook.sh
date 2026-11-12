@@ -5,7 +5,7 @@
 # surface".  Registered user-level global, so the discipline is
 # abstain-by-default: exit 0 with no output unless this session is one
 # Emacs dispatched (a territory record exists for it) AND the edit
-# leaves its territory.  Unknown sessions -- the user's own TUI
+# leaves its territory.  Unknown sessions -- a TUI the user started
 # included -- always get stock behavior, and every unexpected condition
 # (no runtime dir, unreadable record, jq failure, a failed ask)
 # resolves to abstention, never to a decision.
@@ -19,7 +19,7 @@
 # terminal running `claude-consent watch` -- renders the allow/deny
 # menu, and this blocked hook process couriers the verdict back as the
 # permissionDecision.  With no answerer attached the question is a
-# plain allow/deny, so the hook falls back to `ask`: the CLI's own
+# plain allow/deny, so the hook falls back to `ask`: the CLI's
 # permission prompt takes it (the TUI prompt when attended; a headless
 # session parks in `blocked`, answerable from `claude attach`).  The
 # deadline lives in the ask (self-answered, actionable deny) because a
@@ -64,7 +64,7 @@ canon=$(realpath -m -- "$target" 2>/dev/null) || canon="$target"
 
 # The spool itself is never editable territory, whatever the record
 # says (the nix-rendered permissions.deny rules are the primary guard;
-# this keeps the hook honest about its own state).
+# this keeps the hook honest about the state it reads).
 case "$canon" in
   "$spool" | "$spool"/*)
     emit deny "the consent spool ($spool) is not editable territory"

@@ -76,7 +76,7 @@
   "Scope of files the MCP tools may open into new buffers.
 `session-projects' allows only files under a project that already has
 file-visiting buffers in this session; `any-project' allows any readable
-file.  Files under the calling client's own territory (see
+file.  Files under the calling client's territory (see
 `ch-mcp-server--client-territory') and files already visited by a
 buffer are always in scope.")
 
@@ -104,7 +104,7 @@ session.")
 (defvar ch-mcp-server-hidden-buffer-names '("\\`\\*gptel-log\\*\\'")
   "Regexps for non-file buffer names the MCP read tools must never expose.
 The read scope predicate (`ch-mcp-server--buffer-readable-p') hides
-a buffer whose name matches any entry here, on top of Emacs's own
+a buffer whose name matches any entry here, on top of the Emacs
 convention that a leading space marks an internal buffer.  Seeded with
 `*gptel-log*', which logs full prompt/response traffic.  Extended by the
 resident user; gated elisp cannot reach it.")
@@ -202,7 +202,7 @@ rebinds the current buffer."
 (defun ch-mcp-server--check-file-write (file)
   "Throw a tool error when FILE is outside the calling client's territory.
 The write-scope filter (`ch-mcp-server-write-scope'): the write
-verbs only touch files under the client's own project, mirroring the
+verbs only touch files under the client's project, mirroring the
 CLI-side workdir sandbox the MCP server would otherwise bypass."
   (when (and (eq ch-mcp-server-write-scope 'client-project)
              (not (ch-mcp-server--territory-file-p file)))
@@ -213,7 +213,7 @@ CLI-side workdir sandbox the MCP server would otherwise bypass."
 (defun ch-mcp-server--maybe-revert (buffer)
   "Revert BUFFER when it is unmodified but stale against its file.
 Without this, tools reading buffer state quietly lie after files change
-on disk (e.g. after the agent's own native edits)."
+on disk (e.g. after the agent's native edits)."
   (with-current-buffer buffer
     (when (and buffer-file-name
                (not (buffer-modified-p))
@@ -401,7 +401,7 @@ still be refused to a client whose territory excludes its file."
                 (list ch-mcp-server--mode-line-construct))))
 
 ;; The quick key for the toggle, in the shared `<leader> a' ("ai")
-;; prefix that gptel, gptel-agent, and claude-queue each bind their own
+;; prefix that gptel, gptel-agent, and claude-queue each bind separate
 ;; keys into.  `a t' is free there.
 (declare-function ch/leader-prefix-title "evil")
 (with-eval-after-load 'evil
@@ -419,7 +419,7 @@ readable, before any other test.  Otherwise a file-visiting buffer is
 readable exactly when its file passes the auto-open read scope
 (`ch-mcp-server--file-in-scope-p'), tying read scope to open scope
 through one rule.  A buffer without a file is readable unless its name
-marks it internal (a leading space, Emacs's own convention, and where
+marks it internal (a leading space, the Emacs convention, and where
 the HTTP response buffers live) or matches
 `ch-mcp-server-hidden-buffer-names'."
   (and (not (ch-mcp-server--buffer-sensitive-p buffer))
@@ -542,7 +542,7 @@ The two gates are independent; a buffer must pass both."
 (defun ch-mcp-server--buffer-accessible-or-throw (buffer)
   "Throw a tool error unless the agent may read BUFFER; else return BUFFER.
 For the by-name resolvers: an out-of-scope or hidden buffer and a
-latched log buffer are both refused, each with its own message."
+latched log buffer are both refused, each with a different message."
   (when (ch-mcp-server--buffer-sensitive-p buffer)
     (mcp-server-lib-tool-throw
      (format "Buffer %s is withheld as sensitive" (buffer-name buffer))))
@@ -1341,7 +1341,7 @@ a full disk must not turn a presentation into a tool error."
   "Pick a stored agent presentation revision and show it read-only.
 Candidates are every revision in `ch-mcp-server-history-file', newest
 first, labelled with the time, the buffer name, and the first line of
-the body.  The chosen revision opens in its own buffer rather than the
+the body.  The chosen revision opens in a separate buffer rather than the
 live *agent/...* one, so reviewing history never overwrites what an
 agent last presented."
   (interactive)
@@ -1420,7 +1420,7 @@ default only works when a betterleaks is on PATH.")
 (defun ch-mcp-server--render-mermaid (source)
   "Render mermaid SOURCE to an SVG data string via the mmdc CLI.
 The theme follows the selected frame's background mode.  Render errors
-carry the renderer's own message, so the agent can fix the diagram
+carry the renderer's error message, so the agent can fix the diagram
 source from the tool error alone."
   (unless (executable-find (car ch-mcp-server-mermaid-command))
     (mcp-server-lib-tool-throw
@@ -1474,7 +1474,7 @@ source from the tool error alone."
   "Put the current buffer in major MODE unless it is already in it.
 Re-invoking the major mode a buffer already has is not a no-op: the
 mode function runs `change-major-mode-hook', and a mode that keeps
-overlays of its own cleans up on that hook with `remove-overlays',
+overlays cleans up on that hook with `remove-overlays',
 which deletes every other overlay in the buffer as well, including
 collab-comments threads.  Emacs 31's `markdown-ts-mode' does exactly
 this, so a viewer that re-renders under a stable name must leave a
@@ -2500,7 +2500,7 @@ The printing happens in the child, so a value with no readable form
 
 ;; The CLI transform (docs/development/agent-elisp-isolation.md, "What
 ;; runs where"): the agent asks for a buffer as a file, edits it with
-;; its own command-line tools, and asks for the text to land.  The file
+;; its command-line tools, and asks for the text to land.  The file
 ;; lives in the calling client's territory under
 ;; .agent-sandbox/, the directory the agent-sandbox CLI already
 ;; uses as per-checkout scratch: sandboxed commands can write the
@@ -2560,7 +2560,7 @@ without a git directory, or git failing, changes nothing."
 (defun ch-mcp-server--buffer-file (name)
   "Write the text of the buffer NAME to a file in the territory; return its path.
 
-The file is for reading or editing with your own command-line tools:
+The file is for reading or editing with your command-line tools:
 the buffer's text without properties, passed through betterleaks like
 every copy, so a recognized secret arrives as [REDACTED:<rule>] and
 such a file cannot be landed.  Editing the file changes nothing in
@@ -2676,10 +2676,10 @@ MCP Parameters:
 ;; call is re-issued; on allow it writes a random token into a file under
 ;; $XDG_RUNTIME_DIR/claude-redact/mcp-approved/ and adds the token to the
 ;; call as the `approval' argument (a PreToolUse hook may rewrite a
-;; call's input; the model's own record of the call keeps the original).
+;; call's input; the model's record of the call keeps the original).
 ;; A tool taking `approval' passes it to `ch-mcp-server--use-approval',
 ;; which consumes the file and marks this one call unredacted.  A token
-;; with no file is a tool error, so a model cannot approve its own read.
+;; with no file is a tool error, so a model cannot approve a read itself.
 
 (defvar ch-mcp-server--skip-redaction nil
   "Non-nil while a tool call runs under a consumed approval.
@@ -2821,7 +2821,7 @@ the others."
            "read, and none of its other state: it answers questions about "
            "the configuration and about buffer text, not about the live "
            "session's variables, and cannot change the session. Writes "
-           "are confined to the session's own project. Every result passes "
+           "are confined to the session's project. Every result passes "
            "through betterleaks first: a recognized secret arrives as "
            "[REDACTED:<rule>] with a note, and the redaction is a boundary "
            "like a refusal.")
@@ -2926,7 +2926,7 @@ the others."
     (list #'ch-mcp-server--buffer-file
           :id "buffer-file"
           :description
-          "A plain-text copy of a buffer as a file under this session's territory (.agent-sandbox/mcp-copies/), for reading or editing with your own tools; secrets appear as numbered placeholders that are put back when the text lands; land the edited text with land-buffer-file")
+          "A plain-text copy of a buffer as a file under this session's territory (.agent-sandbox/mcp-copies/), for reading or editing with your command-line tools; secrets appear as numbered placeholders that are put back when the text lands; land the edited text with land-buffer-file")
     (list #'ch-mcp-server--land-buffer-file
           :id "land-buffer-file"
           :description

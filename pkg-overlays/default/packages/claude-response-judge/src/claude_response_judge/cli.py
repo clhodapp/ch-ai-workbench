@@ -119,7 +119,7 @@ def typed_prompt(entry: dict[str, Any]) -> str | None:
 
 
 def user_wrote(entry: dict[str, Any]) -> str | None:
-    """The text of a typed prompt whose words are the user's own: a prompt suggestion the
+    """The text of a typed prompt whose words the user wrote: a prompt suggestion the
     user accepted (promptSource suggestion_accepted) is generated from the conversation, so
     its words are the assistant's even though the user sent it."""
     return None if entry.get("promptSource") == "suggestion_accepted" else typed_prompt(entry)
@@ -204,7 +204,7 @@ def post(endpoint: dict[str, Any], questions: dict[str, Any], state: Any) -> dic
 
 def first_answer(config: dict[str, Any], questions: dict[str, Any], state: Any) -> tuple[dict[str, Any] | None, str | None]:
     """The raw answers of the first endpoint that answers, with its name, or (None, None).
-    For checks that build their own questions, one state per candidate."""
+    For checks that build per-candidate questions, one state per candidate."""
     for endpoint in config["endpoints"]:
         try:
             return post(endpoint, questions, state), endpoint["name"]

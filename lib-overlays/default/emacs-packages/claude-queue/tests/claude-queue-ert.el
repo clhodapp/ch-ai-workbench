@@ -141,7 +141,7 @@ on low-stakes ambiguity, and end with a result: line."
   "The out-of-the-box dispatch is the correction profile
 \(consent-gate.md): auto mode; subagent spawning and the emacs
 server's tools allowed, its write verbs and elisp escape hatch
-included (the server's own filters confine them); shell and network
+included (the server's security filters confine them); shell and network
 absent via the permissions.deny floor.  Rooted in a project, so the
 bare-root guard stays out of the floor."
   (claude-queue-ert--with-checkout
@@ -574,7 +574,7 @@ a word-suffix of another name cannot match that other's title."
     (should-not (claude-queue--title-agent
                  "✳ transcript analysis"
                  '(((id . "trap") (name . "analysis")))))
-    ;; An interactive session's own conversation is never listed.
+    ;; The conversation of an interactive session is never listed.
     (should-not (claude-queue--title-agent "✳ my own conversation" agents))
     (should-not (claude-queue--title-agent "" agents))
     (should-not (claude-queue--title-agent nil agents))))
@@ -1139,7 +1139,7 @@ carries the conduct without the result: line."
     (string-remove-prefix (concat name "=") entry)))
 
 (ert-deftest claude-queue-codex-command-confinement ()
-  "Codex runs under its own workspace-write sandbox in a project, under
+  "Codex runs under its workspace-write sandbox in a project, under
 read-only without the Emacs disk writers on a bare root, and with
 neither inside agent-sandbox; the prompt follows `--'."
   (claude-queue-ert--with-checkout
@@ -1163,7 +1163,7 @@ neither inside agent-sandbox; the prompt follows `--'."
    t))
 
 (ert-deftest claude-queue-opencode-command-confinement ()
-  "Inside agent-sandbox OpenCode approves its own questions; elsewhere
+  "Inside agent-sandbox OpenCode approves every permission question; elsewhere
 inline configuration denies the shell and web tools, and on a bare
 root the edit tools too."
   (claude-queue-ert--with-checkout
@@ -1188,7 +1188,7 @@ root the edit tools too."
                         (external_directory . "deny"))
                       (alist-get 'permission config))))
      ;; With the consent plugin, writes outside the root reach it, and
-     ;; OpenCode 2 runs the task as its own server.
+     ;; OpenCode 2 runs the task as a separate server.
      (let* ((claude-queue-opencode-consent t)
           (claude-queue-opencode-standalone t)
           (run (claude-queue-ert--managed-argv 'opencode root)))
@@ -1407,7 +1407,7 @@ log."
             (should-not (claude-queue--registry)))))))))
 
 (ert-deftest claude-queue-managed-without-claude ()
-  "In a home without the claude command, the pump still dispatches a
+  "Without the claude command installed, the pump still dispatches a
 Codex task and the agent listing passes the empty cache."
   (let ((pump (symbol-function 'claude-queue--pump)))
    (claude-queue-ert--with-registry

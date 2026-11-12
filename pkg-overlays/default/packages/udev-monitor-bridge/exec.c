@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * Set the compatibility environment after Codex's inner helper has
- * sanitized its own loader environment. This runs inside all native
+ * sanitized the loader environment it runs with. This runs inside all native
  * seccomp, filesystem, network and Landlock restrictions.
  */
 #define _POSIX_C_SOURCE 200809L

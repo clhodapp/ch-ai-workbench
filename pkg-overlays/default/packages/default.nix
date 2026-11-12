@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # The `pkgs.ch-ai-workbench.*` scope: the merge tool that converges
-# declared settings into the agents' own config files, the sandbox CLI, its plugin, the
+# declared settings into the config files the agents read, the sandbox CLI, its plugin, the
 # Landlock shim, the trusted-executable stub and service, the
 # claude-consent prompt tool, the claude-response-judge client the
 # tic-check hooks ask a decision model through, and the MCP server that

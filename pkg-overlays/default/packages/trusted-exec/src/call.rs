@@ -4,7 +4,8 @@
 //! It sends the request in one write: its arguments, its working
 //! directory, and the values of the variables the stub names. Then it
 //! streams its stdin to the service and forwards SIGHUP, SIGINT, SIGQUIT
-//! and SIGTERM, while writing the program's stdout and stderr to its own.
+//! and SIGTERM, while writing the program's stdout and stderr to the stdout and
+//! stderr of the stub.
 //! It exits with the program's exit code, or 128 plus the signal that
 //! ended the program.
 //!

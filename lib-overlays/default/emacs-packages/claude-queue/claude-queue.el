@@ -26,7 +26,7 @@
 ;; `opencode run --format json'); its event stream is the transcript
 ;; RET shows, its exit ends the task, and `a' continues its session in
 ;; a terminal.  Outside a checkout enrolled in agent-sandbox, the
-;; agent's own sandbox or permissions keep the task in its root, and a
+;; agent's built-in sandbox or permissions keep the task in its root, and a
 ;; write outside the root becomes a consent question, as for Claude
 ;; (codex-consent-hook, the OpenCode consent plugin).
 ;;
@@ -146,7 +146,7 @@ framework-cancelled hook yields no decision at all."
     "mcp__emacs__edit-buffer"
     "mcp__emacs__present"
     ;; The server's disk-writing verbs and its elisp escape hatch,
-    ;; confined by the server's own filters (emacs-mcp-agent-tools.md,
+    ;; confined by the server's security filters (emacs-mcp-agent-tools.md,
     ;; Security filters): writes stay under the calling client's
     ;; territory, the project of the bridge's launch directory, and
     ;; elisp runs only when `unsafep' proves it side-effect free.
@@ -163,7 +163,7 @@ Permission modes do not cover MCP tools, so tasks touching the live
 Emacs stall on approval even under \"acceptEdits\"; the default
 pre-approves the emacs server's tools and subagent spawning so a task
 can hand work to another model.  The server's write verbs and
-elisp-taking tools are confined by its own filters (client-territory
+elisp-taking tools are confined by its security filters (client-territory
 write scope, the agent-safe elisp gate), which is the confinement
 this list relies on: their widening knobs are the resident user's
 alone, unreachable from gated elisp."
@@ -214,7 +214,7 @@ counts as unenrolled."
   :group 'claude-queue)
 
 (defcustom claude-queue-bare-root-denied-tools
-  '(;; The CLI's own disk writers ("MultiEdit" is not a registered
+  '(;; The CLI's built-in disk writers ("MultiEdit" is not a registered
     ;; tool on 2.1.241; the three below are, and permissions.deny
     ;; unregisters them -- probe-verified, claude-cli.md).
     "Edit" "Write" "NotebookEdit"
@@ -225,7 +225,7 @@ counts as unenrolled."
 Territory is project identity (consent-gate.md): a dispatch from
 inside a project grants edits to that project.  A dispatch rooted
 outside any project -- `claude-queue--root' falls back to the
-buffer's own directory when no git checkout or project encloses it
+buffer's directory when no git checkout or project encloses it
 -- has no identity to grant, and every write path would otherwise
 take that bare directory (the home directory, say) as its whole
 territory: the consent hook and the CLI's workdir rule for
@@ -234,7 +234,7 @@ its territory from the same directory, for edit-file and transform.
 So a bare-root dispatch gets no unattended disk writes on either
 path.  It keeps reading, commenting, presenting, and `edit-buffer',
 whose changes land in the buffer for the resident user to save.  The
-predicate is the server's own (`project-current' on the root), so
+predicate is the one the server uses (`project-current' on the root), so
 the guard fires exactly when the territory would degrade."
   :type '(repeat string)
   :group 'claude-queue)
@@ -271,9 +271,9 @@ route of Codex open: a call that would leave the workspace-write
 sandbox raises the PermissionRequest hook, where codex-consent-hook
 from this workbench asks the user (`claude-consent-list') and
 answers.  Codex hands a request no hook answers to its automatic
-reviewer, a model, so this is for homes that install that hook; the
-emacs-integration module sets it there.  Nil keeps Codex approvals
-off: such a call is refused."
+reviewer, a model, so this is for home-manager configurations that
+install that hook; the emacs-integration module sets it there.  Nil
+keeps Codex approvals off: such a call is refused."
   :type 'boolean
   :group 'claude-queue)
 
@@ -283,13 +283,14 @@ Non-nil opens OpenCode's external_directory permission for tasks
 outside agent-sandbox, and the consent plugin from this workbench
 then asks the user (`claude-consent-list') about each write outside
 the task root.  That plugin is what confines such writes, so this is
-for homes that install it; the emacs-integration module sets it
-there.  Nil denies the permission: such a write fails."
+for home-manager configurations that install it; the
+emacs-integration module sets it there.  Nil denies the permission:
+such a write fails."
   :type 'boolean
   :group 'claude-queue)
 
 (defcustom claude-queue-opencode-standalone nil
-  "Whether OpenCode tasks run as their own server (`--standalone').
+  "Whether OpenCode tasks run as separate servers (`--standalone').
 OpenCode 2 otherwise runs a task on the per-user background server,
 whose environment does not name the task, so the consent plugin
 would not see it.  OpenCode 1 has no such server and no such flag;
@@ -705,8 +706,8 @@ Offers `claude-queue-models', defaulting to
 (defun claude-queue-dispatch-agent (agent model)
   "Like `claude-queue-dispatch', but pick the AGENT and its MODEL first.
 For Claude the model defaults to `claude-queue-default-model'; for
-Codex and OpenCode an empty answer keeps the model the agent's own
-configuration names."
+Codex and OpenCode an empty answer keeps the model named in the
+configuration of the agent."
   (interactive
    (let* ((agent (intern (completing-read
                           "Agent: " '("claude" "codex" "opencode") nil t nil nil
@@ -833,12 +834,12 @@ process."
 ;;; Codex and OpenCode tasks
 
 ;; A Codex or OpenCode task is a process this Emacs runs: the agent's
-;; headless command, from the task root, through the agent's own
-;; command (so a checkout enrolled in agent-sandbox runs it whole
-;; inside its sandbox).  Its JSON event stream goes to a log file under
-;; `claude-queue-log-directory', which is the task's transcript; the
-;; first event names the agent's session, which `a' resumes in a
-;; terminal.  The registry entry carries :agent, :log, :session and
+;; headless command, from the task root, through the command the
+;; agent's module installs (so a checkout enrolled in agent-sandbox
+;; runs it whole inside its sandbox).  Its JSON event stream goes to a
+;; log file under `claude-queue-log-directory', which is the
+;; transcript of the task; the first event names the agent's session,
+;; which `a' resumes in a terminal.  The registry entry carries :agent, :log, :session and
 ;; :state; the process itself lives in `claude-queue--managed-processes'
 ;; and dies with this Emacs, so an entry still marked working without
 ;; a process reads as gone.
@@ -869,7 +870,7 @@ process."
   "How a Codex or OpenCode task rooted at ROOT is confined.
 `sandboxed' when ROOT is a project checkout enrolled in agent-sandbox,
 whose sandbox then confines the whole agent; `project' for any other
-project, where the agent's own permissions confine it; `bare' when
+project, where the agent's permission settings confine it; `bare' when
 ROOT is no project, which grants no disk writes (see
 `claude-queue-bare-root-denied-tools')."
   (cond ((not (claude-queue--project-root-p root)) 'bare)
@@ -879,7 +880,7 @@ ROOT is no project, which grants no disk writes (see
 (defun claude-queue--codex-command (item confinement)
   "The `codex exec' command line for ITEM under CONFINEMENT.
 Inside agent-sandbox the codex command already runs Codex without a
-sandbox of its own.  Elsewhere Codex's own sandbox confines it:
+built-in sandbox.  Elsewhere the Codex sandbox confines it:
 `workspace-write' lets commands and patches write in the task root
 and nowhere else, without network, and a bare root gets `read-only'
 with the Emacs server's disk-writing tools disabled.  With
@@ -1113,7 +1114,7 @@ Emacs dispatched the task."
                                   (claude-queue--registry)))))
 
 (defun claude-queue--entry-agent (entry agents)
-  "The agent row of registry ENTRY: its own row for a Codex or OpenCode
+  "The agent row of registry ENTRY: the entry's row for a Codex or OpenCode
 task, its row among AGENTS (a `claude agents' listing) otherwise."
   (if (claude-queue--managed-p entry)
       (claude-queue--managed-row entry)
@@ -1300,8 +1301,8 @@ OpenCode task is active when this Emacs dispatched it (`active')."
 
 CALLBACK receives the parsed list; the result is also cached in
 `claude-queue--agents-cache'.  On failure the stale cache is passed,
-and a home without `claude-queue-program' passes it at once: Codex
-and OpenCode tasks need no Claude."
+and when `claude-queue-program' is not installed it is passed at
+once: Codex and OpenCode tasks need no Claude."
   (if (not (executable-find claude-queue-program))
       (funcall callback claude-queue--agents-cache)
     (claude-queue--fetch-agents-process callback)))
@@ -1438,10 +1439,10 @@ parens."
 (defun claude-queue--argv-session (argv)
   "How the process running ARGV relates to a claude session.
 
-`self' when the process IS an interactive session, so its own /proc
-cwd is the session's; (attach . ID) for an attach client viewing
-background session ID; nil for anything else -- other programs, and
-the CLI's non-session invocations: the daemon, pty hosts and
+`self' when the process IS an interactive session, so the /proc cwd
+of the process is the cwd of the session; (attach . ID) for an attach
+client viewing background session ID; nil for anything else -- other
+programs, and the CLI's non-session invocations: the daemon, pty hosts and
 spare-pool workers (--bg* flags), and utility subcommands.  The
 wrapped name is the argv[0] a nix wrapProgram leaves behind."
   (let ((basename (and argv (file-name-nondirectory (car argv)))))
@@ -1613,7 +1614,7 @@ a live session with a stale directory (the failure that broke
 re-opened conversations).  Then the launch-time knowledge: the
 agent id queue-created views carry in `claude-queue--buffer-agent'.
 Last, the process walk: the first claude session among the buffer
-process's descendants -- the user's own `claude' run by hand, whose
+process's descendants -- a `claude' the user ran by hand, whose
 /proc cwd is the only truth for TUI-hosted conversations (resumed
 ones carry placeholder record names no title can match, and have no
 record at all before their first message; the process chdirs on
@@ -1662,10 +1663,10 @@ runs inside it is decided at sync time)."
 
 (defun claude-queue--follow-sync (buffer)
   "Point BUFFER's `default-directory' at its session's live cwd.
-No-op when BUFFER views no session.  Coexists with ghostel's own
-OSC 7 directory tracking: a full-screen claude emits no pwd reports,
+No-op when BUFFER views no session.  Coexists with the OSC 7
+directory tracking in ghostel: a full-screen claude emits no pwd reports,
 so this value stands while the session runs, and the shell prompt
-reasserts its own directory once claude exits."
+reports the shell's directory again once claude exits."
   (when-let* ((cwd (claude-queue--buffer-session-cwd buffer)))
     (with-current-buffer buffer
       (unless (equal cwd default-directory)
@@ -2685,8 +2686,8 @@ task, its event log; a task still running is stopped first."
 Forgetting a Claude task only removes it from this list; the
 background session itself is untouched (use `s' to stop one).
 Forgetting a Codex or OpenCode task also stops its process and
-deletes its event log, which is its transcript; the agent's own
-session store keeps the session."
+deletes its event log, which is its transcript; the session store
+of the agent (Codex or OpenCode) keeps the session."
   (interactive)
   (let ((row (claude-queue--row)))
     (cond

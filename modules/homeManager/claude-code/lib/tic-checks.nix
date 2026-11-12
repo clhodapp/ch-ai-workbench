@@ -3,8 +3,10 @@
 # peer-programmer style's banned phrasings that a regex can catch
 # with few false positives.  Patterns are GNU grep EREs matched
 # case-insensitively against the finished message with code fences
-# and backtick spans removed; the rule is the one-line reminder the
-# model gets back.  A hit is a trigger, not a verdict: the model
+# and backtick spans removed; an entry's ignore pattern, when set,
+# removes more text before that entry alone is matched.  The rule is
+# the one-line reminder the model gets back.  A hit is a trigger, not
+# a verdict: the model
 # answers the check with clean when the match is legitimate.
 {
   # The ownership handoff: a possessive left dangling at the end of a
@@ -42,6 +44,41 @@
   grows = {
     pattern = "\\bgr(ow|ows|ew|own|owing)\\b";
     rule = "say what happens (\"if we add a title hook\", \"once the parser handles nested lists\"), not that something \"grows\" a capability";
+  };
+  # "a home", "the home", "each home", or "homes" as the noun for a
+  # home-manager configuration.  A determiner before "home" makes it a
+  # noun, so a bare "home" in "go home" passes; "homed" and "$HOME" do
+  # not match the word.  The ignore pattern removes hyphenated
+  # compounds such as "home-manager", the project name "Home Manager",
+  # the compounds "home directory",
+  # "home area", "home page" and their like, and text in double or
+  # curly quotation marks before this entry is matched.
+  home-shorthand = {
+    pattern = "\\b(a|the|each|every|this|that|one|another|its|their|your|which)[[:space:]]+homes?\\b|\\bhomes\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bhome-[[:alnum:]_-]*|\\bhome[[:space:]]+(manager|directory|directories|dir|dirs|folder|folders|area|areas|page|pages|path|paths|screen|row|network|server)\\b";
+    rule = "write \"a home-manager configuration\" (\"the home-manager configuration inside desktop-2\"), not \"a home\", \"the home\", or \"homes\"";
+  };
+  # A possessive followed by "own" as emphasis ("home-manager's own
+  # mechanism", "its own commit").  The possessive is a noun with an
+  # apostrophe (straight or curly, as in elliptical-possessive) or a
+  # possessive pronoun.  The ignore pattern removes the idioms "on its
+  # own" and "for its own sake" with any possessive pronoun, and text
+  # in double or curly quotation marks, before this entry is matched.
+  possessive-own = {
+    pattern = "(^|[^'’[:alnum:]])([[:alnum:]][[:alnum:]_-]*('s|’s|s'|s’)|its|their|his|her|our|your|my|whose)[[:space:]]+own\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bon[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own\\b|\\bfor[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own[[:space:]]+sake\\b";
+    rule = "drop the emphatic \"own\" and name the thing (\"home-manager's useUserPackages mechanism\", \"a separate commit\"), not \"X's own\" or \"its own\"; keep \"own\" only where the sentence contrasts two owners";
+  };
+  # "the top", "a structural top", "the flake-parts top", or "tops" as
+  # the noun for caisson's top configuration.  The ignore pattern
+  # removes "caisson top" itself, hyphenated compounds such as
+  # "top-level", the place "top of" ("the top of the file", "the top
+  # of BUFFER"), "on top", "topside", and text in double or curly
+  # quotation marks before this entry is matched.
+  bare-top = {
+    pattern = "\\b(the|a|an|each|every|this|that|its|their|any|no)[[:space:]]+(flake[- ]parts[[:space:]]+|structural[[:space:]]+|parentless[[:space:]]+|flake[[:space:]]+)?tops?\\b|\\btops\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bcaisson[[:space:]]+tops?\\b|\\btop-[[:alnum:]_-]*|\\btop[[:space:]]+of\\b|\\bon[[:space:]]+top\\b|\\btopside\\b";
+    rule = "write \"caisson top\" (\"the caisson top\", \"a structural caisson top\"), not \"the top\" or \"tops\"";
   };
   performed-enthusiasm = {
     pattern = "\\b(happy|glad) to\\b";

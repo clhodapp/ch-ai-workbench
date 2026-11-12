@@ -10,8 +10,8 @@
 # and nothing else is replaced; anything else abstains (exit 0, no
 # output), including a token mixed with other text, which is the
 # model not following the instruction and should stay visible as is.
-# The hook's own "tic-check: check" / "tic-check: rewrite" reasons
-# are not assistant messages and do not pass through here.
+# The reasons the Stop hook heads "tic-check: check" and
+# "tic-check: rewrite" are not assistant messages and do not pass through here.
 
 payload=$(cat) || exit 0
 

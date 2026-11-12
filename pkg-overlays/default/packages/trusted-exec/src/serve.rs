@@ -8,7 +8,7 @@
 //! `--pass-env`. Everything else about the run comes from the service:
 //! the program, its environment, and the restrictions systemd applies.
 //!
-//! The program runs in its own process group with piped stdio. Four
+//! The program runs in a new process group with piped stdio. Four
 //! threads move bytes:
 //! - one each copies the stdout and stderr of the program to the caller;
 //! - `feed` reads the frames the caller sends, queues stdin and delivers

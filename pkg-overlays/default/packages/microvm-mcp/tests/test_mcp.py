@@ -191,7 +191,7 @@ class ServerCase(Fixture):
 
     def test_discovery_connection_cleanup_cannot_stop_another_servers_guest(self) -> None:
         # Two MCP connections may have the same Codex daemon parent.
-        # Each server must use its own process identity as the holder.
+        # Each server must name its process identity as the holder, not the daemon parent.
         self.call("microvm_up", {"kind": "probe"})
         other_holder = self.process(1001)
         discovery = Server(self.instances(), other_holder, lambda msg: None, self.mcp_kinds)

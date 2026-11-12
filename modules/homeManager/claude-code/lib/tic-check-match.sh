@@ -1,6 +1,6 @@
 # Shared by the tic-check hooks (prepended to each script by its
 # package wrapper, after `table=` is set to the JSON array of
-# {name, pattern, rule} rendered from ticChecks and
+# {name, pattern, ignore, rule} rendered from ticChecks and
 # `judge=` to the judge config rendered from judge.*; the
 # claude-response-judge program is on PATH).
 #
@@ -27,8 +27,9 @@
 #   - A regex entry prints its name, the occurrence count, the rule,
 #     and up to three matching lines.  Code fences and backtick spans
 #     are removed before matching: quoted paths, commands, and output
-#     are not the model's prose.  Patterns are GNU grep EREs, matched
-#     case-insensitively.
+#     are not the model's prose.  An entry's ignore pattern, when it
+#     is set, removes more text before that entry is matched.  Patterns
+#     are GNU grep EREs, matched case-insensitively.
 #   - A dimension with pushBack set that the judge put at or above
 #     tic_push_back_above KIND (KIND defaults to reply) prints its
 #     name, the probability, its rule, and its `true` criterion.
@@ -51,18 +52,26 @@ tic_verdict() {
 }
 
 tic_findings() {
-  local text=$1 verdict=${2:-} kind=${3:-reply} prose name pattern rule hits count lines at
+  local text=$1 verdict=${2:-} kind=${3:-reply} prose matched name pattern ignore rule hits count lines at
   # The backticks are literal markdown fence and span markers.
   # shellcheck disable=SC2016
   prose=$(sed -e '/^[[:space:]]*```/,/^[[:space:]]*```/d' -e 's/`[^`]*`//g' <<<"$text")
-  while IFS= read -r name && IFS= read -r pattern && IFS= read -r rule; do
-    hits=$(grep -n -i -E -- "$pattern" <<<"$prose" 2>/dev/null) || continue
-    count=$(grep -o -i -E -- "$pattern" <<<"$prose" | wc -l)
+  while IFS= read -r name && IFS= read -r pattern && IFS= read -r ignore && IFS= read -r rule; do
+    # An entry's ignore pattern removes text (quotations, compound
+    # nouns) from the prose this entry alone is matched against.  The
+    # sed delimiter is the control character \001, which no pattern
+    # contains.
+    matched=$prose
+    if [ -n "$ignore" ]; then
+      matched=$(sed -E -e $'s\001'"$ignore"$'\001\001gI' <<<"$prose" 2>/dev/null) || matched=$prose
+    fi
+    hits=$(grep -n -i -E -- "$pattern" <<<"$matched" 2>/dev/null) || continue
+    count=$(grep -o -i -E -- "$pattern" <<<"$matched" | wc -l)
     # The lines that matched, so the model can find them without
     # re-reading the whole text; each cut to keep the reason short.
     lines=$(head -n 3 <<<"$hits" | cut -c1-160 | sed 's/^\([0-9]*\):/    line \1: /')
     printf '\n- %s (%s): %s\n%s' "$name" "$count" "$rule" "$lines"
-  done < <(jq -r '.[] | .name, .pattern, .rule' "$table" 2>/dev/null)
+  done < <(jq -r '.[] | .name, .pattern, (.ignore // ""), .rule' "$table" 2>/dev/null)
   [ -n "$verdict" ] || return 0
   at=$(tic_push_back_above "$kind") || return 0
   jq -j --slurpfile c "$judge" --argjson at "$at" '
