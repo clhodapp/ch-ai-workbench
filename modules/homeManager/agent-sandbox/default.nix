@@ -196,6 +196,7 @@ let
   # Older native launchers read the bwrap path from their protected policy.
   # This adapter updates private temporary mounts at the next command boundary.
   nativeTmpBwrap = pkgs.writeShellScript "agent-sandbox-native-tmp-bwrap" ''
+    export AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE=1
     exec ${cfg.package}/bin/agent-sandbox codex-temp-bwrap \
       --bwrap ${devicesBwrap}/bin/bwrap \
       --policy "$AGENT_SANDBOX_CODEX_POLICY" -- "$@"

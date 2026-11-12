@@ -309,6 +309,20 @@ class CodexTest(unittest.TestCase):
                                    "/run/nix.sock", "--", "/bin/zsh", "-c", "echo hello"])
         self.assertIn("--disable-userns", cmd[:cmd.index("codex-linux-sandbox")])
 
+    def test_legacy_temp_adapter_sets_device_wrapper_recursion_guard(self):
+        from argparse import Namespace
+        from agent_sandbox.cli import cmd_codex_temp_bwrap
+
+        policy = self.root / "policy.json"
+        policy.write_text("{}")
+        args = Namespace(policy=str(policy), bwrap="/device-wrapper/bwrap",
+                         agent_command=["--", "--version"])
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("os.execve") as execute:
+            cmd_codex_temp_bwrap(args)
+        execute.assert_called_once_with("/device-wrapper/bwrap",
+                                        ["/device-wrapper/bwrap", "--version"],
+                                        {"AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE": "1"})
+
     def test_probes_are_forwarded(self):
         self.assertEqual(bwrap_command(["--help"], {"bwrap": "/bin/bwrap"}), ["/bin/bwrap", "--help"])
 
