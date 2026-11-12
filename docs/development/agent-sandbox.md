@@ -275,6 +275,10 @@ with both checkouts' configuration guards retained.
 The policy file, wrappers, sockets and private scratch under the runtime
 directory are transient launch resources, not persistent project settings.
 Do not copy their process-specific paths into `.codex/config.toml`.
+Native commands with a writable `:tmpdir` also see that scratch directory at
+`/tmp` and, where present, `/var/tmp`. This supports native temporary-file APIs and hides the
+host temporary directories. A command whose current profile lacks that write
+grant receives no writable aliases.
 Cleanup of old scratch directories is best effort: an undeletable build
 tree produces a warning and must not block a new agent launch.
 Native runtimes are retained for the boot lifetime: shared-server threads

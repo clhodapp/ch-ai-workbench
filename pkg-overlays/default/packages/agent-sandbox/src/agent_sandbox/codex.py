@@ -552,10 +552,31 @@ def bwrap_command(args: list[str], policy: dict[str, Any]) -> list[str]:
             raise ToolError("udev monitor broker is not in the socket allowlist")
         bridge_exec = str(Path(preload).parent.parent / "bin/udev-monitor-exec")
         prefix += [bridge_exec, preload, udev_socket, "--"]
+    # Alias the already granted scratch directory at conventional temporary
+    # paths. Native builds often ignore TMPDIR and use /tmp or /var/tmp.
+    # Consult this command's actual profile so selecting read-only cannot
+    # regain writes through a launcher's older, broader configuration.
+    temporary_binds = []
+    try:
+        native = json.loads(args[args.index("--permission-profile") + 1])
+        entries = native.get("file_system", {}).get("entries", [])
+        scratch_writable = any(
+            entry.get("access") == "write"
+            and entry.get("path", {}).get("type") == "special"
+            and entry["path"].get("value", {}).get("kind") == "tmpdir"
+            for entry in entries
+        )
+        temporary = policy.get("config", {}).get("shell_environment_policy", {}).get("set", {}).get("TMPDIR")
+        if scratch_writable and temporary and Path(temporary).is_absolute():
+            temporary_binds = ["--bind", temporary, "/tmp"]
+            if Path("/var/tmp").is_dir():
+                temporary_binds += ["--bind", temporary, "/var/tmp"]
+    except (ValueError, IndexError, TypeError):
+        pass
     # A command must not create another namespace and detach native
     # read-only guards. Landlock also blocks mount operations when used.
     return [policy["bwrap"], "--disable-userns", *args[:outer],
-            *(policy.get("identity_binds") or []), *environment,
+            *(policy.get("identity_binds") or []), *temporary_binds, *environment,
             *args[outer:inner + 1], *prefix, *args[inner + 1:]]
 
 

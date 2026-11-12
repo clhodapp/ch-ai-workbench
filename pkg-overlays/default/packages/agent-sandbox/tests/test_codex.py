@@ -328,6 +328,25 @@ class CodexTest(unittest.TestCase):
         cmd = bwrap_command(args, {"bwrap": "/bin/bwrap", "sockets": None, "identity_binds": binds})
         self.assertEqual(cmd[:5], ["/bin/bwrap", "--disable-userns", *binds])
 
+    def test_private_tmp_aliases_require_current_scratch_write_grant(self):
+        native = {"file_system": {"entries": [{
+            "access": "write", "path": {"type": "special", "value": {"kind": "tmpdir"}},
+        }]}}
+        args = ["--ro-bind", "/", "/", "--", "/bin/codex", "--apply-seccomp-then-exec",
+                "--permission-profile", json.dumps(native), "--", "/bin/sh"]
+        policy = {"bwrap": "/bin/bwrap", "sockets": None, "config": {
+            "shell_environment_policy": {"set": {"TMPDIR": str(self.scratch)}},
+        }}
+        with mock.patch("agent_sandbox.codex.Path.is_dir", return_value=True):
+            command = bwrap_command(args, policy)
+        mounts = ["--bind", str(self.scratch), "/tmp", "--bind", str(self.scratch), "/var/tmp"]
+        index = command.index("--bind")
+        self.assertEqual(command[index:index + 6], mounts)
+        self.assertLess(index, command.index("--"))
+        native["file_system"]["entries"][0]["access"] = "read"
+        args[args.index("--permission-profile") + 1] = json.dumps(native)
+        self.assertNotIn("--bind", bwrap_command(args, policy))
+
     def test_missing_native_stage_fails_closed(self):
         with self.assertRaisesRegex(ToolError, "native"):
             bwrap_command(["--", "/bin/zsh"], {"bwrap": "/bin/bwrap", "sockets": []})

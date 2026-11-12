@@ -36,7 +36,16 @@ with http.server.HTTPServer(("127.0.0.1", 0), TestHandler) as local_server:
 
 (root / "native-write").write_text("allowed")
 Path(os.environ["TMPDIR"], "native-write").write_text("allowed")
-# zsh's default /tmp/zsh prefix is read-only even when TMPDIR is writable.
+# Conventional temporary paths expose only this runtime's granted scratch.
+assert not Path("/tmp/agent-sandbox-host-temp-marker").exists()
+for directory in ("/tmp", "/var/tmp"):
+    if not Path(directory).is_dir():
+        continue
+    target = Path(directory) / "native-private-temp"
+    target.write_text("private scratch")
+    assert Path(os.environ["TMPDIR"], target.name).read_text() == "private scratch"
+    target.unlink()
+# zsh heredocs also work when a tool uses its default temporary prefix.
 heredoc = subprocess.run(["zsh", "-f", "-c", "cat <<'EOF'\nheredoc works\nEOF\n"],
                          capture_output=True, text=True)
 assert heredoc.returncode == 0, heredoc.stderr

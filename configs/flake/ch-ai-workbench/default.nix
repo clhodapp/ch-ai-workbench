@@ -1111,6 +1111,7 @@
                       test -S /build/home/forbidden.sock && break
                       sleep 0.1
                     done
+                    touch /tmp/agent-sandbox-host-temp-marker
                     cp ${self}/tests/agent-sandbox/native-probe.py native-probe.py
                     timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:native-probe.py' < /dev/null
                     test -e native-probe-passed
