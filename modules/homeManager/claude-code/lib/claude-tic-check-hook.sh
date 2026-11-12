@@ -54,14 +54,22 @@ field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null || true; }
 
 message=$(field '.last_assistant_message')
 [ -n "$message" ] || exit 0
+session=$(field '.session_id')
 
 emit() { # $1 = reason; always a clean exit
+  tic_log blocked "$(jq -cn --arg h "${1%%$'\n'*}" '{hook: "stop", heading: $h}' 2>/dev/null)"
   jq -cn --arg r "$1" '{decision: "block", reason: $r}' 2>/dev/null
   exit 0
 }
 
 if [ "$(field '.stop_hook_active')" = "true" ]; then
-  case "$(printf '%s' "$message" | tr -d '[:space:]')" in
+  answer=$(printf '%s' "$message" | tr -d '[:space:]')
+  case $answer in
+    'tic-check:clean' | 'tic-check:tic') ;;
+    *) answer=other ;;
+  esac
+  tic_log answered "$(jq -cn --arg a "${answer#tic-check:}" '{hook: "stop", answer: $a}' 2>/dev/null)"
+  case "$answer" in
     'tic-check:tic')
       emit "tic-check: rewrite
 Post your final message (the one before your verdict) again in full, with each flagged phrasing rewritten per the rules you were given, and nothing else (no preamble, no note about the change). The earlier messages of the turn are already on screen: where a finding was in one of them, or the final message left out what the turn found, restate that point correctly in the final message when the reader needs it."
@@ -89,7 +97,7 @@ findings+=$(jq -r '.findings // ""' <<<"$checks" 2>/dev/null) || true
 report=$(jq -c '.report // {}' <<<"$checks" 2>/dev/null) || report=
 [ -n "$report" ] || report='{}'
 
-store=$(tic_verdict_path "$(field '.session_id')") || store=
+store=$(tic_verdict_path "$session") || store=
 
 if [ -z "$findings" ]; then
   # No push-back: keep the verdict and the checks' report for

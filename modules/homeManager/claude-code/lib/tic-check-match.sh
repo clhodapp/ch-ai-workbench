@@ -42,17 +42,26 @@ tic_push_back_above() {
 }
 
 tic_verdict() {
-  local kind=$1 text=$2 replaced=${3:-} transcript=${4:-} file='' args=()
+  local kind=$1 text=$2 replaced=${3:-} transcript=${4:-} file='' args=() out start fields
   if [ -n "$replaced" ] && file=$(mktemp 2>/dev/null); then
     printf '%s' "$replaced" > "$file" 2>/dev/null && args=(--replaced "$file")
   fi
   [ -z "$transcript" ] || args+=(--transcript "$transcript")
-  claude-response-judge --config "$judge" --kind "$kind" "${args[@]}" <<<"$text" 2>/dev/null || true
+  start=$(date +%s%N 2>/dev/null) || start=0
+  out=$(claude-response-judge --config "$judge" --kind "$kind" "${args[@]}" <<<"$text" 2>/dev/null) || out=
   [ -z "$file" ] || rm -f "$file" 2>/dev/null || true
+  fields=
+  if [ -n "$out" ]; then
+    fields=$(jq -c --arg k "$kind" --argjson ms "$(( ($(date +%s%N 2>/dev/null || echo 0) - start) / 1000000 ))" \
+      '{kind: $k, answered: true, ms: $ms, endpoint, model, answers, scores: ((.scores // {}) | map_values(.score))}' <<<"$out" 2>/dev/null) || fields=
+  fi
+  [ -n "$fields" ] || fields=$(jq -cn --arg k "$kind" '{kind: $k, answered: false}' 2>/dev/null) || fields=
+  tic_log judge "$fields"
+  [ -z "$out" ] || printf '%s\n' "$out"
 }
 
 tic_findings() {
-  local text=$1 verdict=${2:-} kind=${3:-reply} prose matched name pattern ignore rule hits count lines at
+  local text=$1 verdict=${2:-} kind=${3:-reply} prose matched name pattern ignore rule hits count lines at names=() regex='[]' dims='[]'
   # The backticks are literal markdown fence and span markers.
   # shellcheck disable=SC2016
   prose=$(sed -e '/^[[:space:]]*```/,/^[[:space:]]*```/d' -e 's/`[^`]*`//g' <<<"$text")
@@ -71,14 +80,28 @@ tic_findings() {
     # re-reading the whole text; each cut to keep the reason short.
     lines=$(head -n 3 <<<"$hits" | cut -c1-160 | sed 's/^\([0-9]*\):/    line \1: /')
     printf '\n- %s (%s): %s\n%s' "$name" "$count" "$rule" "$lines"
+    names+=("$name")
   done < <(jq -r '.[] | .name, .pattern, (.ignore // ""), .rule' "$table" 2>/dev/null)
-  [ -n "$verdict" ] || return 0
-  at=$(tic_push_back_above "$kind") || return 0
-  jq -j --slurpfile c "$judge" --argjson at "$at" '
-    $c[0] as $c
-    | .answers | to_entries[]
-    | $c.dimensions[.key] as $d
-    | select($d != null and $d.pushBack and .value >= $at)
-    | "\n- \(.key) (judge \((.value * 100 | round) / 100)): \($d.rule)\n    the judge read the text as: \($d.criteria.true)"
-  ' <<<"$verdict" 2>/dev/null || true
+  if [ "${#names[@]}" -gt 0 ]; then
+    regex=$(printf '%s\n' "${names[@]}" | jq -R . | jq -sc . 2>/dev/null) || regex='[]'
+  fi
+  if [ -n "$verdict" ] && at=$(tic_push_back_above "$kind"); then
+    dims=$(jq -c --slurpfile c "$judge" --argjson at "$at" '
+      $c[0] as $c
+      | [.answers | to_entries[]
+         | select($c.dimensions[.key] != null and $c.dimensions[.key].pushBack and .value >= $at)
+         | {dimension: .key, p: .value}]
+    ' <<<"$verdict" 2>/dev/null) || dims='[]'
+    jq -j --slurpfile c "$judge" --argjson at "$at" '
+      $c[0] as $c
+      | .answers | to_entries[]
+      | $c.dimensions[.key] as $d
+      | select($d != null and $d.pushBack and .value >= $at)
+      | "\n- \(.key) (judge \((.value * 100 | round) / 100)): \($d.rule)\n    the judge read the text as: \($d.criteria.true)"
+    ' <<<"$verdict" 2>/dev/null || true
+  fi
+  if [ "$regex" != '[]' ] || [ "$dims" != '[]' ]; then
+    tic_log findings "$(jq -cn --arg k "$kind" --argjson r "$regex" --argjson d "$dims" '{kind: $k, regex: $r, judge: $d}' 2>/dev/null)"
+  fi
+  return 0
 }

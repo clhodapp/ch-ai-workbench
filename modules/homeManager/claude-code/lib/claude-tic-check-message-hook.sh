@@ -74,6 +74,7 @@ reason="tic-check: check
 The commit message, pull request text, or review this command writes may break the output style's rules:$findings
 Re-read the text against each finding's rule. If any finding is real, re-issue the command with that text rewritten. If every finding is a false alarm (quoted text, a real possessive, a literal symbol in code or quoted output), re-issue the same command unchanged; an identical re-issue is not checked again."
 
+tic_log blocked "$(jq -cn --arg h "tic-check: check" '{hook: "message", heading: $h}' 2>/dev/null)"
 jq -cn --arg r "$reason" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse",
                          permissionDecision: "deny",
