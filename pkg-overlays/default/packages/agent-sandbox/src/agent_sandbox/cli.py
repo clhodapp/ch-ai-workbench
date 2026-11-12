@@ -691,6 +691,20 @@ def cmd_codex_bwrap(args: argparse.Namespace) -> int:
     os.execve(argv[0], argv, {**os.environ, "PATH": policy["path"], "AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE": "1"})
 
 
+def cmd_codex_temp_bwrap(args: argparse.Namespace) -> int:
+    from .codex import private_tmp_bindings
+
+    command = args.agent_command
+    if command and command[0] == "--":
+        command = command[1:]
+    policy = json.loads(Path(args.policy).read_text())
+    bindings = private_tmp_bindings(command, policy)
+    if bindings:
+        boundary = command.index("--")
+        command = [*command[:boundary], *bindings, *command[boundary:]]
+    os.execv(args.bwrap, [args.bwrap, *command])
+
+
 def cmd_codex_socket_boundary(args: argparse.Namespace) -> int:
     from .codex import socket_boundary_command
     command = args.agent_command
@@ -795,6 +809,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("codex-bwrap", cmd_codex_bwrap, checkout=False, help=argparse.SUPPRESS)
     p.add_argument("--policy", required=True)
+    p.add_argument("agent_command", nargs=argparse.REMAINDER)
+    p = add("codex-temp-bwrap", cmd_codex_temp_bwrap, checkout=False, help=argparse.SUPPRESS)
+    p.add_argument("--policy", required=True)
+    p.add_argument("--bwrap", required=True)
     p.add_argument("agent_command", nargs=argparse.REMAINDER)
     p = add("codex-socket-boundary", cmd_codex_socket_boundary, checkout=False, help=argparse.SUPPRESS)
     p.add_argument("--landlock", required=True)

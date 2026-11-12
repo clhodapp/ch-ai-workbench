@@ -9,7 +9,7 @@ from unittest import mock
 from pathlib import Path
 
 from agent_sandbox.codex import (bwrap_command, check_native_config, configuration,
-                                permission_profile_id, policy_for_command, socket_boundary_command, refresh_runtime_command_environment)
+                                permission_profile_id, policy_for_command, private_tmp_bindings, socket_boundary_command, refresh_runtime_command_environment)
 from agent_sandbox.files import ToolError
 
 
@@ -197,13 +197,14 @@ class CodexTest(unittest.TestCase):
         policy_file = old / "codex.json"
         policy_file.write_text(json.dumps({"config": config, "sockets": ["/run/allowed.sock"]}))
         new = configuration(self.settings, self.root, self.scratch, command_path="/enrolled/github/bin")
-        base = {"shell": "/bin/sh", "cli": "/current/agent-sandbox"}
+        base = {"shell": "/bin/sh", "cli": "/current/agent-sandbox", "nativeBwrap": "/current/native-bwrap"}
         with mock.patch("agent_sandbox.run.runtime_dir", return_value=runtime):
             refresh_runtime_command_environment(self.root.parent / "unrelated", new, base)
             self.assertEqual(wrapper.read_text(), "old launcher")
             refresh_runtime_command_environment(self.root, new, base)
         value = json.loads(policy_file.read_text())
         self.assertEqual(value["command_env"]["PATH"], "/enrolled/github/bin")
+        self.assertEqual(value["bwrap"], "/current/native-bwrap")
         self.assertEqual(value["sockets"], ["/run/allowed.sock", "/run/nix.sock"])
         self.assertEqual(value["config"], config)
         self.assertIn("/current/agent-sandbox", wrapper.read_text())
@@ -343,6 +344,7 @@ class CodexTest(unittest.TestCase):
         index = command.index("--bind")
         self.assertEqual(command[index:index + 6], mounts)
         self.assertLess(index, command.index("--"))
+        self.assertEqual(private_tmp_bindings(command[1:], policy), [])
         native["file_system"]["entries"][0]["access"] = "read"
         args[args.index("--permission-profile") + 1] = json.dumps(native)
         self.assertNotIn("--bind", bwrap_command(args, policy))

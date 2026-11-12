@@ -193,6 +193,14 @@ let
       --landlock ${landlockShim}/bin/landlock-shim -- "$@"
   '';
 
+  # Older native launchers read the bwrap path from their protected policy.
+  # This adapter updates private temporary mounts at the next command boundary.
+  nativeTmpBwrap = pkgs.writeShellScript "agent-sandbox-native-tmp-bwrap" ''
+    exec ${cfg.package}/bin/agent-sandbox codex-temp-bwrap \
+      --bwrap ${devicesBwrap}/bin/bwrap \
+      --policy "$AGENT_SANDBOX_CODEX_POLICY" -- "$@"
+  '';
+
   # The env variable that carries a composed unix-socket allowlist to the
   # socket shell; the CLI's composer writes it (SOCKETS_ENV_VAR there).
   socketsEnvVar = "AGENT_SANDBOX_UNIX_SOCKETS";
@@ -395,6 +403,7 @@ let
           # binds the composed devices.
           setsid = "${pkgs.util-linux}/bin/setsid";
           bwrap = "${devicesBwrap}/bin/bwrap";
+          nativeBwrap = "${nativeTmpBwrap}";
           cli = lib.getExe cfg.package;
           configMerger = lib.getExe (workbenchPackage "agent-config");
           landlock = "${nativeSocketBoundary}";

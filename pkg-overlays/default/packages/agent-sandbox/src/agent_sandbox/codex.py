@@ -83,6 +83,7 @@ def refresh_runtime_command_environment(root: Path, config: dict[str, Any], base
                     return value
             accepted = True
             updated = {**value, "command_env": dict(command_env),
+                       "bwrap": base.get("nativeBwrap", value.get("bwrap")),
                        "landlock": base.get("landlock", value.get("landlock"))}
             # Native seccomp opens Unix sockets as a class; Landlock is
             # the per-path enforcement boundary. Sync the explicit clone's
@@ -351,7 +352,7 @@ def prepare_native(settings: dict[str, Any], root: Path, scratch: Path,
     # tool command. Do not apply the socket shell to the trusted parent.
     env["SHELL"] = base["shell"]
     policy = {
-        "config": config, "bwrap": base["bwrap"], "landlock": base["landlock"],
+        "config": config, "bwrap": base.get("nativeBwrap", base["bwrap"]), "landlock": base["landlock"],
         "path": env["PATH"],
         "command_env": command_env,
         # An explicit open grant stays open. Otherwise even the empty
@@ -518,6 +519,33 @@ def policy_for_command(args: list[str], policy: dict[str, Any]) -> dict[str, Any
             "sockets": sorted(p for p, access in sockets.items() if access == "allow")}
 
 
+def private_tmp_bindings(args: list[str], policy: dict[str, Any]) -> list[str]:
+    # Alias the already granted scratch directory at conventional temporary
+    # paths. Native builds often ignore TMPDIR and use /tmp or /var/tmp.
+    # Consult this command's actual profile so selecting read-only cannot
+    # regain writes through a launcher's older, broader configuration.
+    temporary_binds = []
+    try:
+        native = json.loads(args[args.index("--permission-profile") + 1])
+        entries = native.get("file_system", {}).get("entries", [])
+        scratch_writable = any(
+            entry.get("access") == "write"
+            and entry.get("path", {}).get("type") == "special"
+            and entry["path"].get("value", {}).get("kind") == "tmpdir"
+            for entry in entries
+        )
+        temporary = policy.get("config", {}).get("shell_environment_policy", {}).get("set", {}).get("TMPDIR")
+        if scratch_writable and temporary and Path(temporary).is_absolute():
+            temporary_binds = ["--bind", temporary, "/tmp"]
+            if Path("/var/tmp").is_dir():
+                temporary_binds += ["--bind", temporary, "/var/tmp"]
+    except (ValueError, IndexError, TypeError):
+        pass
+    if temporary_binds and any(args[i:i + 3] == temporary_binds[:3] for i in range(len(args) - 2)):
+        return []
+    return temporary_binds
+
+
 def bwrap_command(args: list[str], policy: dict[str, Any]) -> list[str]:
     """Insert socket confinement after native mounts and seccomp setup.
     Preserve the helper's argv0, fd arguments, and chosen user shell."""
@@ -552,27 +580,7 @@ def bwrap_command(args: list[str], policy: dict[str, Any]) -> list[str]:
             raise ToolError("udev monitor broker is not in the socket allowlist")
         bridge_exec = str(Path(preload).parent.parent / "bin/udev-monitor-exec")
         prefix += [bridge_exec, preload, udev_socket, "--"]
-    # Alias the already granted scratch directory at conventional temporary
-    # paths. Native builds often ignore TMPDIR and use /tmp or /var/tmp.
-    # Consult this command's actual profile so selecting read-only cannot
-    # regain writes through a launcher's older, broader configuration.
-    temporary_binds = []
-    try:
-        native = json.loads(args[args.index("--permission-profile") + 1])
-        entries = native.get("file_system", {}).get("entries", [])
-        scratch_writable = any(
-            entry.get("access") == "write"
-            and entry.get("path", {}).get("type") == "special"
-            and entry["path"].get("value", {}).get("kind") == "tmpdir"
-            for entry in entries
-        )
-        temporary = policy.get("config", {}).get("shell_environment_policy", {}).get("set", {}).get("TMPDIR")
-        if scratch_writable and temporary and Path(temporary).is_absolute():
-            temporary_binds = ["--bind", temporary, "/tmp"]
-            if Path("/var/tmp").is_dir():
-                temporary_binds += ["--bind", temporary, "/var/tmp"]
-    except (ValueError, IndexError, TypeError):
-        pass
+    temporary_binds = private_tmp_bindings(args, policy)
     # A command must not create another namespace and detach native
     # read-only guards. Landlock also blocks mount operations when used.
     return [policy["bwrap"], "--disable-userns", *args[:outer],
