@@ -3,7 +3,7 @@
 
 A reply assumes too much when it refers back to something its reader never saw: tool output,
 an edit the assistant made, another Claude session, a subagent, or a name coined out of sight.
-Whether a name is new says little on its own, because replies introduce names all the time
+Whether a name is new says little by itself, because replies introduce names all the time
 and most come with a gloss or are handed over as a command or path to use. So this program
 looks for two narrower things in the final message of a turn (read from stdin):
 

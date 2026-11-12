@@ -8,7 +8,7 @@
 # System One decision model that scores the message on each of
 # judge.dimensions.  Matching and judging live in tic-check-match.sh
 # (tic_verdict, tic_findings), prepended by the package wrapper
-# together with $table and $judge; the edit-side twin is
+# together with $table and $judge; the edit-side counterpart is
 # claude-tic-check-edit-hook.sh.
 #
 # When nothing pushes back, the verdict is kept under the runtime dir

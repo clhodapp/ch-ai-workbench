@@ -456,7 +456,7 @@ matches; its residual is ~zero."
              (let ((buf-other buf))
                ;; Third component = the boilerplate direction; the hub is
                ;; nothing but it.  Raw cosine to the query: match 1.0,
-               ;; hub 0.707, other 0.39 — the hub beats a real document.
+               ;; hub 0.707, other 0.39, so the hub beats a real document.
                ;; Anchor-subtracted, the hub is the zero vector.
                (cl-letf (((symbol-function 'semantic-finder-embed)
                           (semantic-finder-test--mock-request

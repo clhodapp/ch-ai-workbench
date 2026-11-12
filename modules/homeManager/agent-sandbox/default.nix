@@ -1060,9 +1060,9 @@ in
       claudePackage = lib.mkOption {
         type = lib.types.package;
         description = ''
-          The claude-code package this machine actually runs (no
-          default: only the config wiring claude into the profile knows
-          it). Its closure is in every masked enrollment's allowRead:
+          The claude-code package this home-manager configuration
+          actually runs (no default: only the config wiring claude into
+          the profile knows it). Its closure is in every masked enrollment's allowRead:
           the sandbox helper re-enters it inside the sandbox, and
           without it every sandboxed command fails closed.
         '';
@@ -1584,8 +1584,8 @@ in
     # Built-in: an owned copy of ~/.ssh/config, so sandboxed git-over-ssh
     # works (the store-symlinked original is rejected by ssh's config
     # ownership check under the sandbox userns). The ssh wrapper points
-    # -F at the copy. git config is not wired: these machines have no
-    # ~/.gitconfig, and the mechanism is here to extend when one appears.
+    # -F at the copy. git config is not wired: the home directories this
+    # module serves have no ~/.gitconfig, and the mechanism is here to extend when one appears.
     ch-ai-workbench.agent-sandbox.credentials.ssh-config = {
       source = lib.mkDefault "${config.home.homeDirectory}/.ssh/config";
       target = lib.mkDefault "ssh_config";

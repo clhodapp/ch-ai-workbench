@@ -1,6 +1,6 @@
 ---
 name: emacs-tools
-description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, review-pull-request, edit-buffer/edit-file, transform, add-comment/list-comments, the session-fact tools feature-loaded/hooks/buffer-state/key-binding, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers — especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
+description: Usage depth for the emacs MCP server's agent tools (diagnostics, find-references/definition, symbol-info, document-outline, modified-buffers, buffer-diff, present, sidebar, review-pull-request, edit-buffer/edit-file, transform, add-comment/list-comments, the session-fact tools feature-loaded/hooks/buffer-state/key-binding, and the enhanced context/buffer-text). Read when reaching for these tools beyond their one-line triggers, especially BEFORE using the edit verbs or transform, before presenting to the user, before commenting on shared text, or when an LSP-backed tool errors or seems stale.
 ---
 
 # Emacs agent tools
@@ -9,7 +9,7 @@ These tools answer questions only the user's live Emacs session can
 answer: warm LSP servers (eglot with correct per-project config and
 envrc environments), unsaved buffer state, where the user's attention
 is, and the editing engine. Anything grep / ranged reads / native edits
-do well stays native — these are not mirrors of those.
+do well stays native; these tools are not mirrors of those.
 
 Design and rationale: `projects/ch-emacs-config/docs/development/emacs-mcp-agent-tools.md`.
 Safety rules: the `live-emacs-safety` skill (read-only tools are fine
@@ -31,7 +31,7 @@ argument of those tools empty; only the user's answer fills it.
 
 ## Conventions
 
-- Positions **in**: absolute `file`, 1-based `line`, 1-based `col` —
+- Positions **in**: absolute `file`, 1-based `line`, 1-based `col`,
   exactly what `grep -n --column` / rg prints.
 - Locations **out**: `path:line:col: text` lines, capped with the true
   total appended when truncated (`limit` param where it matters).
@@ -39,39 +39,40 @@ argument of those tools empty; only the user's answer fills it.
 
 ## Tool notes
 
-- **diagnostics** — omit `file` to sweep every file-visiting buffer.
-  Trust the status trailer: "check pending or running" means *not yet
-  checked*, not clean — retry shortly. Stale unmodified buffers are
-  auto-reverted first, so results reflect disk after your own edits.
-- **find-references / find-definition / symbol-info** — need the file
+- **diagnostics** sweeps every file-visiting buffer when you omit
+  `file`. Trust the status trailer. The trailer "check pending or
+  running" means the file is *not yet checked*, not that it is clean,
+  so retry shortly. Stale unmodified buffers are auto-reverted first,
+  so results reflect disk after your edits.
+- **find-references / find-definition / symbol-info** need the file
   in a buffer with a backend: eglot for LSP modes, native xref for
   elisp. "No LSP (eglot) server manages …" usually means the file
   wasn't open and auto-open couldn't boot a server fast enough, or the
-  mode has no server configured; a timeout error means the server hung
-  — both are per-call failures, not session breakage.
-- **modified-buffers → buffer-diff** — the don't-clobber-the-user
+  mode has no server configured. A timeout error means the server
+  hung. Both are per-call failures, not session breakage.
+- **modified-buffers, then buffer-diff** is the don't-clobber-the-user
   sequence. Before editing files in the user's active project, run
   modified-buffers (cheap); on a hit for a file you want to touch, get
   buffer-diff and *incorporate* the user's in-flight changes rather
   than fighting them on disk.
-- **document-outline** — orientation in big files without reading them;
-  works in every mode via imenu.
-- **buffer-text** — takes `start-line`/`end-line` for paging, and
+- **document-outline** gives orientation in big files without reading
+  them; it works in every mode via imenu.
+- **buffer-text** takes `start-line`/`end-line` for paging, and
   `numbered: yes` for native-Read-style line-numbered output (use when
   the answer will feed line-addressed tools).
 
 ## Auto-open policy
 
 Tools that take a `file` resolve it to a buffer: existing buffer
-(reverted if stale and unmodified), else `find-file-noselect` — which
+(reverted if stale and unmodified), else `find-file-noselect`, which
 boots LSP via the normal mode hooks. Auto-open covers files in your
 session's own territory unconditionally (worktree checkouts included),
 plus files under a project that already has buffers in the session
 (`ch-mcp-server-auto-open-scope`, default `session-projects`;
 `any-project` opens anything readable).
 
-To deliberately open a file — including booting a project's eglot
-server by touching its first file — invoke any file-taking tool on it
+To deliberately open a file (including booting a project's eglot
+server by touching its first file), invoke any file-taking tool on it
 (`document-outline` is the cheap one); opening happens windowless as a
 side effect, within the same scope. Prefer files actually relevant to
 the task so the session doesn't accumulate noise.
@@ -82,14 +83,14 @@ Before asking the user a non-trivial question, write the full context
 (options, tradeoffs, evidence) into a `present` buffer, then ask with
 terse labels referencing it. Also for "here's what I found, organized".
 
-- `mode: markdown` (default) for prose — `markdown-ts-mode` with
+- `mode: markdown` (default) for prose, `markdown-ts-mode` with
   `visual-line-mode`, so write paragraphs as long lines and let the
   window soft-wrap them; `diff` for proposed changes;
-  `locations` for evidence lists — `path:line:col: text` lines become
-  clickable jumps; `mermaid` for diagrams — content is mermaid source,
-  rendered to an SVG image in the buffer. Use it wherever you'd have
+  `locations` for evidence lists, whose `path:line:col: text` lines
+  become clickable jumps; `mermaid` for diagrams, whose content is
+  mermaid source, rendered to an SVG image in the buffer. Use it wherever you'd have
   drafted a mermaid block into plan text: architecture, sequences,
-  DAGs. Render errors return mmdc's own message — fix the source and
+  DAGs. Render errors return the message of mmdc; fix the source and
   re-present under the same name.
 - Buffers are named `*agent/<name>*`; reusing a name rewrites the
   buffer (fine for iterating on the same artifact). The overwritten
@@ -103,7 +104,7 @@ terse labels referencing it. Also for "here's what I found, organized".
 `sidebar (name, content)` shows markdown in a right-hand side window
 (20% of the frame) that the user dismisses with `q`, which also kills
 the buffer. Use it for anticipated questions with answers, a glossary,
-a checklist — things read once alongside the reply. Use `present` for
+a checklist: things read once alongside the reply. Use `present` for
 artifacts the user keeps. Write paragraphs as single long lines; the
 window soft-wraps. Buffers are `*agent/sidebar/<name>*`; reusing a
 name rewrites the sidebar. A sidebar the user dismisses with `q` is
@@ -150,9 +151,9 @@ verbs, split so restricted dispatch profiles can withhold disk writing
 by tool name (workspace `consent-gate.md`): **edit-file** takes a
 `file` (auto-open rules apply), edits its buffer, and always saves;
 **edit-buffer** takes a `buffer` name (any live buffer, including
-`*agent/…*` co-editing buffers) and never writes disk — a file-visiting
+`*agent/…*` co-editing buffers) and never writes disk: a file-visiting
 buffer is left modified as a staged edit for the user to review and
-save. Both return a unified diff — read it; that is the verification
+save. Both return a unified diff. Read it; that is the verification
 step.
 
 - The uniqueness rule is also the concurrency story: when the user is
@@ -167,7 +168,7 @@ step.
 ## transform: the editing engine
 
 Trigger: **3+ similar edits in one file, or a structural edit** (sexp
-wrap/raise/splice, computed replacements, reindentation) — one short
+wrap/raise/splice, computed replacements, reindentation): a short
 form instead of N native edits. Not for one or two ordinary edits;
 native edit tools stay the default.
 
@@ -193,8 +194,8 @@ native edit tools stay the default.
 - Saves to disk by default (`save: no` to stage in-buffer only).
 - Point is wherever the last form left it in the copy: begin with
   `(goto-char (point-min))`.
-- **After a transform, re-read the file before further native edits** —
-  the harness requires re-reading files changed outside its own tools.
+- **After a transform, re-read the file before further native edits**:
+  the harness requires re-reading files changed outside its tools.
 
 Recipes:
 
@@ -282,8 +283,8 @@ verbs and transform.
 
 Review-style comment threads anchored to buffer text, shared with the
 user (design: `docs/development/emacs-collab-comments.md` in
-ch-emacs-config). Use them to say something *about* a passage — a
-question, a concern, a suggestion — without editing it; during
+ch-emacs-config). Use them to say something *about* a passage (a
+question, a concern, a suggestion) without editing it; during
 co-editing or review sessions this replaces describing locations in
 chat prose.
 
@@ -291,13 +292,13 @@ chat prose.
   literal string matched under the edit contract (exactly once in the
   `file` or `buffer`, ambiguity errors with the count). With `thread`
   (an id) it appends a reply instead. Your author name is always
-  `claude`. Comments never modify the text — they live in overlays the
+  `claude`. Comments never modify the text; they live in overlays the
   user sees highlighted with a count badge.
 - **list-comments** (read-only) shows every thread with ids, positions,
-  anchor excerpts, and bodies — buffer-filtered or global. Read it to
+  anchor excerpts, and bodies, buffer-filtered or global. Read it to
   find the user's comments and the thread ids to reply to; check it at
   the start of a review turn the way you'd check modified-buffers
   before editing.
 - Threads are session-scoped (they die with the buffer) and the user
   can dismiss or hide them at will; don't treat a vanished thread as an
-  error — re-anchor or start a new one.
+  error; re-anchor or start a new thread.

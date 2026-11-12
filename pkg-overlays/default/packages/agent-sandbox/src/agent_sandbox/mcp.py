@@ -82,7 +82,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "list-modules",
         "description": (
-            "List the sandbox modules declared on this machine, each with its description, "
+            "List the sandbox modules declared in the home-manager configuration of this user, each with its description, "
             "the modules it requires, and its status in this session's checkout: enabled "
             "(chosen, base, or required by another module), declined by the user, or available."
         ),

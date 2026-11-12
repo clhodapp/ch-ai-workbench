@@ -150,9 +150,9 @@ in
       type = lib.types.package;
       example = lib.literalExpression "llm-agents.packages.\${system}.codex";
       description = ''
-        The Codex package this machine runs. It has no default: only the
-        configuration that installs Codex knows which build that machine
-        runs.
+        The Codex package this home-manager configuration runs. It has
+        no default: only the configuration that installs Codex knows
+        which build it runs.
       '';
     };
 

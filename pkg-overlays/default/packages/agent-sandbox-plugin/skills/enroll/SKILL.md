@@ -4,7 +4,8 @@ description: Enroll this checkout into agent-sandbox modules (nix-declared tools
 
 # agent-sandbox ceremony
 
-This machine declares agent-sandbox *modules* in home-manager.
+The home-manager configuration of this user declares agent-sandbox
+*modules*.
 Each module says what one kind of tooling needs inside the sandbox: its
 executables, domains, unix sockets and writable paths. A checkout opts
 into the set of modules its work needs by *enrollment*, which composes

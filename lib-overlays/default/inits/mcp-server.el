@@ -84,7 +84,7 @@ buffer are always in scope.")
   "Which files the MCP write verbs may touch.
 `client-project' (the default) confines `edit-file', `transform', and
 `edit-buffer' on file-visiting buffers to the calling client's
-territory — the project containing the client session's launch
+territory: the project containing the client session's launch
 directory (see `ch-mcp-server--client-territory').
 `unrestricted' disables the check.  Set by the resident user only;
 gated elisp cannot reach it.")
@@ -178,8 +178,8 @@ hung server from freezing both Emacs and the MCP bridge.")
 (defun ch-mcp-server--client-territory ()
   "Territory root of the calling MCP client, as a truename directory.
 Each request reaches Emacs through emacsclient, which binds
-`default-directory' to the stdio bridge process's working directory —
-the directory the client session was launched from.  The territory is
+`default-directory' to the stdio bridge process's working directory,
+which is the directory the client session was launched from.  The territory is
 that directory's project root (project.el), or the directory itself
 outside any project.  Containment under this single root is the whole
 check, so a workspace client reaches its submodule checkouts and
@@ -774,7 +774,7 @@ symbol describing why there are no results (e.g. `no-checker')."
     (pcase status
       ('checked (or body "No diagnostics (check finished)"))
       ('pending (concat (or body "No diagnostics yet")
-                        "\n(check pending or running — not yet checked; retry shortly)"))
+                        "\n(check pending or running: not yet checked; retry shortly)"))
       ('no-checker (format "No checker enabled in the buffer visiting %s" file))
       (other (concat (or body "No diagnostics")
                      (format "\n(checker status: %s)" other))))))
@@ -1430,8 +1430,8 @@ source from the tool error alone."
          (in (make-temp-file "mcp-mermaid" nil ".mmd" source))
          (out (make-temp-file "mcp-mermaid" nil ".svg"))
          ;; Mermaid's default HTML labels come out as SVG <foreignObject>
-         ;; elements, which librsvg (Emacs's SVG renderer) silently drops —
-         ;; a diagram with invisible labels. htmlLabels=false makes it emit
+         ;; elements, which librsvg (Emacs's SVG renderer) silently drops,
+         ;; leaving a diagram with invisible labels. htmlLabels=false makes it emit
          ;; native <text> instead (both keys needed: top-level covers edge
          ;; labels, flowchart covers node labels).
          (config (make-temp-file
@@ -1608,7 +1608,7 @@ disposes of it; re-running the tool under the same name recreates it."
   "Show CONTENT beside the user's work in a right-hand sidebar window.
 
 A sidebar is for material the user reads once alongside the main
-reply — anticipated questions with answers, a glossary, a checklist —
+reply (anticipated questions with answers, a glossary, a checklist),
 not for an artifact they will keep open (use `present' for that).  The
 buffer *agent/sidebar/NAME* holds CONTENT as soft-wrapped, read-only
 markdown and is shown in a side window on the frame's right edge at
@@ -1782,7 +1782,7 @@ unchanged text allows."
   "Replace OLD-STRING with NEW-STRING in the current buffer; diff back.
 The engine shared by the edit verbs: OLD-STRING is matched literally
 \(no regex), must be found, and must be unique unless REPLACE-ALL (a
-boolean) — a non-unique match is an error naming the count, so an
+boolean).  A non-unique match is an error naming the count, so an
 anchor gone stale under concurrent editing fails loudly instead of
 editing the wrong occurrence.  An empty OLD-STRING inserts into an
 empty buffer only.  Returns a unified diff labeled with LABEL."
@@ -1831,14 +1831,14 @@ empty buffer only.  Returns a unified diff labeled with LABEL."
   "Replace OLD-STRING with NEW-STRING in live BUFFER, exactly once by default.
 
 The buffer-target editing verb: buffer mutation only, never a disk
-write — the disk half lives in `ch-mcp-server--edit-file', a
+write.  The disk half lives in `ch-mcp-server--edit-file', a
 separate tool name so restricted dispatch profiles can withhold disk
 writing structurally (consent-gate.md).  The contract mirrors the
 agent's native Edit tool so its editing instincts transfer (see
 `ch-mcp-server--replace-literal'), and the unified diff returned
 is the verification step.  Non-file buffers (e.g. *agent/...*
 collaboration buffers) are edited in place; a file-visiting buffer is
-left modified — a staged edit the user reviews and saves.  Unsaved
+left modified, as a staged edit the user reviews and saves.  Unsaved
 user modifications are therefore workable state here, not an error:
 the change stays in the buffer under the user's eyes, and the
 uniqueness rule is the drift guard against their concurrent editing.
@@ -1875,7 +1875,7 @@ MCP Parameters:
 (defun ch-mcp-server--edit-file (old-string new-string file &optional replace-all)
   "Replace OLD-STRING with NEW-STRING in FILE and save, exactly once by default.
 
-The file-target editing verb — the one that writes disk, a separate
+The file-target editing verb, which writes disk: a separate
 tool name from `ch-mcp-server--edit-buffer' so restricted
 dispatch profiles can withhold disk writing structurally
 \(consent-gate.md).  Same native-Edit contract (see
@@ -1883,7 +1883,7 @@ dispatch profiles can withhold disk writing structurally
 FILE must lie in the calling client's territory
 \(`ch-mcp-server--check-file-write').
 Edits the file's buffer (opening it within the auto-open scope) and
-always saves — staging an unsaved change is edit-buffer's job.  A
+always saves; staging an unsaved change is edit-buffer's job.  A
 buffer holding unsaved user modifications is refused: writing disk
 over newer buffer state escalates to the resident side instead (see
 buffer-diff; or stage the change with edit-buffer).  An empty
@@ -1911,14 +1911,14 @@ MCP Parameters:
 (defun ch-mcp-server--add-comment (text &optional file buffer anchor thread)
   "Comment on buffer text as the agent: start a thread or reply to one.
 
-Comments are overlays — never text writes — so the territory write
+Comments are overlays, never text writes, so the territory write
 filter does not apply here.  Two modes.  With ANCHOR, a new thread is
 attached to the anchor text
 inside FILE or BUFFER (exactly one of them); the anchor is matched
 literally and must occur exactly once, as in the edit tool.  With
 THREAD, the comment is appended to that existing thread (ids come from
-list-comments or a previous add-comment).  Comments live in overlays —
-the text itself is never modified — and the user sees a highlight, a
+list-comments or a previous add-comment).  Comments live in overlays
+(the text itself is never modified), and the user sees a highlight, a
 comment-count badge, and the thread on hover or in the thread view.
 
 MCP Parameters:

@@ -133,8 +133,8 @@ refused by default."
         (should (buffer-live-p (ch-mcp-server--file-buffer file)))))))
 
 (ert-deftest ch-mcp-tools-auto-open-client-territory ()
-  "Files under the client's own territory auto-open without any session
-buffer in their project — the agent-worktree case."
+  "Files under the territory of the client auto-open without any session
+buffer in their project, as in the agent-worktree case."
   (let ((file (ch-mcp-tests--temp-file "hello\n")))
     (ch-mcp-tests--in-territory
       (should (buffer-live-p (ch-mcp-server--file-buffer file))))))
@@ -305,7 +305,7 @@ raw SVG text otherwise (the batch case)."
 (ert-deftest ch-mcp-tools-mermaid-labels-are-librsvg-legible ()
   "Rendered SVGs must carry labels as native <text>, never <foreignObject>.
 librsvg (Emacs's SVG renderer) silently drops foreignObject, producing a
-diagram whose every label is invisible — found live on first use."
+diagram whose every label is invisible; this was found live on first use."
   (skip-unless (executable-find "mmdc"))
   (let ((svg (ch-mcp-server--render-mermaid
               "graph LR\n a -->|edge label| b[node label]")))

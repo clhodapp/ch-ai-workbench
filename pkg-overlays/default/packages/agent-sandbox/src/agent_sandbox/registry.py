@@ -53,7 +53,7 @@ def load_registry() -> dict[str, Any]:
         raise MaskedStore(f"registry {path} is not readable from inside a masked-store sandbox")
     if not path.exists():
         raise ToolError(
-            f"no registry at {path} — is the agent-sandbox home-manager "
+            f"no registry at {path}: is the agent-sandbox home-manager "
             "module enabled and switched?"
         )
     return read_json(path)

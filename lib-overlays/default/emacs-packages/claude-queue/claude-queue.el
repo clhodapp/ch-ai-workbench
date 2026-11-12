@@ -1653,7 +1653,7 @@ reported, which is where the session is."
   "Whether BUFFER can follow a claude session's working directory.
 Queue conversation buffers always can; otherwise any terminal buffer
 with a live process is a candidate (whether a claude session actually
-runs beneath it is decided at sync time)."
+runs inside it is decided at sync time)."
   (with-current-buffer buffer
     (or claude-queue--buffer-agent
         (and (derived-mode-p 'ghostel-mode 'term-mode)
@@ -2195,7 +2195,7 @@ buffer is rooted at the agent's live working directory (followed
 under `claude-queue-follow-mode').  With SESSION the buffer is
 declared as a view of that Claude session: collab-comments threads on
 it persist under the document key claude-session:SESSION, and are
-restored here after each erase-and-reinsert — the render replaces the
+restored here after each erase-and-reinsert.  The render replaces the
 buffer text wholesale, so the store, not the collapsed overlays, is
 what carries them across."
   (with-current-buffer (get-buffer-create (format "*claude-queue: %s*" name))

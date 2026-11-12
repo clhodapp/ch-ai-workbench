@@ -37,7 +37,7 @@ under the lines they name, questions asked from a line continue the
 same review, and `!` turns the verdict into an action: merge or approve
 what is safe, send fixes or follow-ups back to the conversation that
 opened the pull request, or start a new one. The `pr-origin` hook
-records which session created which pull request, on this machine
+records which session created which pull request, on this computer
 only, so that conversation can be found.
 
 **Review threads.** `collab-comments` holds comment threads on shared

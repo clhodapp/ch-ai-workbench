@@ -197,7 +197,7 @@ that checkout's `settings.local.json` governs the session's sandbox.
 | `declined-modules` | The user's recorded refusals for this checkout, or whether one module is declined |
 | `request-module` | Prompt the user to enable a module, with the agent's reason and the module's grants |
 
-`request-module` changes nothing on its own. It reports an enabled
+`request-module` changes nothing by itself. It reports an enabled
 module as enabled and a declined module as declined without prompting,
 and refuses in a checkout that is not enrolled with modules, because
 enrolling is the user's act. Otherwise it prompts the user and waits:
@@ -463,7 +463,7 @@ access away with systemd `[Service]` settings.
 
 Here the sandbox keeps the session bus from Claude Code, and a checkout
 that chooses `desktop` can still post notifications. The program can
-reach the bus socket under `$XDG_RUNTIME_DIR`, but it cannot see home,
+reach the bus socket under `$XDG_RUNTIME_DIR`, but it cannot see the home directory,
 cannot write the system, and has no network.
 
 Each declaration becomes two systemd user units. The socket unit

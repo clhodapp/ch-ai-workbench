@@ -3,7 +3,7 @@
 # request later reads the record to find the conversation the work
 # came from, so follow-ups and fixes can go back to it; nothing in
 # git or on GitHub may carry that link, so the record stays on this
-# machine.
+# computer.
 #
 # Creating commands are gh pr create and gh-stack (in any wrapper,
 # such as nix shell ... -c gh-stack): every pull request link in such

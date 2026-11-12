@@ -11,13 +11,13 @@ parse defensively. Consumer today: the `claude-queue` Emacs package
 
 - `claude --bg --model <m> --name <n> [flags] <prompt>` works with no
   TTY, returns immediately, and prints a banner whose first line is
-  `backgrounded · <id> · <name>`. The id is ANSI-colored — strip SGR
+  `backgrounded · <id> · <name>`. The id is ANSI-colored, so strip SGR
   sequences before parsing. `<id>` is the first 8 hex digits of the
   session UUID.
 - `claude agents --json [--all] [--cwd <path>]` is the only JSON
   enumeration the CLI provides.
   Fields: `id`, `sessionId`, `name`, `cwd`, `pid`, `startedAt`,
-  `state` (`working` / `blocked` / `done` / `stopped` / `failed` —
+  `state` (`working` / `blocked` / `done` / `stopped` / `failed`;
   `blocked` means a pending permission or question), `status`
   (`busy` / `idle`). `--all` is the full history, including sessions
   retired from the active list (sometimes prematurely); in it, exactly
@@ -31,19 +31,19 @@ parse defensively. Consumer today: the `claude-queue` Emacs package
   worker's), while a *resumed* chat runs **inside the TUI process
   itself** (`kind: "interactive"` in its session record; the process
   chdirs on `/cd`, so its /proc cwd is live truth). Rows in the
-  listing still all say `kind: background`. Timing gap: a session —
-  resumed ones especially — registers only when it takes its **first
+  listing still all say `kind: background`. Timing gap: a session
+  (a resumed session especially) registers only when it takes its **first
   message**; between opening a conversation and messaging it, the
   session appears in neither the listing nor the session records, and
   its terminal reflects only the launch directory.
 - `cwd` is **live**, not the launch directory (verified 2026-07-30 by
   entering and leaving a worktree mid-session): it moves with the
-  session — worktree entry/exit, `/cd` — and the CLI implements the
+  session (worktree entry/exit, `/cd`), and the CLI implements the
   move as a real `chdir` of the session process, so
   `/proc/<pid>/cwd` reads the same truth without invoking the CLI.
   Caveat on whose `/proc` to read (2.1.220): read the *hosting*
-  process. A fresh-started chat lives in a daemon worker — the
-  worker's cwd is the truth, and the TUI's own cwd stops meaning
+  process. A fresh-started chat lives in a daemon worker. The
+  worker's cwd is the truth, and the cwd of the TUI stops meaning
   anything once its terminal views another conversation. A resumed
   chat lives in the TUI process itself, whose cwd then IS the
   session's and follows its `/cd`s. Process shapes for tree-walking: an
@@ -54,29 +54,29 @@ parse defensively. Consumer today: the `claude-queue` Emacs package
   follow. The nix wrapper leaves `.claude-wrapped` as argv[0]'s
   basename. Session processes can be **respawned mid-session**
   (observed 2026-07-31: a session's pid changed while it kept
-  running), so a cached pid can go stale while the session lives on —
-  fall back to the listing rather than assuming pid stability.
+  running), so a cached pid can go stale while the session lives on.
+  Fall back to the listing rather than assuming pid stability.
 - Which conversation a terminal is *currently viewing* is not
   observable from the process tree: attach views are multiplexed over
   the daemon's `control.sock` (per-session `rv/<id>.sock` view sockets
   exist, but their peers are all the daemon), and no hook event fires
   on attach or agent-browser navigation (checked against the hooks
-  reference 2026-07-31 — the docs are silent on attach; a `CwdChanged`
+  reference 2026-07-31: the docs are silent on attach; a `CwdChanged`
   hook *does* exist for the session-side directory signal; the emacs
   home-manager module ships `emacs-claude-cwd-hook` for it, which
   projects register in their `.claude/settings.json` to push
   directory moves into claude-queue without waiting on a poll).
   `CwdChanged` scope, probe-verified 2026-07-31 against 2.1.195: it
   fires on a persisted shell `cd` (payload `cwd` = the new
-  directory) but **not** on worktree entry or exit — the worktree
+  directory) but **not** on worktree entry or exit. The worktree
   tools chdir the session without emitting it, despite the docs'
-  "fires on every directory change" (upstream gap worth reporting —
-  and precisely: the daemon's own bookkeeping *does* track the move,
+  "fires on every directory change" (upstream gap worth reporting,
+  and precisely: the bookkeeping of the daemon *does* track the move,
   its live session record's `cwd` updating in lockstep with
   `/proc/<pid>/cwd` through both entry and exit, probe-verified
   2026-08-08 against 2.1.220; only the hook emission is missing).
   The observation tap for worktree moves is `PostToolUse` matched on
-  `EnterWorktree|ExitWorktree` — probe-verified: both fire, and the
+  `EnterWorktree|ExitWorktree`, probe-verified: both fire, and the
   payload's common `cwd` field is the *post-move* directory (the
   worktree after entry, the original root after exit), so the same
   hook command serves both registrations unchanged.
@@ -89,11 +89,11 @@ parse defensively. Consumer today: the `claude-queue` Emacs package
   **terminal title**: the TUI titles its terminal `<glyph> <name>`
   with the *viewed* conversation's agents-listing `name`, verbatim,
   and retitles on agent-browser switches (verified live 2026-07-31).
-  An interactive session's own conversation never appears in the
-  listing, so its title matches nothing — process-tree cwd is the
+  The conversation of an interactive session never appears in the
+  listing, so its title matches nothing. Process-tree cwd is the
   fallback for exactly that case. The TUI's complete OSC vocabulary
   (grepped from the 2.1.195 bundle): `]0;` title, `]8;` hyperlinks,
-  `]52;` clipboard, `]104;` color reset — notably **no OSC 7**
+  `]52;` clipboard, `]104;` color reset, and notably **no OSC 7**
   working-directory reports, so terminals with native pwd tracking
   learn nothing from it.
 - `state` is classifier-derived from the agent's message text, not
@@ -103,9 +103,9 @@ parse defensively. Consumer today: the `claude-queue` Emacs package
   `state=working` + `status=idle` indefinitely (observed live
   2026-07-17: a finished task sat "working" 9+ minutes while
   same-shaped siblings whose prose read clearly as complete did flip
-  to `done` — the prose path works sometimes, the `result:` line is
-  the reliable one). So `working`+`idle` usually means "finished but
-  unconfirmed", NOT "waiting for input" — genuine questions and
+  to `done`; the prose path works sometimes, the `result:` line is
+  the reliable path). So `working`+`idle` usually means "finished but
+  unconfirmed", NOT "waiting for input"; genuine questions and
   permission stalls surface as `blocked`. Dispatch prompts should
   instruct agents to end with a `result:` line (claude-queue's
   standing conduct block does).
@@ -116,7 +116,7 @@ parse defensively. Consumer today: the `claude-queue` Emacs package
   must strip CSI sequences and trim to the JSON body before parsing.
 - `claude attach <id>` (TUI; run it in a terminal buffer) and
   `claude stop <id>` act on a session. `claude logs <id>` emits raw TUI
-  escape sequences — rendering, not data; read the transcript file
+  escape sequences (rendering, not data); read the transcript file
   instead (below).
 
 ### Permissions for unattended dispatch
@@ -127,7 +127,7 @@ view. For unattended tasks pass a `--permission-mode` (choices on
 2.1.241: `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
 `dontAsk`, `plan`; `acceptEdits` auto-approves file edits only,
 `auto` lets the CLI's classifier approve routine actions more
-broadly) — and note permission *modes* do not cover MCP tools: those
+broadly). Permission *modes* do not cover MCP tools: those
 need explicit `--allowedTools` entries. claude-queue dispatches in
 `auto` mode with the restricted correction profile (workspace
 `consent-gate.md`, Dispatch capability profiles), declared entirely
@@ -135,7 +135,7 @@ on the command line:
 
 - **Allowed** (`--allowedTools`): subagent spawning (`Agent`/`Task`,
   so a task can delegate to another model) and the emacs server's
-  tools — the read-only tools, the comment system, `present`,
+  tools: the read-only tools, the comment system, `present`,
   `edit-buffer`, and also `edit-file`, `transform`, and `eval-elisp`.
   The last three rely on the server's own filters
   (`emacs-mcp-agent-tools.md` § Security filters): writes are confined
@@ -167,8 +167,8 @@ on the command line:
   the reserved empty `none`, shell and network are dropped from the
   deny floor before rendering, so the session keeps them under the
   profile's OS-level confinement (closed toolset, filesystem,
-  network). Detection is the sidecar alone — absent, unreadable, or
-  malformed all read as unenrolled — and the root is the outermost git
+  network). Detection is the sidecar alone (absent, unreadable, or
+  malformed all read as unenrolled), and the root is the outermost git
   checkout (`claude-queue--root`), so a dispatch from a linked worktree
   under the primary checkout reads the primary's sidecar. Approval of
   the lifted calls is then the sandbox settings' business (the
@@ -178,12 +178,12 @@ on the command line:
   profile's domain rules do not reach them, and the permission mode
   alone gates their calls.
 
-`--allowedTools` is variadic — comma-join its value and keep a
+`--allowedTools` is variadic: comma-join its value and keep a
 non-variadic flag between it and the trailing positional prompt, or it
 swallows the prompt. `--disallowedTools` has the same variadic hazard
 (probed 2.1.220, 2026-08-09: it swallowed a trailing prompt), which is
-why the deny floor goes in `--settings` — non-variadic, accepts inline
-JSON — even though both were verified to unregister tools
+why the deny floor goes in `--settings` (non-variadic, accepts inline
+JSON), even though both were verified to unregister tools
 identically.
 
 `--add-dir` at dispatch **extends `acceptEdits` and the workdir
@@ -197,8 +197,8 @@ the consent-gate design (workspace `docs/development/consent-gate.md`
 settles its first open question on this probe). Two gotchas from the
 same probes: `--add-dir` is variadic like `--allowedTools` (same
 prompt-swallowing failure, same fix), and the `~/.claude/` sensitive
-guard denies writes even when the session's *own workdir* lies under
-it — a session launched from a directory inside `~/.claude/` (a
+guard denies writes even when the *workdir* of the session lies under
+it: a session launched from a directory inside `~/.claude/` (a
 background job's tmp dir, say) cannot write beside itself.
 
 ## Session store (the real enumeration API)
@@ -207,13 +207,13 @@ No CLI command enumerates every session (`agents --json` misses any
 session before its first message; see its coverage note above). The
 state files under `~/.claude/` are all plain JSON(L):
 
-- `~/.claude/history.jsonl` — global append-only prompt log: one record
+- `~/.claude/history.jsonl` is the global append-only prompt log, with a record
   per user prompt with `display`, `project`, `sessionId`, `timestamp`.
   Grouping by `sessionId` yields the full session catalog per project,
   interactive and background alike, titled by first prompt (which is
   roughly what the `/resume` picker shows).
-- `~/.claude/projects/<munged-cwd>/<sessionId>.jsonl` — the per-session
-  transcript: typed JSONL records (`user`, `assistant`, config records,
+- `~/.claude/projects/<munged-cwd>/<sessionId>.jsonl` is the per-session
+  transcript, of typed JSONL records (`user`, `assistant`, config records,
   attachments) carrying message content, `timestamp`, `cwd`,
   `gitBranch`, and CLI `version`. The directory name mungs the session's
   *starting* cwd: every character outside `[A-Za-z0-9-]` becomes `-`.
@@ -221,38 +221,38 @@ state files under `~/.claude/` are all plain JSON(L):
   transcript file; the move only creates a session-state *subdirectory*
   under the new cwd's munged project dir (verified 2026-07-30). So a
   transcript lookup keyed on a *live* cwd misses exactly while the
-  session is away from home — locate by session id when the derived
-  directory misses.
-- `~/.claude/sessions/<pid>.json` — one record per **live hosting
+  session is away from its starting cwd. Locate it by session id when
+  the derived directory misses.
+- `~/.claude/sessions/<pid>.json` holds a record per **live hosting
   process** (probed 2026-08-08/09, 2.1.220): `pid`, `sessionId`,
   `cwd`, `name`, `kind`, `jobId`, `status` (`busy`/`idle`),
   `startedAt`, `procStart`, `updatedAt`, `version`. The record's pid
-  is whatever hosts the session — a daemon worker for background
-  agents and fresh-started chats (the TUI viewing one has no record
-  of its own), the TUI process itself for resumed chats
+  is whatever hosts the session: a daemon worker for background
+  agents and fresh-started chats (the TUI viewing such a chat has no
+  record), the TUI process itself for resumed chats
   (`kind: "interactive"`). Created at first message, not at session
   open. Facts that shape consumption:
   - `cwd` is live and trustworthy: it tracked `EnterWorktree` and
     `ExitWorktree` in lockstep with `/proc/<pid>/cwd` under repeated
-    2s polling, never diverging — no CwdChanged-style blind spot.
+    2s polling, never diverging, so it has no CwdChanged-style blind spot.
   - `name` joins to the terminal title only for **worker-hosted**
     sessions. A resumed session's record carries a generated
     placeholder (observed: `tmp-94`, from the directory basename)
-    while its terminal titles the conversation's real name — the
+    while its terminal titles the conversation's real name, so the
     name join structurally fails there; join TUI-hosted sessions by
     pid through the process tree instead. Worker-hosted names start
     as a session-id fragment and become the summary name once the
     summarizer runs.
-  - Records **linger after death** — observed surviving plain
+  - Records **linger after death**: they were observed surviving plain
     SIGTERM, so crash vs. clean exit makes no difference. A record is
     a claim, not a fact: countersign it against the kernel before
-    use — `/proc/<pid>` must exist *and* its start time
+    use: `/proc/<pid>` must exist *and* its start time
     (`/proc/<pid>/stat` field 22) must equal `procStart`, which also
     defeats pid recycling. Stale records then fail toward a no-op,
     never toward a wrong answer.
 
   Consumer policy (claude-queue follow-mode implements it): one cwd
-  source per session, chosen by hosting — a countersigned record for
+  source per session, chosen by hosting: a countersigned record for
   worker-hosted sessions, `/proc/<pid>/cwd` via the process walk for
   TUI-hosted ones (same process the record names, so these never
   compete), and the `agents --json` listing only for sessions with
@@ -263,10 +263,10 @@ state files under `~/.claude/` are all plain JSON(L):
 
   **Probe hygiene:** a `claude` launched from inside another claude
   session inherits `CLAUDE_CODE_CHILD_SESSION` (plus `CLAUDECODE`,
-  `CLAUDE_CODE_SESSION_ID`, …) and behaves differently — transcript
-  saving off, no registration, no session record. Conclusions drawn
+  `CLAUDE_CODE_SESSION_ID`, …) and behaves differently: it saves no
+  transcript, does not register, and writes no session record. Conclusions drawn
   from such probes are wrong. Scrub the environment (`env -i` with
-  `HOME`/`PATH`/`XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` — the
+  `HOME`/`PATH`/`XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`, since the
   wrapper needs the user bus) before probing session lifecycle
   behavior.
 
@@ -276,7 +276,7 @@ follow-up), `--fork-session` to branch instead of continuing. Two
 resume behaviors verified in clean environments 2026-08-08/09
 (2.1.220): resuming continues the **same sessionId**, appending to
 the same transcript file. And lookup is **scoped to the
-conversation's current directory** — not its birth directory: after
+conversation's current directory**, not its birth directory: after
 a session `/cd`s away, `--resume <id>` finds it only from the new
 directory and answers "No conversation found with session ID"
 everywhere else, including the directory whose project store holds
@@ -289,12 +289,12 @@ the cross-project agent browser reaches registered sessions).
 `--output-format stream-json` (print mode; **requires `--verbose`**)
 emits JSONL on stdout as the session runs:
 
-- `system`/`init` — `session_id`, model, `permissionMode`, tools, MCP
+- `system`/`init`, with `session_id`, model, `permissionMode`, tools, MCP
   servers, skills.
 - `assistant` / `user` message records as turns progress (API-shaped;
   tool calls and results visible mid-flight). A one-shot plain-text
   answer may skip straight to `result`.
-- `result` per completed turn — final text, `total_cost_usd`, usage,
+- `result` per completed turn, with the final text, `total_cost_usd`, usage,
   `num_turns`, `stop_reason`, `permission_denials`.
 - Opt-ins: `--include-partial-messages` (token-level deltas),
   `--include-hook-events`; ambient events like `rate_limit_event` also
@@ -309,7 +309,7 @@ message back on stdout for sequencing.
 
 Print mode never prompts for permissions: an unapproved tool call is
 silently denied and surfaces only in `result.permission_denials`, so
-the permission posture must be preconfigured (see above) — with one
+the permission posture must be preconfigured (see above), with a
 programmable exception: PreToolUse hooks run and gate in print mode
 (next section), which is what makes an external permission UI
 possible at all.
@@ -317,8 +317,8 @@ possible at all.
 **Choosing a backend:** `--bg` gives fire-and-forget, agent-view
 integration, and the background-job harness for free; stream-json gives
 a foreground, owned session with turn-level fidelity (live rendering,
-per-turn cost) at the price of owning UI, lifecycle, and permissions —
-what a native embedded-session frontend would build on, should we
+per-turn cost) at the price of owning UI, lifecycle, and permissions:
+it is what a native embedded-session frontend would build on, should we
 build one.
 
 ## Hooks as the headless permission surface
@@ -344,7 +344,7 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
 - **PreToolUse hooks fire and gate inside `-p` stream-json sessions.**
   The stdin payload carries `tool_name`, the full `tool_input`,
   `tool_use_id`, `session_id`, `transcript_path`, `cwd`, and
-  `permission_mode` — enough to render a real consent prompt
+  `permission_mode`, enough to render a real consent prompt
   elsewhere. A `permissionDecision: deny` prevents execution; the
   reason string comes back to the model verbatim as the tool result
   and the call is listed in `result.permission_denials`.
@@ -352,21 +352,21 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   records in-band.
 - **Layering.** A hook that exits 0 with no output *abstains*: the
   file-based engine (modes, rules, workdir sandbox) decides as if the
-  hook weren't registered. An explicit decision preempts that flow —
+  hook weren't registered. An explicit decision preempts that flow:
   a hook `allow` runs a call that headless defaults would deny, with
   no allowlist entry anywhere. Multiple entries on one matcher all
   fire and the most restrictive decision wins (deny beat allow), but
-  a *lone unopposed* `allow` bypasses the rules engine — hooks must
+  a *lone unopposed* `allow` bypasses the rules engine, so hooks must
   abstain unless they have something to say.
 - **`permissions.deny` unregisters the tool.** A denied tool is
   absent from the session's toolset: no hook fires, and the model's
-  tool search finds nothing to call. This is the hard floor — nothing
-  a buggy hook-allow can reopen. Note it is tool-granular: denying
+  tool search finds nothing to call. This is the hard floor, which no
+  buggy hook-allow can reopen. Note it is tool-granular: denying
   `Bash` also removes the sandboxed read-only commands the default
   posture would have auto-run.
 - **The deny floor is reachable per-dispatch, MCP names included**
   (probed 2.1.220, 2026-08-09, via the stream-json `init` event's
-  `tools` array — structural evidence, not model self-report):
+  `tools` array, which is structural evidence, not model self-report):
   `--settings '{"permissions":{"deny":["Bash","WebFetch","WebSearch",
   "mcp__emacs__edit"]}}'` removed exactly those four from the toolset
   while undenied siblings on the same MCP server stayed registered, so
@@ -385,11 +385,11 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   project-local `.claude/settings.json` is denied even under
   `acceptEdits` (Bash indirection unprobed).
 - **Timeouts.** The per-hook `timeout` field (default 60s) works and
-  raises cleanly — a hook that slept 70s under `timeout: 120` still
+  raises cleanly: a hook that slept 70s under `timeout: 120` still
   had its decision honored, so long human-in-the-loop waits are fine.
   A hook that outlives its timeout is `cancelled` (visible in the
-  `hook_response` event) and contributes **no decision** — fallthrough,
-  which is *fail-open* wherever native rules allow the call. Policy
+  `hook_response` event) and contributes **no decision**. That is a
+  fallthrough, which is *fail-open* wherever native rules allow the call. Policy
   deadlines therefore live inside the hook (self-answer with an
   actionable deny before dying); the declared timeout is only a
   liveness backstop against a hung hook.
@@ -401,9 +401,9 @@ ask` (design: workspace `consent-gate.md` § Prompt API).
   permission prompts (a command outside the sandbox, say) into the
   consent spool; whether it fires in headless sessions is unverified.
 - **Consumer note:** a session blocked in a synchronous PreToolUse
-  hook reports `state=working` / `status=busy`, never `blocked` — the
-  CLI cannot see that the hook is waiting on a human. Any external
-  consent UI must track its own pending requests and join them to
+  hook reports `state=working` / `status=busy`, never `blocked`, since
+  the CLI cannot see that the hook is waiting on a human. Any external
+  consent UI must track its pending requests and join them to
   sessions by `session_id`.
 - **A deny is a retry prompt.** Because the deny reason returns to
   the model as the tool result, a PreToolUse hook can act as a
@@ -613,7 +613,7 @@ output-style rule that needs judgment (seeded from
   sentence) to packed. qev answers a score with a probability per level
   and their expected level index; the client reports that index, the
   most likely level, and its probability. The context hook lists it
-  with the style's aim. A score never pushes back on its own.
+  with the style's aim. A score alone never pushes back.
 - **Checks of the final message.** Three checks look at the final
   message beside the session. A deterministic step finds candidates,
   and the judge, where it takes part, answers about one candidate at a
@@ -675,7 +675,7 @@ output-style rule that needs judgment (seeded from
   whole write, the judge gives a single sentence that argues with
   ghosts a middling probability, so a long write with one such sentence
   passes. `claude-ghost-check` (`ghosts.py`) therefore asks about each
-  candidate sentence on its own. A sentence is a candidate when it
+  candidate sentence separately. A sentence is a candidate when it
   narrates a correction or the history of the text ("I had", "was
   wrong", "the user's correction"), or when it states an absence, a
   negation, or a non-change and shares a word with the user's latest
@@ -800,8 +800,8 @@ system prompt while the style is selected. Probed 2026-08-23 against
 
 - Discovery is by directory: `~/.claude/output-styles/*.md` (personal)
   and `.claude/output-styles/*.md` (project, nearest wins), read on
-  session start. A store symlink in place of the file is followed —
-  the home-manager module installs styles that way
+  session start. A store symlink in place of the file is followed,
+  and the home-manager module installs styles that way
   (`ch-ai-workbench.claude-code.outputStyles`).
 - **The selection key is the frontmatter `name` when present,
   otherwise the file name without `.md`.** With `name: Probe Display`
@@ -810,7 +810,7 @@ system prompt while the style is selected. Probed 2026-08-23 against
   `name` field, `"probe-file"` activated it. **The `/config` picker
   lists every file under `output-styles/`, one row per file**, so
   installing two files for one style (tried 2026-08-24, reverted)
-  produces two picker rows, not an alias — there is no way to give a
+  produces two picker rows, not an alias. There is no way to give a
   style two selectable keys without two visible rows.
   `ch-ai-workbench.claude-code.outputStyles.<attr>.displayName` sets
   the frontmatter `name` field on the style's one file: it becomes
@@ -826,8 +826,8 @@ system prompt while the style is selected. Probed 2026-08-23 against
   the style activated, so a generator can emit descriptions as JSON
   strings without escaping rules of its own.
 - What `keep-coding-instructions` gates (read out of the 2.1.241
-  binary's prompt assembly): exactly one section, `# Doing tasks` —
-  the software-engineering framing (interpret vague asks as code
+  binary's prompt assembly): exactly the section `# Doing tasks`,
+  which holds the software-engineering framing (interpret vague asks as code
   tasks, 2–3 sentence answers to exploratory questions, prefer editing
   to creating files, OWASP hygiene, no scope creep or speculative
   abstractions, no defensive code for impossible cases, comments only
@@ -841,7 +841,7 @@ system prompt while the style is selected. Probed 2026-08-23 against
   `--settings` JSON) or the `/output-style` command, which writes the
   project-local settings file. The built-in names (`default`,
   `explanatory`, `learning`, and the newer `concise`, `proactive`) are
-  not files, so a custom file cannot shadow one by accident — nor be
-  found under those names.
+  not files, so a custom file cannot shadow a built-in style by
+  accident, nor be found under those names.
 - A `--settings` inline JSON on the command line is enough to pin a
   style for a single `-p` run; nothing is written.

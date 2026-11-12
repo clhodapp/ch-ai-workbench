@@ -26,16 +26,16 @@
  * to make that allowlist real on Linux: upstream's seccomp filter is all-or-nothing,
  * so the fragment opens it (allowAllUnixSockets) and this layer narrows
  * connect() back to the declared sockets. That is a genuine reach
- * barrier — it bounds which host services sandboxed code can talk to,
+ * barrier: it bounds which host services sandboxed code can talk to,
  * and a copy of a file cannot defeat it. (Execve confinement was tried
  * and removed: it could not be a real boundary while the checkout and
- * scratch dirs are both writable and executable — an agent copies a
- * readable file in and runs it — and no_new_privs already neutralizes
+ * scratch dirs are both writable and executable (an agent copies a
+ * readable file in and runs it), and no_new_privs already neutralizes
  * setuid. The real barriers are network isolation, read-confinement,
  * and write-confinement.)
  *
- * Every restriction here is strictly narrowing — it can deny, never
- * grant — and each is gated on the kernel's Landlock ABI so an older
+ * Every restriction here is strictly narrowing (it can deny, never
+ * grant), and each is gated on the kernel's Landlock ABI so an older
  * kernel degrades to exactly what the upstream sandbox already enforces
  * instead of breaking commands (Ubuntu 24.04 HWE kernels, for instance,
  * have the abstract scope but not RESOLVE_UNIX).

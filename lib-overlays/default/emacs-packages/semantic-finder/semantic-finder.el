@@ -219,7 +219,7 @@ MODEL defaults to the base model."
 
 (defun semantic-finder-clip (text)
   "TEXT clipped to `semantic-finder-max-chars'.
-Oversize text contributes its head third and tail two-thirds — the
+Oversize text contributes its head third and tail two-thirds: the
 tail is where recent activity lives, the head is where a document
 declares what it is."
   (let ((max semantic-finder-max-chars))
@@ -455,7 +455,7 @@ Signals `user-error' when the server is unreachable or errors."
 (defun semantic-finder--embed-async (buffer model)
   "Embed BUFFER with MODEL in the background and memoize the result.
 Errors back the indexer off instead of escaping to the timer, where
-they would be messaged — with the buffer text — on every drip."
+they would be messaged, with the buffer text, on every drip."
   (condition-case nil
       (let ((tick (buffer-chars-modified-tick buffer))
             (token (list (current-time)))
@@ -545,8 +545,8 @@ completion re-arms a short one-shot while the user stays idle."
 ;;;###autoload
 (define-minor-mode semantic-finder-index-mode
   "Keep a background embedding index of buffer contents warm.
-The finder commands work without it — never-indexed buffers are
-embedded on demand — but with it, ranking needs no synchronous sweep."
+The finder commands work without it (never-indexed buffers are
+embedded on demand), but with it, ranking needs no synchronous sweep."
   :global t
   (if semantic-finder-index-mode
       (setq semantic-finder--scan-timer
@@ -710,7 +710,7 @@ over the memo table's embeddings under that model."
 ;;; Selection UI
 
 (defun semantic-finder--read (prompt candidates category)
-  "Choose from CANDIDATES — ((NAME PAYLOAD . SCORE) …) in rank order.
+  "Choose from CANDIDATES, ((NAME PAYLOAD . SCORE) …) in rank order.
 Identity sorters keep that order; the score annotates each line.
 Return the chosen PAYLOAD."
   (unless candidates
@@ -776,7 +776,7 @@ Return the chosen PAYLOAD."
 ;;;###autoload
 (defun find-buffer-by-description (description &optional refresh)
   "Switch to the buffer whose content best matches DESCRIPTION.
-Ranking uses whatever the index holds (stale is fine — it still says
+Ranking uses whatever the index holds (stale is fine, since it still says
 what was happening there); never-indexed buffers are embedded first in
 one batch.  With a prefix argument REFRESH, re-embed every stale
 buffer before ranking."

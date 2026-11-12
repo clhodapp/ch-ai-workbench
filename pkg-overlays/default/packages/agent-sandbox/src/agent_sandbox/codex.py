@@ -108,7 +108,7 @@ def apply_project_config(root: Path, config: dict[str, Any], base: dict[str, Any
     """Persist only enrollment, never a launch's environment or helper paths."""
     merger = base.get("configMerger")
     if not merger:
-        raise ToolError("the sandbox registry needs configMerger; activate the updated home configuration")
+        raise ToolError("the sandbox registry needs configMerger; activate the updated home-manager configuration")
     if config:
         # Native missing-file guards need their parent directory to exist.
         # Inherited worktrees have no Claude settings file of their own.

@@ -208,7 +208,7 @@
             # given kinds of ch-microvm and the given kinds for agents.
             # The microvm module imports the home-manager module of
             # ch-microvm, which declares `ch-microvm.kinds`.
-            microvmHomeFor =
+            microvmConfigurationFor =
               agent: instanceKinds: agentKinds:
               (inputs.home-manager.lib.homeManagerConfiguration {
                 inherit pkgs;
@@ -268,16 +268,17 @@
               };
               quiet.agents = true;
             };
-            microvmHome = microvmHomeFor "claude-code";
-            microvmCodexHome = microvmHomeFor "codex" microvmInstanceKinds microvmAgentKinds;
-            microvmFullHome = microvmHome microvmInstanceKinds microvmAgentKinds;
-            microvmHiddenHome = microvmHome microvmInstanceKinds { };
-            microvmBareHome = microvmHome { } { };
-            # Whether a home fails an assertion of the module.
-            # home-manager refuses to evaluate a home whose assertions
-            # fail.
+            microvmConfiguration = microvmConfigurationFor "claude-code";
+            microvmCodexConfiguration = microvmConfigurationFor "codex" microvmInstanceKinds microvmAgentKinds;
+            microvmFullConfiguration = microvmConfiguration microvmInstanceKinds microvmAgentKinds;
+            microvmHiddenConfiguration = microvmConfiguration microvmInstanceKinds { };
+            microvmBareConfiguration = microvmConfiguration { } { };
+            # Whether a home-manager configuration fails an assertion of
+            # the module. home-manager refuses to evaluate a
+            # configuration whose assertions fail.
             microvmRefused =
-              agentKinds: !(builtins.tryEval (microvmHome microvmInstanceKinds agentKinds).home.packages).success;
+              agentKinds:
+              !(builtins.tryEval (microvmConfiguration microvmInstanceKinds agentKinds).home.packages).success;
 
             # A home of `tester` whose judge has one endpoint, the stub
             # System One server the tic-check check starts on a fixed
@@ -321,9 +322,9 @@
               claude-consent = claudeConsent;
             };
 
-            # A home of `tester` with every module of this layer and the
-            # editor's Emacs module.
-            workbenchHome = inputs.home-manager.lib.homeManagerConfiguration {
+            # A home-manager configuration of `tester` with every module
+            # of this layer and the editor's Emacs module.
+            workbenchConfiguration = inputs.home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
               modules = [
                 inputs.ch-emacs-config.modules.homeManager.emacs
@@ -386,7 +387,7 @@
                 (
                   name:
                   builtins.replaceStrings [ "/home/tester" ] [ "$HOME" ]
-                    workbenchHome.config.home.activation.${name}.data
+                    workbenchConfiguration.config.home.activation.${name}.data
                   + "\n"
                 )
                 [
@@ -395,11 +396,11 @@
                   "codexSettings"
                 ];
 
-            agentShellInit = workbenchHome.config.programs.nemacs.settings.bundles.agent-shell.init;
+            agentShellInit = workbenchConfiguration.config.programs.nemacs.settings.bundles.agent-shell.init;
 
             # A home that wires OpenCode into Emacs and leaves Codex out,
             # and that has no Claude Code at all.
-            selectiveHome = inputs.home-manager.lib.homeManagerConfiguration {
+            selectiveConfiguration = inputs.home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
               modules = [
                 inputs.ch-emacs-config.modules.homeManager.emacs
@@ -454,20 +455,20 @@
               inherit pkgs;
               claude-consent = claudeConsent;
             };
-            agentsHome = inputs.home-manager.lib.homeManagerConfiguration {
+            agentsConfiguration = inputs.home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
-              modules = agentsHomeModules;
+              modules = agentsConfigurationModules;
             };
-            # The same home with OpenCode 2.
-            agentsHome2 = inputs.home-manager.lib.homeManagerConfiguration {
+            # The same home-manager configuration with OpenCode 2.
+            agentsConfiguration2 = inputs.home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
-              modules = agentsHomeModules ++ [
+              modules = agentsConfigurationModules ++ [
                 { ch-ai-workbench.opencode.package = lib.mkForce llmAgents.opencode2; }
               ];
             };
-            agentsHomeModules = [
-              # The consent plugin for the OpenCode version the home
-              # runs, as emacs-integration declares it.
+            agentsConfigurationModules = [
+              # The consent plugin for the OpenCode version the
+              # home-manager configuration runs, as emacs-integration declares it.
               (
                 { config, ... }:
                 {
@@ -606,21 +607,23 @@
               microvm-mcp = self.packages.${system}.microvm-mcp;
 
               # The microvm module with kinds from its options and from
-              # those of ch-microvm. The full home gets the plugin with
-              # the MCP server `microvm`, which offers the kinds for
-              # agents and no other. The baked configuration names the
-              # configuration file of ch-microvm and carries the MCP
-              # server of each kind for agents. The home without kinds
-              # for agents gets no plugin, and the command of ch-microvm
-              # stays installed. The home without kinds gets none of it.
-              # A kind outside `ch-microvm.kinds`, and a kind that serves
-              # MCP on no port, fail an assertion. The full home gets the
-              # sandbox module `microvm-probe`, which grants exactly the
-              # share directories that `ch-microvm.instances` lists for
-              # the two instances of `probe`, and no sandbox module for
-              # `quiet`, which has no shares, or for `hidden`, which
-              # agents may not use.
-              microvm-home-module =
+              # those of ch-microvm. The full home-manager configuration
+              # gets the plugin with the MCP server `microvm`, which offers
+              # the kinds for agents and no other kind. The baked
+              # configuration names the configuration file of ch-microvm
+              # and carries the MCP server of each kind for agents. The
+              # home-manager configuration without kinds for agents gets
+              # no plugin, and the command of ch-microvm stays installed.
+              # The home-manager configuration without kinds gets none of
+              # it. A kind outside `ch-microvm.kinds`, and a kind that
+              # serves MCP on no port, fail an assertion. The full
+              # home-manager configuration gets the sandbox module
+              # `microvm-probe`, which grants exactly the share
+              # directories that `ch-microvm.instances` lists for the
+              # instances of `probe`, and no sandbox module for `quiet`,
+              # which has no shares, or for `hidden`, which agents may not
+              # use.
+              microvm-home-manager-module =
                 let
                   stateRoot = "/home/tester/.local/state/ch-microvm";
                   probeShareDirs = [
@@ -629,34 +632,36 @@
                     "${stateRoot}/probe-2/in"
                     "${stateRoot}/probe-2/out"
                   ];
-                  sandboxModulesOf = home: home.ch-ai-workbench.agent-sandbox.modules;
+                  sandboxModulesOf = configuration: configuration.ch-ai-workbench.agent-sandbox.modules;
                 in
-                assert builtins.attrNames (sandboxModulesOf microvmFullHome) == [ "microvm-probe" ];
-                assert (sandboxModulesOf microvmFullHome).microvm-probe.allowWrite == probeShareDirs;
-                assert (sandboxModulesOf microvmFullHome).microvm-probe.extraAllowRead == probeShareDirs;
-                assert sandboxModulesOf microvmHiddenHome == { };
-                assert sandboxModulesOf microvmBareHome == { };
-                assert microvmFullHome.ch-ai-workbench.claude-code.skills ? microvm;
+                assert builtins.attrNames (sandboxModulesOf microvmFullConfiguration) == [ "microvm-probe" ];
+                assert (sandboxModulesOf microvmFullConfiguration).microvm-probe.allowWrite == probeShareDirs;
+                assert (sandboxModulesOf microvmFullConfiguration).microvm-probe.extraAllowRead == probeShareDirs;
+                assert sandboxModulesOf microvmHiddenConfiguration == { };
+                assert sandboxModulesOf microvmBareConfiguration == { };
+                assert microvmFullConfiguration.ch-ai-workbench.claude-code.skills ? microvm;
                 assert
-                  microvmCodexHome.ch-ai-workbench.codex.mcpServers.microvm.command
-                  == lib.getExe microvmCodexHome.ch-ai-workbench.microvm.package;
-                assert (sandboxModulesOf microvmCodexHome).microvm-probe.allowWrite == probeShareDirs;
-                assert builtins.all (entry: entry.assertion) microvmCodexHome.assertions;
-                assert !(microvmHiddenHome.ch-ai-workbench.claude-code.skills ? microvm);
-                assert builtins.elem microvmHiddenHome.ch-microvm.package microvmHiddenHome.home.packages;
-                assert !(microvmBareHome.ch-ai-workbench.claude-code.skills ? microvm);
-                assert !(builtins.elem microvmBareHome.ch-microvm.package microvmBareHome.home.packages);
+                  microvmCodexConfiguration.ch-ai-workbench.codex.mcpServers.microvm.command
+                  == lib.getExe microvmCodexConfiguration.ch-ai-workbench.microvm.package;
+                assert (sandboxModulesOf microvmCodexConfiguration).microvm-probe.allowWrite == probeShareDirs;
+                assert builtins.all (entry: entry.assertion) microvmCodexConfiguration.assertions;
+                assert !(microvmHiddenConfiguration.ch-ai-workbench.claude-code.skills ? microvm);
+                assert builtins.elem microvmHiddenConfiguration.ch-microvm.package
+                  microvmHiddenConfiguration.home.packages;
+                assert !(microvmBareConfiguration.ch-ai-workbench.claude-code.skills ? microvm);
+                assert
+                  !(builtins.elem microvmBareConfiguration.ch-microvm.package microvmBareConfiguration.home.packages);
                 # The control: a kind of ch-microvm with a port for its MCP
                 # server evaluates.
                 assert !microvmRefused { probe.mcp.description = "Nothing."; };
                 assert microvmRefused { quiet.mcp.description = "Nothing."; };
                 assert microvmRefused { extra.agents = true; };
-                pkgs.runCommand "microvm-home-module"
+                pkgs.runCommand "microvm-home-manager-module"
                   {
                     nativeBuildInputs = [ pkgs.jq ];
-                    files = microvmFullHome.home-files;
-                    command = lib.getExe microvmFullHome.ch-ai-workbench.microvm.package;
-                    instancesConfig = microvmFullHome.ch-microvm.configFile;
+                    files = microvmFullConfiguration.home-files;
+                    command = lib.getExe microvmFullConfiguration.ch-ai-workbench.microvm.package;
+                    instancesConfig = microvmFullConfiguration.ch-microvm.configFile;
                   }
                   ''
                     # The plugin declares the MCP server `microvm` and no
@@ -702,9 +707,9 @@
                   '';
 
               # The CLI composing the parts the home-manager module
-              # builds, end to end: the registry and parts come from a
-              # real home's files, with the registry's home paths pointed
-              # at that tree.
+              # builds, end to end: the registry and parts come from the
+              # files of a real home-manager configuration, with the home
+              # directory paths of the registry pointed at those files.
               agent-sandbox-compose =
                 pkgs.runCommand "agent-sandbox-compose"
                   {
@@ -893,35 +898,38 @@
               # that this layer composes with the editor: the bundles
               # merge into one init, the packages build against one Emacs
               # package set, and the whole activation resolves.
-              home-manager-module = workbenchHome.activationPackage;
+              home-manager-module = workbenchConfiguration.activationPackage;
 
-              # Each agent's Emacs integration is switched on its own:
+              # The Emacs integration of each agent is switched
+              # separately:
               # OpenCode gets the MCP server, the consent plugin, its
               # agent-shell command and its queue command, and Codex,
               # switched off, gets none of them.
               emacs-integration-selective =
                 let
-                  home = selectiveHome.config;
-                  bundles = home.programs.nemacs.settings.bundles;
+                  selective = selectiveConfiguration.config;
+                  bundles = selective.programs.nemacs.settings.bundles;
                 in
-                assert home.ch-ai-workbench.opencode.mcpServers ? emacs;
-                assert home.ch-ai-workbench.opencode.plugins ? workbench-consent;
+                assert selective.ch-ai-workbench.opencode.mcpServers ? emacs;
+                assert selective.ch-ai-workbench.opencode.plugins ? workbench-consent;
                 assert lib.hasInfix "agent-shell-opencode-acp-command" bundles.agent-shell.init;
                 assert lib.hasInfix "claude-queue-opencode-program" bundles.claude-queue.init;
-                assert !(home.ch-ai-workbench.codex.mcpServers ? emacs);
-                assert home.ch-ai-workbench.codex.hooks == { };
+                assert !(selective.ch-ai-workbench.codex.mcpServers ? emacs);
+                assert selective.ch-ai-workbench.codex.hooks == { };
                 assert !(lib.hasInfix "agent-shell-openai-codex-acp-command" bundles.agent-shell.init);
                 assert !(lib.hasInfix "claude-queue-codex" bundles.claude-queue.init);
                 # Without Claude Code, plain dispatch goes to OpenCode.
                 assert lib.hasInfix "(setq claude-queue-default-agent 'opencode)" bundles.claude-queue.init;
-                selectiveHome.activationPackage;
+                selectiveConfiguration.activationPackage;
 
-              # The codex command of the full home declares the MCP server
-              # `emacs`, which runs the bridge from the home-manager
-              # profile. The home that selects the codex module alone
-              # installs the package unwrapped.
-              # The declared configuration of the three agents, as each
-              # agent reads it. The full home's activation entries merge
+              # The codex command of the full home-manager configuration
+              # declares the MCP server `emacs`, which runs the bridge from
+              # the home-manager profile. The home-manager configuration
+              # that selects the codex module alone installs the package
+              # unwrapped.
+              # The declared configuration of the agents, as each agent
+              # reads it. The activation entries of the full home-manager
+              # configuration merge
               # into files an agent and a person already wrote, which keep
               # what they hold; Codex and OpenCode then report the MCP
               # server `emacs` that emacs-integration declares for them,
@@ -930,7 +938,7 @@
                 pkgs.runCommand "codex-profile-catalog"
                   {
                     nativeBuildInputs = [ pkgs.python3 ];
-                    codex = lib.getExe agentsHome.config.ch-ai-workbench.codex.package;
+                    codex = lib.getExe agentsConfiguration.config.ch-ai-workbench.codex.package;
                   }
                   ''
                     export HOME="$TMPDIR/home"
@@ -939,25 +947,27 @@
                     touch "$out"
                   '';
 
-              agent-config-home =
-                assert workbenchHome.config.ch-ai-workbench.codex.mcpServers.emacs.envVars == [ "XDG_RUNTIME_DIR" ];
+              agent-config-home-manager =
                 assert
-                  workbenchHome.config.ch-ai-workbench.opencode.mcpServers.emacs.envVars == [
+                  workbenchConfiguration.config.ch-ai-workbench.codex.mcpServers.emacs.envVars
+                  == [ "XDG_RUNTIME_DIR" ];
+                assert
+                  workbenchConfiguration.config.ch-ai-workbench.opencode.mcpServers.emacs.envVars == [
                     "SANDBOX_RUNTIME"
                     "AGENT_SANDBOX_EMACS_MCP"
                   ];
                 assert lib.hasInfix "agent-shell-anthropic-claude-acp-command" agentShellInit;
                 assert lib.hasInfix "agent-shell-openai-codex-acp-command" agentShellInit;
                 assert lib.hasInfix ''/bin/opencode" "acp"'' agentShellInit;
-                pkgs.runCommand "agent-config-home"
+                pkgs.runCommand "agent-config-home-manager"
                   {
                     nativeBuildInputs = [
                       pkgs.jq
                       pkgs.socat
                     ];
-                    bridge = "${workbenchHome.config.home.path}/bin/emacs-mcp-stdio";
-                    codex = lib.getExe workbenchHome.config.programs.codex.package;
-                    opencode = lib.getExe workbenchHome.config.programs.opencode.package;
+                    bridge = "${workbenchConfiguration.config.home.path}/bin/emacs-mcp-stdio";
+                    codex = lib.getExe workbenchConfiguration.config.programs.codex.package;
+                    opencode = lib.getExe workbenchConfiguration.config.programs.opencode.package;
                   }
                   ''
                     export HOME="$TMPDIR/home"
@@ -1028,14 +1038,15 @@
                       pkgs.python3
                       pkgs.socat
                     ];
-                    codex = lib.getExe agentsHome.config.programs.codex.package;
-                    opencode = lib.getExe agentsHome.config.programs.opencode.package;
-                    opencode2 = lib.getExe agentsHome2.config.programs.opencode.package;
-                    opencodePlugin = agentsHome.config.ch-ai-workbench.opencode.plugins.workbench-consent;
-                    opencodePlugin2 = agentsHome2.config.ch-ai-workbench.opencode.plugins.workbench-consent;
-                    codexSettings = agentsHome.config.home.activation.codexSettings.data;
-                    opencodePluginDependencies = agentsHome.config.home.activation.opencodePluginDependencies.data;
-                    agentSandboxConfig = "${agentsHome.config.home-files}/.config/agent-sandbox";
+                    codex = lib.getExe agentsConfiguration.config.programs.codex.package;
+                    opencode = lib.getExe agentsConfiguration.config.programs.opencode.package;
+                    opencode2 = lib.getExe agentsConfiguration2.config.programs.opencode.package;
+                    opencodePlugin = agentsConfiguration.config.ch-ai-workbench.opencode.plugins.workbench-consent;
+                    opencodePlugin2 = agentsConfiguration2.config.ch-ai-workbench.opencode.plugins.workbench-consent;
+                    codexSettings = agentsConfiguration.config.home.activation.codexSettings.data;
+                    opencodePluginDependencies =
+                      agentsConfiguration.config.home.activation.opencodePluginDependencies.data;
+                    agentSandboxConfig = "${agentsConfiguration.config.home-files}/.config/agent-sandbox";
                   }
                   ''
                     # Codex's native backend runs its commands under
@@ -1059,7 +1070,7 @@
                     socat UNIX-LISTEN:"$XDG_STATE_HOME/agent-sandbox/trusted/github-auth-token.sock",fork \
                       EXEC:'${
                         lib.getExe self.packages.${system}.trusted-exec
-                      } serve --cwd / -- ${agentsHome.config.ch-ai-workbench.agent-sandbox.trustedExecutables.github-auth-token.program}' &
+                      } serve --cwd / -- ${agentsConfiguration.config.ch-ai-workbench.agent-sandbox.trustedExecutables.github-auth-token.program}' &
                     for _ in $(seq 50); do
                       test -S "$XDG_STATE_HOME/agent-sandbox/trusted/github-auth-token.sock" && break
                       sleep 0.1
@@ -1462,7 +1473,7 @@
                     jq -r .hookSpecificOutput.permissionDecisionReason <<<"$res" | grep -q -- '- fragments (judge 0.75): '
 
                     # A prose sentence that answers the correction in the
-                    # user's latest message is judged on its own, with the
+                    # user's latest message is judged separately, with the
                     # replaced text beside it.
                     answers '{"ghost-sentence": 0.7}'
                     ghost() { jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" --arg n "$1" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/homes.md", old_string: "Each home sets nix.package.", new_string: $n}}' | "$edit"; }
@@ -1638,7 +1649,7 @@
               # stdin are silence. The token is drawn at build time and
               # checked against betterleaks first, since betterleaks drops
               # placeholder-looking strings and a token-shaped string
-              # does not belong in the tree.
+              # does not belong in the repository.
               claude-redact-hook =
                 pkgs.runCommand "claude-redact-hook"
                   {

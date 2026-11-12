@@ -1,6 +1,6 @@
 # PreToolUse hook on the disk and buffer writers (Edit, Write,
 # NotebookEdit, and the emacs server's edit-file / edit-buffer): the
-# edit-side twin of claude-tic-check-hook.sh.  The text a call writes
+# edit-side counterpart of claude-tic-check-hook.sh.  The text a call writes
 # (new_string, content, new_source, or new-string) is matched against
 # the same table, and also scored by the judge as prose or code
 # (tic_verdict and tic_findings from tic-check-match.sh, prepended by
@@ -12,7 +12,7 @@
 # hash of {tool_name, tool_input} is written before the deny, and a
 # call whose marker exists abstains -- so a legitimate use costs one
 # retry, and a re-issue with the phrasing rewritten is a different
-# hash and gets checked on its own.  The marker lives under
+# hash and gets checked again.  The marker lives under
 # $XDG_RUNTIME_DIR/claude-tic-check/seen/ (per login, ephemeral).
 # Everything unexpected -- no runtime dir, no session id, a failed
 # marker write, jq failure -- resolves to abstention (exit 0, no
@@ -60,7 +60,7 @@ if [ "$kind" = prose ]; then
   findings+=$(jq -r '.findings // ""' <<<"$wchecks" 2>/dev/null) || true
   coined=$(jq -c '.report.coinage // []' <<<"$wchecks" 2>/dev/null) || coined=
   [ -n "$coined" ] || coined='[]'
-  # Each sentence that may argue with ghosts is judged on its own
+  # Each sentence that may argue with ghosts is judged separately
   # (tic_write_ghosts): asked about the whole write, the judge gives one
   # such sentence in a long text a middling probability.
   gchecks=$(tic_write_ghosts "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")

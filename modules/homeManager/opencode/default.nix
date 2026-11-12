@@ -112,10 +112,10 @@ in
       type = lib.types.package;
       example = lib.literalExpression "llm-agents.packages.\${system}.opencode";
       description = ''
-        The OpenCode package this machine runs, before the wrapper that
-        reads the provider keys. It has no default: only the
-        configuration that installs OpenCode knows which build that
-        machine runs.
+        The OpenCode package this home-manager configuration runs,
+        before the wrapper that reads the provider keys. It has no
+        default: only the configuration that installs OpenCode knows
+        which build it runs.
       '';
     };
 

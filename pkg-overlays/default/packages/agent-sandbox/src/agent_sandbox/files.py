@@ -186,7 +186,7 @@ def read_json(path: Path) -> dict[str, Any]:
         return {}
     except (IsADirectoryError, PermissionError, OSError):
         # A settings path can be substituted by the worktree/bg-isolation
-        # harness — e.g. bound to a character device, not a regular file,
+        # harness, e.g. bound to a character device, not a regular file,
         # which may deny reads. There is no JSON content to merge in that
         # case; treat it as absent rather than crash. A genuine regular
         # file with a real read error still raises.
@@ -233,7 +233,7 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
 
 def write_text_atomic(path: Path, text: str, mode: int = 0o600) -> None:
     """Write ``text`` to ``path`` via same-dir temp + rename, mode 0600 by
-    default — the owned-copy primitive for the credential broker. Same
+    default: the owned-copy primitive for the credential broker. Same
     discipline as write_json_atomic; the caller owns the content."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")

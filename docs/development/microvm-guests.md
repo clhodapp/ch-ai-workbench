@@ -192,10 +192,15 @@ instances of a session that crashed, since their holder process is
 gone. The `RuntimeMaxSec` of a kind stops an instance that runs too
 long.
 
-## What a tree sets
+## What a flake sets
 
-A machine whose user runs guests for its sessions sets what
-ch-microvm needs, as its documentation describes, and then:
+A flake whose user runs guests for the sessions of agents sets what
+ch-microvm needs, as the documentation of ch-microvm describes. The
+flake then declares a home-manager configuration for the user that
+selects this module beside `claude-code`, with `claude-code` enabled.
+That home-manager configuration sets `ch-microvm.kinds.<kind>` for
+each guest, and sets `ch-ai-workbench.microvm.kinds.<kind>` with
+`agents = true`, and with `mcp` for a kind whose guests serve MCP.
 
 - declares a home for the user that selects this module beside
   `claude-code`, with `claude-code` enabled, sets
@@ -217,9 +222,10 @@ lease, the tools of a guest after `microvm_up`, a directory passed to
 connection, the stops at the end of input, and the label and arguments
 of the program.
 
-The check `microvm-home-module` evaluates homes with kinds of
-ch-microvm and kinds for agents, with a fake runner. The home with
-kinds for agents gets the plugin with the server `microvm`, whose tools
+The check `microvm-home-manager-module` evaluates home-manager
+configurations with kinds of ch-microvm and kinds for agents, with a
+fake runner. The home-manager configuration with kinds for agents gets
+the plugin with the server `microvm`, whose tools
 over stdio list only the kinds for agents and refuse the others. The
 configuration baked into the program names the configuration file of
 ch-microvm and carries the MCP server of each kind for agents. That
@@ -233,5 +239,5 @@ sandbox module. A home without kinds gets none of it. A kind outside
 assertion.
 
 ch-microvm checks the instances themselves, with its unit tests, its
-home-module check and its nested VM test, in which an ordinary user
+check `home-manager-module` and its nested VM test, in which an ordinary user
 starts a real guest.

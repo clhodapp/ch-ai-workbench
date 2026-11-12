@@ -24,7 +24,7 @@ let
 
   # A personal-scope skills-directory plugin: any folder under
   # ~/.claude/skills/ with a .claude-plugin/plugin.json manifest is
-  # discovered in place on session start — no marketplace, no install
+  # discovered in place on session start, with no marketplace, no install
   # step, no copy into the plugin cache, and no entry in
   # ~/.claude/settings.json (which the CLI mutates at runtime and so
   # cannot be a store symlink; see the emacs module's cwd-hook note).
@@ -163,7 +163,7 @@ let
     claude-response-judge = cfg.judge.package;
   };
 
-  # Edit-side twin (PreToolUse on the disk and buffer writers): the
+  # Edit-side counterpart (PreToolUse on the disk and buffer writers): the
   # text a call writes is matched against the same table, and judged
   # when it goes to a prose file, and the call is denied once with the
   # findings; an identical re-issue passes (script:
@@ -309,7 +309,7 @@ let
   # file under output-styles/ by its own name, so a second file for
   # the same style is a second, duplicate picker row, not an alias
   # (found 2026-08-24 after shipping exactly that). displayName, when
-  # set, becomes the frontmatter name field on the SAME file — the
+  # set, becomes the frontmatter name field on the SAME file. The
   # CLI keys a style by that field when present, and by the file name
   # otherwise (claude-cli.md § Output styles), so setting it trades
   # the attribute name away as a selectable key in exchange for the
@@ -407,7 +407,7 @@ in
                 this style's one file. The CLI keys a style by that
                 field when present, so setting displayName means
                 outputStyle must be set to it, not to the attribute
-                name — the picker's row name and the settings value
+                name. The row name in the picker and the settings value
                 are the same string either way. Leave null to select
                 and display the style by its attribute name (no
                 frontmatter name field, so the picker falls back to
@@ -422,7 +422,7 @@ in
                 Keep Claude Code's own software-engineering instructions
                 in the system prompt and append the style after them.
                 False drops those instructions and leaves only the style
-                text (the CLI's default for a bare file) — the shape for
+                text (the CLI's default for a bare file), the shape for
                 a style that redefines the job, not the voice.
               '';
             };
@@ -458,7 +458,7 @@ in
         Output styles rendered into ~/.claude/output-styles/<name>.md
         (personal scope): YAML frontmatter from the description,
         keepCodingInstructions, and displayName fields, then the
-        parts. One file per style — the /config picker lists every
+        parts. Each style has a single file, since the /config picker lists every
         file under output-styles/, so a second file for the same
         style is a duplicate row, not an alias. The selectable name
         (and the picker's label) is displayName when set, else the
@@ -1327,7 +1327,7 @@ in
     # renders that) seeded with mkBefore so a consumer's parts append.
     ch-ai-workbench.claude-code.outputStyles = {
       iso-plain-language = {
-        description = "ISO 24495-1 plain language — relevant, findable, understandable, usable";
+        description = "ISO 24495-1 plain language: relevant, findable, understandable, usable";
         displayName = "ISO Plain Language";
         parts = lib.mkBefore [ (builtins.readFile ./output-styles/iso-plain-language.md) ];
       };
@@ -1493,7 +1493,7 @@ in
     };
 
     # Claude Code writes per-checkout state under .claude/ inside the
-    # checkout (agent worktrees, checkpoints, the per-machine settings
+    # checkout (agent worktrees, checkpoints, the local settings
     # overlay, scheduler state). None of it is repo content, and it
     # appears in every clone the CLI is run in, so the exclusion is
     # global rather than one .gitignore per repo. home-manager writes
