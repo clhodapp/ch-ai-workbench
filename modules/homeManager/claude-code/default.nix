@@ -780,7 +780,7 @@ in
         peer-programmer style's bans on a word or a character
         (lib/tic-checks.nix): elliptical-possessive, em-dash, click,
         arrow, relationship-words, grows, home-shorthand,
-        possessive-own, performed-enthusiasm.
+        possessive-own, bare-top, performed-enthusiasm.
       '';
     };
 

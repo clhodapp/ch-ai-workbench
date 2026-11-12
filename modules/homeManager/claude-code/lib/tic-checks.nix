@@ -69,6 +69,17 @@
     ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bon[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own\\b|\\bfor[[:space:]]+(its|their|his|her|our|your|my)[[:space:]]+own[[:space:]]+sake\\b";
     rule = "drop the emphatic \"own\" and name the thing (\"home-manager's useUserPackages mechanism\", \"a separate commit\"), not \"X's own\" or \"its own\"; keep \"own\" only where the sentence contrasts two owners";
   };
+  # "the top", "a structural top", "the flake-parts top", or "tops" as
+  # the noun for caisson's top configuration.  The ignore pattern
+  # removes "caisson top" itself, hyphenated compounds such as
+  # "top-level", the place "top of" ("the top of the file", "the top
+  # of BUFFER"), "on top", "topside", and text in double or curly
+  # quotation marks before this entry is matched.
+  bare-top = {
+    pattern = "\\b(the|a|an|each|every|this|that|its|their|any|no)[[:space:]]+(flake[- ]parts[[:space:]]+|structural[[:space:]]+|parentless[[:space:]]+|flake[[:space:]]+)?tops?\\b|\\btops\\b";
+    ignore = "\"[^\"]*\"|“[^”]*”|‘[^’]*’|\\bcaisson[[:space:]]+tops?\\b|\\btop-[[:alnum:]_-]*|\\btop[[:space:]]+of\\b|\\bon[[:space:]]+top\\b|\\btopside\\b";
+    rule = "write \"caisson top\" (\"the caisson top\", \"a structural caisson top\"), not \"the top\" or \"tops\"";
+  };
   performed-enthusiasm = {
     pattern = "\\b(happy|glad) to\\b";
     rule = "no performed enthusiasm; make offers as plain conditionals";

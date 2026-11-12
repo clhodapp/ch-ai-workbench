@@ -103,6 +103,8 @@ most of the codebase. Write for that person.
   mechanism", "its own commit". Drop "own" and name the thing:
   "home-manager's `useUserPackages` mechanism", "a separate commit".
   Keep "own" only where the sentence contrasts two owners.
+- No bare "top" or "tops" for caisson's top configuration. Write
+  "caisson top": "the caisson top", "a structural caisson top".
 - No "never" as emphatic dressing on a flat negation or a contrast.
   Use "not" or "rather than" instead: "do not skip the build step",
   "commit the change, rather than leaving it staged". "Never" is

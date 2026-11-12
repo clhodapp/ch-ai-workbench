@@ -1405,6 +1405,23 @@
                     passes possessive-own 'The log shows `its own commit` twice.'
                     passes possessive-own 'The user called "its own commit" a tic.'
                     passes possessive-own 'The user called “its own commit” a tic.'
+
+                    fires bare-top 'The top imports the machine.'
+                    fires bare-top 'A structural top lists no systems.'
+                    fires bare-top 'The flake-parts top evaluates it.'
+                    fires bare-top 'Each parentless top is evaluated per system.'
+                    fires bare-top 'Both tops build.'
+                    passes bare-top 'The caisson top imports the machine.'
+                    passes bare-top 'A structural caisson top lists no systems.'
+                    passes bare-top 'The caisson tops build.'
+                    passes bare-top 'The top-level attribute is packages.'
+                    passes bare-top 'The import goes at the top of the file.'
+                    passes bare-top 'The message goes at the top of BUFFER.'
+                    passes bare-top 'The overlay goes on top of nixpkgs.'
+                    passes bare-top 'The topside project deploys it.'
+                    passes bare-top 'Set `the top` in the flake.'
+                    passes bare-top 'The user wrote "the top" in the title.'
+                    passes bare-top 'The user wrote “each top” in the title.'
                     touch $out
                   '';
 
