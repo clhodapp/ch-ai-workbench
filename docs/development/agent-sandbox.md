@@ -274,6 +274,13 @@ The native grants include the worktree and the owner's Git metadata,
 with both checkouts' configuration guards retained.
 The policy file, wrappers, sockets and private scratch under the runtime
 directory are transient launch resources, not persistent project settings.
+New native launches keep their control files and sockets there, while
+`tmp` links to a private allocation under the declarative
+`$XDG_STATE_HOME/agent-sandbox/tmp` root. Build output therefore uses disk
+rather than the small runtime tmpfs. Existing runs keep their original
+scratch location; activation does not move files beneath running tests.
+Disk allocations are retained for explicit cleanup after their chats stop;
+launcher PID death alone does not establish that they are unused.
 Do not copy their process-specific paths into `.codex/config.toml`.
 Native commands with a writable `:tmpdir` also see that scratch directory at
 `/tmp` and, where present, `/var/tmp`. This supports native temporary-file APIs and hides the

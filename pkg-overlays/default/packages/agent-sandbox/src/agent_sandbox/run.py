@@ -58,6 +58,7 @@ import subprocess
 import sys
 import termios
 import threading
+import tempfile
 import tty
 from pathlib import Path
 from typing import Any
@@ -313,9 +314,20 @@ def prepare(
     runs = runtime_dir()
     _prune_scratch(runs)
     run_dir = runs / f"run-{os.getpid()}"
-    scratch = run_dir / "tmp"
-    scratch.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(run_dir, 0o700)
+    scratch = run_dir / "tmp"
+    # Keep control sockets on the short runtime path, but put native
+    # build/test scratch on disk: XDG_RUNTIME_DIR is a small shared tmpfs.
+    # Preserve existing runs and never move files beneath live commands.
+    if native and base.get("nativeTmpRoot") and not scratch.exists():
+        scratch_root = Path(base["nativeTmpRoot"])
+        if not scratch_root.is_absolute():
+            raise ToolError("nativeTmpRoot must be absolute")
+        scratch_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backing = tempfile.mkdtemp(prefix=f"{run_dir.name}-", dir=scratch_root)
+        scratch.symlink_to(backing, target_is_directory=True)
+    scratch.mkdir(parents=True, exist_ok=True)
     # srt sets the sandbox's TMPDIR from CLAUDE_CODE_TMPDIR, and to
     # /tmp/claude, shared by every sandbox, without it.
     env["TMPDIR"] = env["CLAUDE_CODE_TMPDIR"] = str(scratch)

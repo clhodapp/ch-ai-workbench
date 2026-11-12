@@ -205,6 +205,7 @@ class CodexTest(unittest.TestCase):
         value = json.loads(policy_file.read_text())
         self.assertEqual(value["command_env"]["PATH"], "/enrolled/github/bin")
         self.assertEqual(value["bwrap"], "/current/native-bwrap")
+        self.assertEqual(value["path"], "/enrolled/github/bin")
         self.assertEqual(value["sockets"], ["/run/allowed.sock", "/run/nix.sock"])
         self.assertEqual(value["config"], config)
         self.assertIn("/current/agent-sandbox", wrapper.read_text())
@@ -314,14 +315,15 @@ class CodexTest(unittest.TestCase):
         from agent_sandbox.cli import cmd_codex_temp_bwrap
 
         policy = self.root / "policy.json"
-        policy.write_text("{}")
+        policy.write_text(json.dumps({"path": "/legacy/bin",
+                                      "command_env": {"PATH": "/current/bin"}}))
         args = Namespace(policy=str(policy), bwrap="/device-wrapper/bwrap",
                          agent_command=["--", "--version"])
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch("os.execve") as execute:
+        with mock.patch.dict(os.environ, {"PATH": "/legacy/bin"}, clear=True), mock.patch("os.execve") as execute:
             cmd_codex_temp_bwrap(args)
         execute.assert_called_once_with("/device-wrapper/bwrap",
                                         ["/device-wrapper/bwrap", "--version"],
-                                        {"AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE": "1"})
+                                        {"AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE": "1", "PATH": "/current/bin"})
 
     def test_probes_are_forwarded(self):
         self.assertEqual(bwrap_command(["--help"], {"bwrap": "/bin/bwrap"}), ["/bin/bwrap", "--help"])

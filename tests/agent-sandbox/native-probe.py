@@ -36,6 +36,9 @@ with http.server.HTTPServer(("127.0.0.1", 0), TestHandler) as local_server:
 
 (root / "native-write").write_text("allowed")
 Path(os.environ["TMPDIR"], "native-write").write_text("allowed")
+scratch = Path(os.environ["TMPDIR"])
+assert scratch.is_symlink(), "native scratch must use the disk-backed allocation"
+assert scratch.resolve().parent == Path(os.environ["XDG_STATE_HOME"]) / "agent-sandbox/tmp"
 # Conventional temporary paths expose only this runtime's granted scratch.
 assert not Path("/tmp/agent-sandbox-host-temp-marker").exists()
 for directory in ("/tmp", "/var/tmp"):

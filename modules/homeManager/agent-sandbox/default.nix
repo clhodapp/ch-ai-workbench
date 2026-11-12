@@ -405,6 +405,7 @@ let
           setsid = "${pkgs.util-linux}/bin/setsid";
           bwrap = "${devicesBwrap}/bin/bwrap";
           nativeBwrap = "${nativeTmpBwrap}";
+          nativeTmpRoot = "${config.xdg.stateHome}/agent-sandbox/tmp";
           cli = lib.getExe cfg.package;
           configMerger = lib.getExe (workbenchPackage "agent-config");
           landlock = "${nativeSocketBoundary}";

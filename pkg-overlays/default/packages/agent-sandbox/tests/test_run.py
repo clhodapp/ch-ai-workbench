@@ -174,6 +174,23 @@ class RunTest(unittest.TestCase):
         })
         self.assertNotIn(str(Path(env["TMPDIR"]).parent), json.dumps(persisted))
 
+    def test_codex_disk_scratch_keeps_runtime_control_path(self):
+        disk = self.root.parent / "disk-scratch"
+        base = {**RUN_BASE, "cli": "/bin/agent-sandbox", "landlock": "/bin/landlock",
+                "nativeTmpRoot": str(disk)}
+        write_registry(self.config, {"work": WORK, "agent": self.agent_part}, base=base,
+                       extra={**EXTRA, "agents": {"codex": {"backend": "codex", "modules": ["agent"]}}})
+        self.enroll("work")
+        _, env, _ = prepare("codex", ["/bin/codex"], self.root, False)
+        scratch = Path(env["TMPDIR"])
+        self.assertTrue(scratch.is_symlink())
+        self.assertEqual(scratch.resolve().parent, disk)
+        self.assertEqual(Path(env["AGENT_SANDBOX_CODEX_POLICY"]).parent, scratch.parent)
+        (scratch / "preserved").write_text("live")
+        _, again, _ = prepare("codex", ["/bin/codex"], self.root, False)
+        self.assertEqual(again["TMPDIR"], str(scratch))
+        self.assertEqual((scratch / "preserved").read_text(), "live")
+
     def test_codex_enrollment_stays_out_of_git_status(self):
         # The fixture's bare `.git` directory is enough for root discovery
         # but not for `git rev-parse`; make it a real repository.

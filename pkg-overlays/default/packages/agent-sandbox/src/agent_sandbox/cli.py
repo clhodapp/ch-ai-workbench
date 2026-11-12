@@ -702,8 +702,11 @@ def cmd_codex_temp_bwrap(args: argparse.Namespace) -> int:
     if bindings:
         boundary = command.index("--")
         command = [*command[:boundary], *bindings, *command[boundary:]]
-    os.execve(args.bwrap, [args.bwrap, *command],
-              {**os.environ, "AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE": "1"})
+    env = {**os.environ, "AGENT_SANDBOX_NATIVE_BWRAP_ACTIVE": "1"}
+    command_path = policy.get("command_env", {}).get("PATH") or policy.get("path")
+    if command_path:
+        env["PATH"] = command_path
+    os.execve(args.bwrap, [args.bwrap, *command], env)
 
 
 def cmd_codex_socket_boundary(args: argparse.Namespace) -> int:

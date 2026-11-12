@@ -83,6 +83,7 @@ def refresh_runtime_command_environment(root: Path, config: dict[str, Any], base
                     return value
             accepted = True
             updated = {**value, "command_env": dict(command_env),
+                       "path": command_env["PATH"],
                        "bwrap": base.get("nativeBwrap", value.get("bwrap")),
                        "landlock": base.get("landlock", value.get("landlock"))}
             # Native seccomp opens Unix sockets as a class; Landlock is
