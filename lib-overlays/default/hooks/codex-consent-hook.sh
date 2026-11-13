@@ -9,7 +9,8 @@
 # claude-queue starts each Codex task with CLAUDE_QUEUE_TASK set to
 # the task id and writes the task's territory record under that id
 # before the process starts.  A session without the variable is not a
-# queued task, and (except for inter-chat messages) the hook prints
+# queued task, and (except for inter-chat messages and enrolled command
+# approvals) the hook prints
 # nothing, so Codex decides as it would without the hook.
 # For a queued task the hook always decides:
 # with no decision Codex would hand the question to its automatic
@@ -32,6 +33,36 @@ field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null || true; }
 tool=$(field '.tool_name')
 case "$tool" in
   mcp__codex_tui__send_message_to_thread) emit allow "" ;;
+esac
+
+# Enrolled commands must stay inside the composed sandbox. PermissionRequest
+# runs only after a command needs approval; denying here covers explicit
+# escalation and automatic "retry without sandbox" without granting either.
+# Codex serializes shell-like tools as Bash, even for exec_command.
+case "$tool" in
+  Bash | exec_command | shell_command | shell | write_stdin)
+    enrolled=false
+    if [ -f "${AGENT_SANDBOX_CODEX_POLICY:-/nonexistent}" ]; then
+      enrolled=true
+    else
+      scope=$(field '.cwd')
+      case "$scope" in file:///*) scope="${scope#file://}" ;; esac
+      case "$scope" in
+        /*)
+          while [ "$scope" != / ]; do
+            if [ -f "$scope/.agent-sandbox/codex-config.json" ]; then
+              enrolled=true
+              break
+            fi
+            scope=$(dirname -- "$scope")
+          done
+          ;;
+      esac
+    fi
+    if [ "$enrolled" = true ]; then
+      emit deny "This enrolled workspace runs commands only inside its composed sandbox. Retry the command with default sandbox permissions; do not request outside-sandbox execution again. For a real denial, retain the exact error and fix the declared capability or use an appropriate isolated Nix check. No command ran through this approval request."
+    fi
+    ;;
 esac
 
 task="${CLAUDE_QUEUE_TASK:-}"

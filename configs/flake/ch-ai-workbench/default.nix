@@ -1894,6 +1894,13 @@
               # key, the async re-entry waiter, handler liveness).
               claude-consent = claudeConsent;
 
+              codex-enrolled-command-consent = pkgs.runCommand "codex-enrolled-command-consent"
+                { nativeBuildInputs = [ pkgs.python3 ]; }
+                ''
+                  python3 ${self}/tests/hooks/test_codex_consent_hook.py ${lib.getExe codexConsentHook}
+                  touch $out
+                '';
+
               # The consent hook end to end against the tool: abstention
               # without a territory record and inside the territory, a
               # deny on the spool itself, `ask` when no answerer is

@@ -345,8 +345,16 @@ full suite runs in `landlock-shim-vm`: Nix itself installs an enclosing
 scope-only ruleset whose inherited denial cannot be relaxed by a build.
 
 Approval policy is `on-request`: commands within the generated policy
-run normally, and requests beyond it still require approval. This does
-not grant approval to MCP tools; the tools' annotations, approval
+run normally. The workbench consent hook denies command approval requests
+in enrolled sessions before a user dialog opens, including explicit
+escalation and automatic retries without the sandbox. Codex identifies
+these command requests as `Bash` in hook input. The denial tells the
+agent to retry with default permissions and repair the declared capability
+or use an appropriate isolated Nix check. It does not authorize host
+execution or alter sandbox restrictions. Requests already awaiting a user
+decision must be cancelled separately; replacing the script at an existing
+registered hook path affects future requests without restarting tests.
+This does not grant approval to MCP tools; the tools’ annotations, approval
 settings and consent hooks apply separately. Headless `codex exec`
 keeps its usual noninteractive approval behavior.
 
