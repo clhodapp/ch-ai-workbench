@@ -28,6 +28,7 @@ pkgs.writeShellApplication {
     ${builtins.readFile ./tic-check-match.sh}
     ${builtins.readFile ./tic-check-turn-checks.sh}
     ${builtins.readFile ./tic-check-verdict-path.sh}
+    ${builtins.readFile ./tic-check-log.sh}
     ${builtins.readFile ./claude-tic-check-hook.sh}
   '';
 }

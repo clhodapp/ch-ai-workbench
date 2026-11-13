@@ -607,6 +607,22 @@ output-style rule that needs judgment (seeded from
   been exercised by the flake check against the hook's output shape
   only. It has not been probed live in a CLI session the way the Stop
   facts above were.
+- **Event log.** Every tic-check hook appends one JSON line per event to
+  `$XDG_STATE_HOME/claude-tic-check/events.jsonl` (`~/.local/state` when
+  unset) through `tic_log` in `lib/tic-check-log.sh`. The state
+  directory survives a reboot, unlike the verdict files. Each line has
+  `ts` (epoch seconds), `session` and `event`:
+  - `judge`: one judge call, with `kind`, `answered`, `ms`, `endpoint`,
+    `model`, `answers` and `scores`. `answered: false` means no endpoint
+    replied.
+  - `findings`: what `tic_findings` reported, as `regex` (entry names)
+    and `judge` (`{dimension, p}` at or above the push-back level).
+  - `blocked`: a hook sent `tic-check: check` or `tic-check: rewrite`;
+    `hook` is `stop`, `edit` or `message`.
+  - `answered`: the model's reply to a check at the second stop, `clean`,
+    `tic` or `other`.
+  - `note`: a hook handed the model a verdict as additionalContext;
+    `hook` is `context` or `turn`.
 - **Density.** `modules/homeManager/claude-code/lib/judge-readability.nix`
   holds one score, `information-density`: how much each sentence
   carries, from sparse (filler, restatement) through even (one point per

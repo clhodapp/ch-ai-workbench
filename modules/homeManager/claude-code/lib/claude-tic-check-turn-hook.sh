@@ -133,6 +133,7 @@ This note comes from the tic-check PostToolUse hook, not from the $tool call: it
 context+="$sections
 Apply this to what you write for the rest of the turn; the text it covers is already written, and a write can be corrected with another edit. The turn-end check will look at the whole turn. Do not reply to this note."
 
+tic_log note "$(jq -cn --arg t "$tool" '{hook: "turn", tool: $t}' 2>/dev/null)"
 jq -cn --arg c "$context" \
   '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $c}}' 2>/dev/null
 exit 0

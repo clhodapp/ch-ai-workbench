@@ -1452,6 +1452,7 @@
                     edit=${lib.getExe judgeHooks.tic-check-edit.package}
                     export XDG_RUNTIME_DIR="$TMPDIR/run"
                     mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+                    export XDG_STATE_HOME="$TMPDIR/state"
                     session=0123456789abcdef-0000-4000-8000-000000000000
                     stored="$XDG_RUNTIME_DIR/claude-tic-check/verdicts/$session.json"
                     stop() { jq -cn --arg m "$1" --arg s "$session" '{session_id: $s, stop_hook_active: false, last_assistant_message: $m}' | "$hook"; }
@@ -1671,6 +1672,22 @@
                     [ -z "$(run "git commit -m 'docs: rewrite the passages a phrasing review of the docs flagged'")" ]
 
                     kill %1
+                    # The event log: every judge call, finding, block,
+                    # answer and note is one line of JSON under the state dir.
+                    log="$XDG_STATE_HOME/claude-tic-check/events.jsonl"
+                    jq -e -s 'all(.[]; (.ts | type) == "number" and (.session | type) == "string" and (.event | type) == "string")' "$log"
+                    ev() { jq -e -s "any(.[]; $1)" "$log" >/dev/null; }
+                    ev '.event == "judge" and .answered == false'
+                    ev '.event == "judge" and .answered == true and .endpoint == "local" and .model == "elephant-1" and (.answers | has("fragments")) and (.scores | has("information-density"))'
+                    ev '.event == "findings" and .regex == ["elliptical-possessive"] and .judge == []'
+                    ev '.event == "findings" and (.judge | any(.dimension == "fragments" and .p >= 0.9))'
+                    ev '.event == "blocked" and .hook == "stop" and .heading == "tic-check: check"'
+                    ev '.event == "blocked" and .hook == "stop" and .heading == "tic-check: rewrite"'
+                    ev '.event == "blocked" and .hook == "edit"'
+                    ev '.event == "answered" and .hook == "stop" and .answer == "tic"'
+                    ev '.event == "note" and .hook == "context"'
+                    ev '.event == "note" and .hook == "turn"'
+
                     touch $out
                   '';
 

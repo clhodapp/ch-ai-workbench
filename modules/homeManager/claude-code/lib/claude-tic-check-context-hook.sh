@@ -12,7 +12,8 @@
 
 payload=$(cat) || exit 0
 
-store=$(tic_verdict_path "$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null)") || exit 0
+session=$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null) || session=
+store=$(tic_verdict_path "$session") || exit 0
 [ -f "$store" ] || exit 0
 verdict=$(cat "$store" 2>/dev/null) || exit 0
 rm -f "$store" 2>/dev/null || true
@@ -69,6 +70,7 @@ fi
 context+="
 Weigh this in what you write next. Do not reply to this note."
 
+tic_log note '{"hook": "context"}'
 jq -cn --arg c "$context" \
   '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $c}}' 2>/dev/null
 exit 0
