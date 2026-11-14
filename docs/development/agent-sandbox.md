@@ -800,7 +800,7 @@ auto-sync); the design is correct without it.
 The CLI's `unittest` suite under
 `pkg-overlays/default/packages/agent-sandbox/tests/` runs in the package's
 `checkPhase`, so building the package is the test run;
-`checks.<system>.agent-sandbox` exposes it to `nix flake check`,
+`checks.<system>.agent-sandbox-package` exposes it to `nix flake check`,
 beside the plugin and shim builds. The merge engine and the composer
 are the correctness core: any change to `merge.py` needs a test for the
 affected rule (domain invariant, ad-hoc persistence, removal asymmetry,
