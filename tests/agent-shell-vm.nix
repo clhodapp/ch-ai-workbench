@@ -217,5 +217,17 @@ pkgs.testers.runNixOSTest {
                 " (overlays-in (point-min) (point-max))))))'"))[1])
             raise
         machine.screenshot("agent-shell-mermaid")
+    with subtest("eval-elisp runs in the sandboxed child with no bwrap on exec-path"):
+        # `exec-path' holds only the directory of the Emacs binary, so
+        # the child starts only if the configuration names bwrap by its
+        # store path.
+        narrowed = "(let ((exec-path (list invocation-directory)) (ch-mcp-server-child-spawn-timeout 240)) "
+        assert elisp(narrowed + '(executable-find "bwrap"))') == "nil"
+        try:
+            answer = elisp(narrowed + '(ch-mcp-server--eval-elisp "(+ 1 2)"))')
+        except Exception:
+            print(machine.execute("tail -60 /tmp/emacs.log")[1])
+            raise
+        assert answer == '"3"', answer
   '';
 }
