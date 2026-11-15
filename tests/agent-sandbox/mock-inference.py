@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: MIT
 """A stand-in for a model API, for agents running inside agent-sandbox.
 
-It answers Codex's Responses API (POST .../responses) and the
-OpenAI-compatible chat completions API (POST .../chat/completions), both
-streamed as server-sent events. A request that offers a tool whose name
+It answers Codex's Responses API (POST .../responses), the
+OpenAI-compatible chat completions API (POST .../chat/completions) and
+Claude Code's Messages API (POST .../messages), streamed as server-sent
+events. A Messages request whose messages name `SHELL-PROBE:PATH`, that
+offers `Bash` and carries no tool result yet gets a `Bash` call running
+`python3 PATH`; any other Messages request gets the text `done`. A request that offers a tool whose name
 contains TOOL (default `mark`) and carries no tool result yet gets a
 call to that tool. OpenCode 2 offers the tools of MCP servers only
 inside its Code Mode tool `execute`; a request that offers `execute`
@@ -156,10 +159,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body.encode())
 
+    def json_reply(self, value):
+        body = json.dumps(value)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body.encode())
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
         with open(LOG, "a") as log:
             log.write(json.dumps({"path": self.path, "body": body}) + "\n")
+        path = self.path.split("?")[0]
+        if path.endswith("/messages/count_tokens"):
+            self.json_reply({"input_tokens": 1})
+            return
+        if path.endswith("/messages"):
+            call = messages_shell_probe(body)
+            if body.get("stream"):
+                self.events(messages_events(call))
+            else:
+                self.json_reply(messages_reply(call))
+            return
         tool = shell_probe(body) or outside_patch(body) or outside_write(body) or mark_tool(body)
         if self.path.endswith("/responses"):
             self.events(responses(tool))
@@ -169,6 +191,58 @@ class Handler(BaseHTTPRequestHandler):
 
 def sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def messages_shell_probe(body):
+    """The `Bash` tool input that runs the probe a Messages API request
+    names with `SHELL-PROBE:PATH`, or None once a tool result is back or
+    when the request does not offer `Bash`."""
+    messages = body.get("messages") or []
+    if any(isinstance(block, dict) and block.get("type") == "tool_result"
+           for message in messages if isinstance(message.get("content"), list)
+           for block in message["content"]):
+        return None
+    if "Bash" not in [name for _, name in tool_names(body)]:
+        return None
+    found = re.search(r"SHELL-PROBE:([A-Za-z0-9_./-]+)", json.dumps(messages))
+    if not found:
+        return None
+    return {"command": "python3 " + found.group(1), "description": "Run the sandbox probe"}
+
+
+def messages_content(call):
+    if call:
+        return {"type": "tool_use", "id": f"toolu_{next(CALLS)}", "name": "Bash", "input": call}, "tool_use"
+    return {"type": "text", "text": "done"}, "end_turn"
+
+
+def messages_reply(call):
+    block, stop = messages_content(call)
+    return {"id": "msg_1", "type": "message", "role": "assistant", "model": "mock-model",
+            "content": [block], "stop_reason": stop, "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+
+def messages_events(call):
+    """A streamed Messages API reply: one content block, either a `Bash`
+    tool call or the text `done`."""
+    block, stop = messages_content(call)
+    if block["type"] == "tool_use":
+        start = {**block, "input": {}}
+        delta = {"type": "input_json_delta", "partial_json": json.dumps(block["input"])}
+    else:
+        start = {"type": "text", "text": ""}
+        delta = {"type": "text_delta", "text": block["text"]}
+    message = {**messages_reply(call), "content": [], "stop_reason": None}
+    return [
+        sse("message_start", {"type": "message_start", "message": message}),
+        sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": start}),
+        sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta}),
+        sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None},
+                              "usage": {"output_tokens": 1}}),
+        sse("message_stop", {"type": "message_stop"}),
+    ]
 
 
 def responses(tool):

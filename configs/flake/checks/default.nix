@@ -441,7 +441,9 @@
           home.stateVersion = "25.05";
           ch-ai-workbench.agent-sandbox = {
             enable = true;
-            runtime.claudePackage = pkgs.hello;
+            # The Claude Code that the check runs, so its closure is
+            # readable inside the sandbox it builds for Bash commands.
+            runtime.claudePackage = llmAgents.claude-code;
             runtime.sandboxRuntimePackage = llmAgents.sandbox-runtime;
             # The stand-in of the Emacs bridge, served from
             # outside the sandbox.
@@ -995,6 +997,8 @@
               agentBusSocket = agentsConfiguration.config.ch-ai-workbench.agent-bus.socket;
               socketActivate = "${pkgs.systemd}/bin/systemd-socket-activate";
               agentBusUnits = "${agentsConfiguration.config.home-files}/.config/systemd/user";
+              claude = lib.getExe llmAgents.claude-code;
+              landlockShim = lib.getExe self.packages.${system}.landlock-shim;
               codexSettings = agentsConfiguration.config.home.activation.codexSettings.data;
               opencodePluginDependencies =
                 agentsConfiguration.config.home.activation.opencodePluginDependencies.data;
@@ -1095,6 +1099,7 @@
               for checkout in bus nobus; do
                 git init -q "$TMPDIR/repo-$checkout"
                 echo "$agentBus" > "$TMPDIR/repo-$checkout/agent-bus-path"
+                echo "$landlockShim" > "$TMPDIR/repo-$checkout/landlock-path"
               done
               agent-sandbox enroll mock agent-bus -C "$TMPDIR/repo-bus" --quiet
               agent-sandbox enroll mock -C "$TMPDIR/repo-nobus" --quiet
@@ -1116,6 +1121,29 @@
                 fi
                 grep -q 'Permission denied' "$TMPDIR/opencode-nobus.err"
               )
+              # The same probes from real Claude Code, whose Bash tool
+              # runs each command in the sandbox that enrollment wrote
+              # into the checkout's .claude/settings.local.json, through
+              # the socket shell. The mock answers its Messages API.
+              claude_probe() (
+                cd "$TMPDIR/repo-$1"
+                rm -f "$3"
+                ANTHROPIC_BASE_URL=http://127.0.0.2:${toString mockPort} ANTHROPIC_API_KEY=mock \
+                  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 \
+                  timeout 120 "$claude" -p --model mock-model "SHELL-PROBE:$2" < /dev/null > "$TMPDIR/claude-$1.out" 2>&1 \
+                  || { cat "$TMPDIR/claude-$1.out"; exit 1; }
+                test -e "$3" || {
+                  cat "$TMPDIR/claude-$1.out"
+                  jq -c 'select(.path | test("/messages")) | {path, model: .body.model,
+                    tools: [.body.tools[]?.name], probe: (.body.messages | tostring | contains("SHELL-PROBE")),
+                    results: [.body.messages[]?.content | arrays | .[] | select(.type == "tool_result") | .content]}' \
+                    "$TMPDIR/requests.jsonl"
+                  exit 1
+                }
+              )
+              claude_probe bus agent-bus-probe.py agent-bus-probe-passed
+              claude_probe nobus agent-bus-denied-probe.py agent-bus-denied-passed
+              echo "agent-bus probes passed under Claude Code's sandbox"
 
               git worktree add -qb native-linked ../linked HEAD
               cp ${self}/tests/agent-sandbox/native-worktree-probe.py ../linked/native-worktree-probe.py

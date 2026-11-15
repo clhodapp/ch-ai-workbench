@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
-"""Run by real Codex inside its native command sandbox, in a checkout
-enrolled with the agent-sandbox module `agent-bus`, under Nix check.
+"""Run by real Codex inside its native command sandbox, and by real Claude
+Code inside its Bash sandbox, in a checkout enrolled with the
+agent-sandbox module `agent-bus`, under Nix check.
 
 The daemon runs outside the sandbox under socket activation, and the test
 registered the participant `probe-session` before Codex started."""
@@ -53,8 +54,8 @@ else:
 
 # The grant is what lets the CLI through: narrowed to no sockets, the same
 # command is refused at connect.
-policy = json.loads(Path(os.environ["AGENT_SANDBOX_CODEX_POLICY"]).read_text())
-narrowed = subprocess.run([policy["landlock"], "--restrict-sockets", "--socket-fallback", "closed", "--",
+landlock = (root / "landlock-path").read_text().strip()
+narrowed = subprocess.run([landlock, "--restrict-sockets", "--socket-fallback", "closed", "--",
                            agent_bus, "ls"], capture_output=True, text=True)
 assert narrowed.returncode != 0, narrowed.stdout
 assert "Permission denied" in narrowed.stderr, narrowed.stderr

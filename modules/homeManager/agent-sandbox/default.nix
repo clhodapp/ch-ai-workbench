@@ -42,7 +42,9 @@
 #   rc files "depending on your shell", snapshot at session start), and
 #   a login shell resolves through profile-farm store paths whose
 #   closure is everything installed, so every enrollment pins env.SHELL
-#   to the base part's bash via the documented env mechanism.
+#   to the base part's bash via the documented env mechanism. Claude
+#   Code takes $SHELL only when its file name is bash or zsh, so every
+#   shell pinned there is named one of those.
 # - The sandbox helper re-enters the claude-code package inside the
 #   sandbox; masked enrollments therefore need that package's closure
 #   readable (`claudePackage`, in the base part).
@@ -232,7 +234,21 @@ let
   # which must keep escaping. Misdetection therefore fails open into
   # exactly the state the fragment already declares upstream, and never
   # into breaking an escape hatch.
-  socketShell = pkgs.writeShellScript "agent-sandbox-socket-shell" ''
+  #
+  # The script's file name is `bash`: Claude Code runs Bash commands in
+  # $SHELL only when its file name is bash or zsh, and otherwise in a
+  # bash or zsh it finds itself, which would skip the narrowing.
+  socketShell = "${socketShellPackage}/bin/bash";
+  socketShellPackage = pkgs.writeTextFile {
+    name = "agent-sandbox-socket-shell";
+    destination = "/bin/bash";
+    executable = true;
+    text = ''
+      #!${pkgs.runtimeShell}
+    ''
+    + socketShellBody;
+  };
+  socketShellBody = ''
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
       if [ -z "''${${socketsEnvVar}:-}" ]; then
         echo "agent-sandbox: ${socketsEnvVar} is empty, so the unix-socket allowlist cannot be enforced; refusing to run" >&2
@@ -372,7 +388,7 @@ let
           [
             baseFarm
             sshWrapper
-            socketShell
+            socketShellPackage
             nativeSocketBoundary
             devicesBwrap
             cfg.runtime.claudePackage

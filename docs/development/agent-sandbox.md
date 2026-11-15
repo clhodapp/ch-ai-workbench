@@ -696,6 +696,11 @@ auto-sync); the design is correct without it.
   pinning SHELL to the socket shell, a wrapper around `landlock-shim`
   that narrows `connect()` back to those sockets; abstract-namespace
   sockets from outside the sandbox are denied wholesale. The socket
+  shell's file is named `bash`, because Claude Code runs Bash commands
+  in `$SHELL` only when its file name is `bash` or `zsh`, and otherwise
+  in a bash or zsh it finds itself, outside the narrowing. The check
+  `agent-sandbox-agents` runs real Claude Code against a mock model
+  and asserts that a socket outside the list is refused. The socket
   shell is built once, so the composed list reaches it through the
   settings env (`AGENT_SANDBOX_UNIX_SOCKETS`, one path per line).
   The settings files are write-guarded, and a Landlock domain only
