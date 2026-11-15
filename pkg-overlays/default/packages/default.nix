@@ -3,10 +3,11 @@
 # declared settings into the config files the agents read, the sandbox CLI, its plugin, the
 # Landlock shim, the trusted-executable stub and service, the
 # claude-consent prompt tool, the claude-response-judge client the
-# tic-check hooks ask a decision model through, and the MCP server that
-# leases microvm guests of the user to sessions.
+# tic-check hooks ask a decision model through, the MCP server that
+# leases microvm guests of the user to sessions, and the agent bus.
 { callPackage, ... }:
 {
+  agent-bus = callPackage ./agent-bus { };
   agent-config = callPackage ./agent-config { };
   agent-sandbox = callPackage ./agent-sandbox {
     agent-config = callPackage ./agent-config { };

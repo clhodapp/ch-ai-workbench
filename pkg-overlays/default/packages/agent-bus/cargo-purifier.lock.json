@@ -1,0 +1,15 @@
+{
+  "cargoLock": "sha256-1dfmVG8qeQC+i4CCfvhXMZjEg2fduT02QCUWFw5Xepc=",
+  "contentHash": "sha256-YGfQFF7l/sxqrv6Cp8L1OkQaXmMcp2+ZD89m/8KvDyY=",
+  "git": [],
+  "packages": {
+    "agent-bus": {
+      "bins": [
+        "agent-bus"
+      ],
+      "lib": null
+    }
+  },
+  "registries": {},
+  "version": 1
+}

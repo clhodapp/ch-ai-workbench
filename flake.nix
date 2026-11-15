@@ -49,6 +49,10 @@
     # `microvm` leases to sessions.
     ch-microvm.url = "github:clhodapp/ch-microvm";
 
+    # Locks and builds the Cargo dependencies of the crates that have any:
+    # agent-bus.
+    cargo-purifier.url = "github:nix-purifiers/cargo-purifier";
+
     nixpkgs.follows = "ch-emacs-config/nixpkgs";
 
     # The library comes from the nixpkgs.lib mirror. The package sets
@@ -73,6 +77,7 @@
           ch-zsh-config = inputs.ch-zsh-config;
           merman-nix = inputs.merman-nix;
           ch-microvm = inputs.ch-microvm;
+          cargo-purifier = inputs.cargo-purifier;
         };
 
         # The three trees, read from the layout: each entry under

@@ -21,6 +21,16 @@ transcript and its session resumable in a terminal. `agent-shell` and
 `acp` speak to agents over the Agent Client Protocol. `parenting` spawns and
 supervises child Emacs instances.
 
+**A bus between sessions.** The `agent-bus` package is a per-user daemon
+that keeps typed relationships between sessions (supervision, informed
+peers with a scope, interfaces), a mailbox and a published status for
+each, in an SQLite event log. Sessions of any harness reach it through
+the MCP server `agent-bus mcp`, whose tools enforce the relationships
+on every send; the user links sessions and sends to them with the
+`agent-bus` CLI. This is the first step of the design in
+ch-nix-workspace's `docs/development/agent-bus.md`: hooks, the Emacs
+views and the home-manager service follow.
+
 **An MCP server.** Emacs exposes editor tools (diagnostics, references,
 buffer text, edits) to an agent over MCP, with a stable `emacs-mcp-stdio`
 command that clients register once and keeps working across updates.

@@ -527,6 +527,11 @@
     in
     {
       checks = {
+        # The end-to-end tests of the agent bus: a real daemon on a
+        # unix socket, driven through the CLI and through MCP sessions
+        # over stdio. The package check builds the binary alone.
+        agent-bus-tests = self.packages.${system}.agent-bus.tests;
+
         # The checks of the packages are the package checks caisson
         # gathers (`<package>-package`): building the sandbox CLI
         # runs its unittest suite, the plugin assembles the
