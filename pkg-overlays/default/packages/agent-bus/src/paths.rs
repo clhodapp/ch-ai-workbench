@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Where the daemon listens and keeps its store.
 //!
-//! The socket lives under `$XDG_RUNTIME_DIR/agent-bus/`, the store under
-//! `$XDG_STATE_HOME/agent-bus/` (default `~/.local/state`). The
+//! Both live under `$XDG_STATE_HOME/agent-bus/` (default
+//! `~/.local/state`). The socket is there rather than under
+//! `$XDG_RUNTIME_DIR` because agent sandboxes grant sockets by an absolute
+//! path fixed when the configuration is evaluated, and the runtime
+//! directory holds the uid, which that evaluation does not know. The
 //! `AGENT_BUS_SOCKET` and `AGENT_BUS_DB` environment variables override
 //! both, and command-line flags override the environment.
 
@@ -11,6 +14,19 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+fn state_dir() -> Result<PathBuf> {
+    Ok(match env::var_os("XDG_STATE_HOME") {
+        Some(s) => PathBuf::from(s),
+        None => PathBuf::from(
+            env::var_os("HOME")
+                .context("HOME is not set; pass --socket/--db or set AGENT_BUS_*")?,
+        )
+        .join(".local")
+        .join("state"),
+    }
+    .join("agent-bus"))
+}
+
 pub fn socket(flag: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = flag {
         return Ok(p);
@@ -18,9 +34,7 @@ pub fn socket(flag: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = env::var_os("AGENT_BUS_SOCKET") {
         return Ok(PathBuf::from(p));
     }
-    let runtime = env::var_os("XDG_RUNTIME_DIR")
-        .context("XDG_RUNTIME_DIR is not set; pass --socket or set AGENT_BUS_SOCKET")?;
-    Ok(PathBuf::from(runtime).join("agent-bus").join("socket"))
+    Ok(state_dir()?.join("socket"))
 }
 
 pub fn db(flag: Option<PathBuf>) -> Result<PathBuf> {
@@ -30,15 +44,7 @@ pub fn db(flag: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = env::var_os("AGENT_BUS_DB") {
         return Ok(PathBuf::from(p));
     }
-    let state = match env::var_os("XDG_STATE_HOME") {
-        Some(s) => PathBuf::from(s),
-        None => PathBuf::from(
-            env::var_os("HOME").context("HOME is not set; pass --db or set AGENT_BUS_DB")?,
-        )
-        .join(".local")
-        .join("state"),
-    };
-    Ok(state.join("agent-bus").join("bus.sqlite"))
+    Ok(state_dir()?.join("bus.sqlite"))
 }
 
 /// The name of this machine, recorded on every participant and event so that

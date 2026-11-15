@@ -432,6 +432,7 @@
           }
         )
         self.modules.homeManager.agent-sandbox
+        self.modules.homeManager.agent-bus
         self.modules.homeManager.codex
         self.modules.homeManager.opencode
         {
@@ -990,6 +991,10 @@
               opencode2 = lib.getExe agentsConfiguration2.config.programs.opencode.package;
               opencodePlugin = agentsConfiguration.config.ch-ai-workbench.opencode.plugins.workbench-consent;
               opencodePlugin2 = agentsConfiguration2.config.ch-ai-workbench.opencode.plugins.workbench-consent;
+              agentBus = lib.getExe agentsConfiguration.config.ch-ai-workbench.agent-bus.package;
+              agentBusSocket = agentsConfiguration.config.ch-ai-workbench.agent-bus.socket;
+              socketActivate = "${pkgs.systemd}/bin/systemd-socket-activate";
+              agentBusUnits = "${agentsConfiguration.config.home-files}/.config/systemd/user";
               codexSettings = agentsConfiguration.config.home.activation.codexSettings.data;
               opencodePluginDependencies =
                 agentsConfiguration.config.home.activation.opencodePluginDependencies.data;
@@ -1022,6 +1027,19 @@
                 test -S "$XDG_STATE_HOME/agent-sandbox/trusted/github-auth-token.sock" && break
                 sleep 0.1
               done
+              # The agent-bus daemon, outside every sandbox, on the
+              # socket the agent-bus module names, handed over the way
+              # the home-manager service's systemd socket hands it over.
+              test "$agentBusSocket" = "$XDG_STATE_HOME/agent-bus/socket"
+              grep -qx "ListenStream=$agentBusSocket" "$agentBusUnits/agent-bus.socket"
+              grep -q "^ExecStart=.*--socket $agentBusSocket daemon" "$agentBusUnits/agent-bus.service"
+              mkdir -p "$XDG_STATE_HOME/agent-bus"
+              "$socketActivate" -l "$agentBusSocket" "$agentBus" daemon --db "$XDG_STATE_HOME/agent-bus/bus.sqlite" &
+              for _ in $(seq 50); do
+                test -S "$agentBusSocket" && break
+                sleep 0.1
+              done
+              "$agentBus" --socket "$agentBusSocket" register --harness codex --session probe --label probe-session
               cp -r "$agentSandboxConfig" "$HOME/.config/agent-sandbox"
               run() { "$@"; }
               eval "$codexSettings"
@@ -1068,6 +1086,36 @@
               test ! -e native-network-escaped
               cmp .codex/config.toml "$TMPDIR/enrollment-before.toml"
               grep -q 'Network access to.*127.0.0.3.*was blocked' "$TMPDIR/requests.jsonl"
+
+              # The agent bus from inside each sandbox. A checkout
+              # enrolled with the agent-bus module reaches the daemon
+              # through the CLI and the MCP server; one without it is
+              # refused at the socket, by the sandboxes of Codex and
+              # OpenCode alike.
+              for checkout in bus nobus; do
+                git init -q "$TMPDIR/repo-$checkout"
+                echo "$agentBus" > "$TMPDIR/repo-$checkout/agent-bus-path"
+              done
+              agent-sandbox enroll mock agent-bus -C "$TMPDIR/repo-bus" --quiet
+              agent-sandbox enroll mock -C "$TMPDIR/repo-nobus" --quiet
+              cp ${self}/tests/agent-sandbox/agent-bus-probe.py "$TMPDIR/repo-bus/"
+              cp ${self}/tests/agent-sandbox/agent-bus-denied-probe.py "$TMPDIR/repo-nobus/"
+              (
+                cd "$TMPDIR/repo-bus"
+                timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:agent-bus-probe.py' < /dev/null
+                test -e agent-bus-probe-passed
+                agent-sandbox run opencode -- "$agentBus" ls < /dev/null > "$TMPDIR/opencode-bus.out"
+                grep -q probe-session "$TMPDIR/opencode-bus.out"
+              )
+              (
+                cd "$TMPDIR/repo-nobus"
+                timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:agent-bus-denied-probe.py' < /dev/null
+                test -e agent-bus-denied-passed
+                if agent-sandbox run opencode -- "$agentBus" --socket "$agentBusSocket" ls < /dev/null 2> "$TMPDIR/opencode-nobus.err"; then
+                  echo "OpenCode's sandbox reached the agent-bus socket without the module"; exit 1
+                fi
+                grep -q 'Permission denied' "$TMPDIR/opencode-nobus.err"
+              )
 
               git worktree add -qb native-linked ../linked HEAD
               cp ${self}/tests/agent-sandbox/native-worktree-probe.py ../linked/native-worktree-probe.py

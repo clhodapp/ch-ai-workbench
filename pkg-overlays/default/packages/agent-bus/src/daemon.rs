@@ -186,11 +186,44 @@ fn claim_socket(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The listening socket systemd passed, under socket activation: one file
+/// descriptor, 3, when `LISTEN_PID` names this process.
+///
+/// Socket activation matters for sandboxed clients. A Landlock grant binds
+/// the socket file that exists when a sandbox starts; with systemd holding
+/// the socket, that file exists before any session starts and never
+/// changes, however often the daemon restarts.
+fn activated_listener() -> Result<Option<std::os::unix::net::UnixListener>> {
+    use std::os::fd::FromRawFd;
+    let pid = std::env::var("LISTEN_PID")
+        .ok()
+        .and_then(|p| p.parse::<u32>().ok());
+    let fds = std::env::var("LISTEN_FDS")
+        .ok()
+        .and_then(|n| n.parse::<u32>().ok());
+    match (pid, fds) {
+        (Some(pid), Some(n)) if pid == std::process::id() && n >= 1 => {
+            if n > 1 {
+                bail!("systemd passed {n} sockets; the agent-bus daemon listens on one");
+            }
+            // SAFETY: under socket activation fd 3 is the listening socket
+            // systemd passed, owned by nothing else in this process.
+            let listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(3) };
+            listener.set_nonblocking(true)?;
+            Ok(Some(listener))
+        }
+        _ => Ok(None),
+    }
+}
+
 pub fn run(socket: &Path, db: &Path) -> Result<()> {
     let store = Store::open(db, crate::paths::machine())
         .with_context(|| format!("opening the store at {}", db.display()))?;
     let published = store.last_seq()?;
-    claim_socket(socket)?;
+    let activated = activated_listener()?;
+    if activated.is_none() {
+        claim_socket(socket)?;
+    }
     let (events, _) = broadcast::channel(1024);
     let shared = Arc::new(Shared {
         store: Mutex::new(store),
@@ -201,8 +234,12 @@ pub fn run(socket: &Path, db: &Path) -> Result<()> {
         .enable_all()
         .build()?;
     rt.block_on(async move {
-        let listener =
-            UnixListener::bind(socket).with_context(|| format!("binding {}", socket.display()))?;
+        let owns_socket = activated.is_none();
+        let listener = match activated {
+            Some(l) => UnixListener::from_std(l)?,
+            None => UnixListener::bind(socket)
+                .with_context(|| format!("binding {}", socket.display()))?,
+        };
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         loop {
             tokio::select! {
@@ -219,7 +256,10 @@ pub fn run(socket: &Path, db: &Path) -> Result<()> {
                 _ = term.recv() => break,
             }
         }
-        let _ = std::fs::remove_file(socket);
+        // A socket systemd holds stays in place for the next activation.
+        if owns_socket {
+            let _ = std::fs::remove_file(socket);
+        }
         Ok::<(), anyhow::Error>(())
     })
 }
