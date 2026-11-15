@@ -1779,9 +1779,20 @@ eglot-ensure; the unhooking must stay in the form the child evaluates."
 (defun ch-mcp-tests--bwrap-usable-p ()
   "Whether bwrap is present and can create a user namespace here.
 The jail needs one; the nix build sandbox denies it, so the lifecycle
-test skips there and runs for real outside it."
-  (and (executable-find "bwrap")
-       (eq 0 (call-process "bwrap" nil nil nil "--ro-bind" "/" "/" "true"))))
+test skips there and runs for real outside it.  The program is the
+one `parenting-spawn' runs."
+  (require 'parenting-parent)
+  (and (executable-find parenting-sandbox-program)
+       (eq 0 (call-process parenting-sandbox-program nil nil nil
+                           "--ro-bind" "/" "/" "true"))))
+
+(ert-deftest ch-mcp-tools-child-sandbox-program ()
+  "The configuration names bwrap by an absolute store path.
+The Emacs serving the agents may have no bwrap on `exec-path', and
+the bare-name default then fails every spawn of the child."
+  (require 'parenting-parent)
+  (should (file-name-absolute-p parenting-sandbox-program))
+  (should (file-executable-p parenting-sandbox-program)))
 
 (ert-deftest ch-mcp-tools-child-lifecycle ()
   "Spawn, bootstrap, reuse, and stop of the sandboxed child.

@@ -36,13 +36,25 @@ in
       # above them are in scope when the file compiles. The bare-name
       # defaults in the init find a program only if something else
       # installed one.
-      init = readInit "mcp-server.el" + ''
+      init =
+        readInit "mcp-server.el"
+        + ''
 
-        (setq ch-mcp-server-mermaid-command
-              (list "${lib.getExe merman}" "mmdc"))
-        (setq ch-mcp-server-betterleaks-command
-              (list "${lib.getExe pkgs.betterleaks}"))
-      '';
+          (setq ch-mcp-server-mermaid-command
+                (list "${lib.getExe merman}" "mmdc"))
+          (setq ch-mcp-server-betterleaks-command
+                (list "${lib.getExe pkgs.betterleaks}"))
+        ''
+        # The sandboxed child Emacs is spawned under bwrap, which
+        # parenting looks up on `exec-path' by default. The `defvar'
+        # declares the variable to the byte compiler, and the `defcustom'
+        # in parenting keeps this value when the package loads later.
+        + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+
+          (defvar parenting-sandbox-program)
+          (setq parenting-sandbox-program
+                "${lib.getExe pkgs.bubblewrap}")
+        '';
       packages = epkgs: [
         epkgs.mcp-server-lib
         epkgs.parenting
