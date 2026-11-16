@@ -97,10 +97,20 @@ real one. Each service module therefore does three things.
 The sandbox also has to stop reading the credential stores of the person.
 The tools keep them at `~/.config/gcloud` (the file
 `application_default_credentials.json`, and `credentials.db` of `gcloud`),
-`~/.config/gh/hosts.yml`, and `~/.aws/credentials`. The baseline of
-`agent-sandbox` denies reads of these paths for every enrolled checkout. A
-check on 2026-11-16 found `~/.config/gcloud/credentials.db` readable from
-inside an enrolled sandbox, so the baseline does not cover it yet.
+`~/.config/gh/hosts.yml`, and `~/.aws/credentials`. A check on 2026-11-16
+found `~/.config/gcloud/credentials.db` readable from inside an enrolled
+sandbox, so the baseline of `agent-sandbox` does not cover these paths
+today.
+
+Closing this gap changes what existing checkouts can read, so it is an
+opt-in. A home-manager option of `agent-sandbox` (for example
+`denyCredentialStores`) makes the baseline deny reads of the paths above.
+It is off by default at first, and each downstream configuration turns it
+on when it is ready. A later release changes the default to on, after the
+downstream configurations that use the sandbox have turned it on and
+listed any path that a tool of those configurations needs. The same
+staging applies to the other steps of this section: each is an option, and
+the default changes only after the downstreams have moved.
 
 A test in the style of `github-keyring-vm` verifies the rule. A VM holds a
 disposable real token in each place above and in the keyring. A sandboxed
