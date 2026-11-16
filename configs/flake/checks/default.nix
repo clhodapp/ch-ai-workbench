@@ -698,7 +698,7 @@
               jq -e '.env.AGENT_SANDBOX_UNIX_SOCKETS == "/run/agent.sock"' "$settings"
               jq -e '.env.AGENT_SANDBOX_DEVICES == ""' "$settings"
               shell=$(jq -r .env.SHELL "$settings")
-              case "$shell" in *agent-sandbox-socket-shell) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
+              case "$shell" in *agent-sandbox-socket-shell/bin/bash) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
               for cmd in fd gh git ssh agent-sandbox bwrap; do
                 PATH=$(jq -r .env.PATH "$settings") command -v "$cmd"
               done
