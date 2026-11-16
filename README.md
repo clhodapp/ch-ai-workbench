@@ -159,9 +159,9 @@ Design notes live under [`docs/development/`](docs/development/):
 is the design for running agent elisp in a sandboxed child Emacs that
 holds only copies of buffer text, instead of gating it in the live
 session. [`bot-identities.md`](docs/development/bot-identities.md) proposes
-a second dimension of the sandbox system: the identity that a checkout acts
-as at each service, through a broker that holds the credentials of the
-person.
+a second dimension of the sandbox system, which is the bot identity that a
+checkout assumes. A broker that holds the credentials of the person mints
+short-lived credentials for the accounts of the bot.
 
 ## Binary cache
 
