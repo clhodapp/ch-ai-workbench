@@ -127,8 +127,19 @@ which expires after an hour and reaches only the repositories where the app
 is installed. The broker applies that token to the GitHub requests of the
 sandbox, so `gh` and `git` never receive it. The `githubKeyring` mechanism
 of today hands the token of the person to `gh`, which does not meet that
-rule. How `gh` and `git` over HTTPS reach the broker has not been
-designed.
+rule.
+
+`gh` can talk to a GitHub Enterprise Server host. `GH_HOST` names the host,
+`GH_ENTERPRISE_TOKEN` holds the token for it, and the API is at
+`https://<host>/api/v3`. The `github` module would name a host that the
+broker serves, for example `github.local`, and give `gh` the placeholder
+`proxy-replace` as the token, as the `google` module does. `git` over HTTPS
+would reach the same host through a `url.<base>.insteadOf` rewrite of
+`https://github.com/`. Two things are open. The documentation of `gh` shows
+HTTPS only, so the broker would need a TLS endpoint for that host with a
+certificate that `gh` and `git` trust, and the name has to resolve inside
+the sandbox. A `.local` name may be sent to multicast DNS by the resolver
+before an entry of the hosts file, which has not been checked.
 
 ### Other services
 
