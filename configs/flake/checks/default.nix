@@ -1417,6 +1417,11 @@
               passes home-shorthand 'The user wrote "a home" in the title.'
               passes home-shorthand 'The user wrote “each home” in the title.'
 
+              fires elliptical-possessive 'The merge step is yours.'
+              fires elliptical-possessive 'The review is the owner’s.'
+              passes elliptical-possessive 'The change is on the project’s `main`.'
+              passes elliptical-possessive 'The fix is in the owner’s `lib`.'
+
               fires possessive-own "This uses home-manager's own mechanism."
               fires possessive-own 'The fix goes in its own commit.'
               fires possessive-own "The users' own keys are kept."
@@ -1586,6 +1591,12 @@
               [ -z "$(ghost 'A machine builds its profile. The machines never set nix.package.')" ]
               ctx=$(jq -cn --arg s "$session" --arg t "$PWD/transcript.jsonl" '{session_id: $s, transcript_path: $t, tool_name: "Edit", tool_input: {file_path: "docs/machines.md", old_string: "Each machine sets nix.package.", new_string: "A machine builds its profile. The machines never set nix.package."}, tool_response: {}}' | ${lib.getExe judgeHooks.tic-check-turn.package} | jq -r .hookSpecificOutput.additionalContext)
               grep -q -- '- arguing-with-ghosts sentence (judge 0.5): "The machines never set nix.package."' <<<"$ctx"
+
+              # The answer for the whole text does not decide a prose
+              # edit, which the sentence check above judges.
+              answers '{"arguing-with-ghosts": 0.95}'
+              res=$(jq -cn --arg s "$session" '{session_id: $s, tool_name: "Edit", tool_input: {file_path: "docs/machines.md", old_string: "The broker makes no decision. A machine builds its profile.", new_string: "A machine builds its profile."}}' | "$edit")
+              [ -z "$res" ]
 
               # The whole turn: a finding in a message written
               # between tool calls, and a final message that leaves

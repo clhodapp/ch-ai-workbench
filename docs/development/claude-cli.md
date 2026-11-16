@@ -513,8 +513,9 @@ hook).
 ### The judge (decision-model verdicts)
 
 The regex table catches only phrasings a pattern can find, and it
-cannot tell a real possessive from a dangling one when the noun sits in
-backticks or on the next line. The judge adds a System One decision
+cannot tell a real possessive from a dangling one when the noun sits on
+the next line. The matcher replaces each backtick span with the word
+CODE, so a possessive in front of a span is not read as dangling. The judge adds a System One decision
 model to the same cycle. A decision model reads a text (the `state`)
 and named yes/no questions and returns, for each question, the
 probability that the answer is yes, without generating text. The
@@ -628,10 +629,14 @@ output-style rule that needs judgment (seeded from
     8.0.
   - Coined phrases (`judge.coinage`): `claude-coinage-check` finds a
     "the <word>" phrase at its second use when the assistant used it
-    first, the user has typed none of its words in any session, and
-    earlier sessions rarely use it. The judge scores each candidate's
-    opacity (`lib/judge-checks.nix`); a phrase is judged once per
-    session. It is reported at 1.0 and pushes back at 1.4. The edit hook
+    first, the user has typed none of its words in any session,
+    earlier sessions rarely use it, and the main branch of the
+    repository of the session does not hold it (`repo.py`: `git grep` of
+    `origin/main`, or `main`, `master` or `HEAD`, as a whole word, in
+    the directory of the last transcript entry that names one). The
+    judge scores the opacity of each candidate
+    (`lib/judge-checks.nix`); a phrase is judged once per session. It
+    is reported at 1.0 and pushes back at 1.4. The edit hook
     (prose files) and the message hook (commit messages, pull request
     texts, reviews) run the same check on what they write, counting the
     write as a use, and deny it once at 1.2 (`writePushBackAbove`). A
@@ -670,7 +675,9 @@ output-style rule that needs judgment (seeded from
   carries the edit's replaced text (`old_string`) and the user's last
   three typed messages, read from the tail of `transcript_path`
   (entries of type `user` that are neither `isMeta`, which marks hook
-  feedback and skill bodies, nor `isSidechain`, nor tool results).
+  feedback and skill bodies, nor `isSidechain`, nor tool results). The
+  edit hook drops this answer for a prose write, because the sentence
+  check below judges ghosts in prose, and it keeps the answer for code.
 - **Ghost sentences in prose writes** (`judge.ghosts`). Asked about a
   whole write, the judge gives a single sentence that argues with
   ghosts a middling probability, so a long write with one such sentence
@@ -695,7 +702,8 @@ output-style rule that needs judgment (seeded from
   (`familiarity.py`) asks about candidates. These are the phrases about
   the work ("a phrasing review", "the next PR", "item 4", "29 of 29"),
   then the names the reference check would find, minus those the
-  replaced text already holds, up to 8. Each gets a score on the ladder
+  replaced text already holds and those the main branch of the
+  repository holds (`repo.py`), up to 8. Each gets a score on the ladder
   general programming, the ecosystem, this codebase, this conversation
   or task, and a noul asking whether the text says briefly what it is.
   A brief description exonerates a candidate. One at the last level

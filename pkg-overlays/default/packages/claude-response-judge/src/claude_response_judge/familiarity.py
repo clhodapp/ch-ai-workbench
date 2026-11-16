@@ -12,7 +12,8 @@ finds candidates first and asks about each one:
   way claude-reference-check finds them.
 
 A candidate that also appears in the text the write replaces is already in the file, so it is
-left out. Each remaining candidate, up to MAX_CANDIDATES, gets two questions in one request:
+left out. A name-like candidate that the main branch of the repository contains is a name a
+reader finds there, so it is left out too (repo.known); a phrase about the work is never exempt. Each remaining candidate, up to MAX_CANDIDATES, gets two questions in one request:
 `familiarity`, a score on the ladder general programming < the ecosystem < this codebase <
 this conversation or task, and `described`, a noul asking whether the text itself says briefly
 what the candidate is. A brief description exonerates a candidate. A candidate whose
@@ -37,7 +38,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import references
+from . import references, repo
 from .cli import first_answer, user_messages
 
 WORK = re.compile(
@@ -109,9 +110,12 @@ def check(
     replaced: str,
     conversation: list[str],
     max_candidates: int = MAX_CANDIDATES,
+    cwd: Path | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {"endpoint": None, "candidates": []}
-    found = candidates(text, replaced)
+    # A name that the repository already uses is a name a reader finds there. A phrase about
+    # the work ("the next PR") is never exempt, whatever the repository says.
+    found = [c for c in candidates(text, replaced) if WORK.fullmatch(c) or not repo.known(c, cwd)]
     if not found:
         return result
     section = config.get("familiarity", {})
@@ -164,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
         config = json.loads(args.config.read_text())
         replaced = args.replaced.read_text() if args.replaced else ""
         conversation = user_messages(args.transcript) if args.transcript else []
-        result = check(config, sys.stdin.read(), args.kind, replaced, conversation, args.max_candidates)
+        cwd = repo.session_cwd(args.transcript)
+        result = check(config, sys.stdin.read(), args.kind, replaced, conversation, args.max_candidates, cwd)
     except (OSError, ValueError):
         pass
     json.dump(result, sys.stdout)

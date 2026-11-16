@@ -14,7 +14,8 @@ A phrase is a candidate when all of these hold:
   phrase: never typed the two words together in this session);
 - at most RARE_SESSIONS sessions that started before this one show it in assistant text;
 - it is not an adjective, a plural, a verb after "the X", or the first word of one
-  two-word phrase that carries most of its uses.
+  two-word phrase that carries most of its uses;
+- the main branch of the repository the session works in does not contain it (repo.known).
 The other sessions come from the claude-session-index cache (an update is started in the
 background when it is behind); the current transcript is read from its tail only.
 
@@ -49,7 +50,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from . import sessions
+from . import repo, sessions
 from .cli import TRANSCRIPT_TAIL, USER_MESSAGES, cut, first_answer, transcript_entries, typed_prompt, user_wrote
 from .turn import earlier_messages
 
@@ -314,6 +315,9 @@ def check(
     block_at = float(section.get("writePushBackAbove" if write else "pushBackAbove", 1.4))
     report_at = float(section.get("reportAbove", 1.0))
     found = candidates(checked, before, written, data, transcript, long_session)
+    # A phrase that the repository already uses is vocabulary of the repository, not a coinage.
+    cwd = repo.session_cwd(transcript)
+    found = [c for c in found if not repo.known(c["phrase"], cwd)]
     texts = [*before, checked]
     names = backticked_names(texts)
     if write:

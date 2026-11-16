@@ -25,9 +25,12 @@
 # nothing when TEXT is clean.  A finding is either a regex entry that
 # matched or a dimension the judge is confident about:
 #   - A regex entry prints its name, the occurrence count, the rule,
-#     and up to three matching lines.  Code fences and backtick spans
-#     are removed before matching: quoted paths, commands, and output
-#     are not the model's prose.  An entry's ignore pattern, when it
+#     and up to three matching lines.  Code fences are removed and
+#     each backtick span becomes the word CODE before matching: quoted
+#     paths, commands, and output are not the model's prose, and the
+#     word keeps a possessive in front of a span from ending the
+#     clause ("the project's `main`" stays "the project's CODE").
+#     An entry's ignore pattern, when it
 #     is set, removes more text before that entry is matched.  Patterns
 #     are GNU grep EREs, matched case-insensitively.
 #   - A dimension with pushBack set that the judge put at or above
@@ -55,7 +58,7 @@ tic_findings() {
   local text=$1 verdict=${2:-} kind=${3:-reply} prose matched name pattern ignore rule hits count lines at
   # The backticks are literal markdown fence and span markers.
   # shellcheck disable=SC2016
-  prose=$(sed -e '/^[[:space:]]*```/,/^[[:space:]]*```/d' -e 's/`[^`]*`//g' <<<"$text")
+  prose=$(sed -e '/^[[:space:]]*```/,/^[[:space:]]*```/d' -e 's/`[^`]*`/CODE/g' <<<"$text")
   while IFS= read -r name && IFS= read -r pattern && IFS= read -r ignore && IFS= read -r rule; do
     # An entry's ignore pattern removes text (quotations, compound
     # nouns) from the prose this entry alone is matched against.  The

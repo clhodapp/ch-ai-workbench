@@ -48,6 +48,13 @@ if [[ $target == *.* ]] &&
 fi
 verdict=$(tic_verdict "$kind" "$text" "$(field '.tool_input.old_string // .tool_input["old-string"]')" "$(field '.transcript_path')")
 
+# Ghosts in a prose write are judged one sentence at a time below
+# (tic_write_ghosts), so the verdict of a prose write leaves out the
+# answer for the whole text.
+if [ "$kind" = prose ] && [ -n "$verdict" ]; then
+  trimmed=$(jq -c 'del(.answers["arguing-with-ghosts"])' <<<"$verdict" 2>/dev/null) && verdict=$trimmed
+fi
+
 findings=$(tic_findings "$text" "$verdict" "$kind")
 
 # A prose file (a doc, a memory note) is where a coined phrase leaves
