@@ -760,8 +760,8 @@ in
       '';
       description = ''
         Phrasings the tic-check Stop hook (hooks.tic-check) looks for
-        in every finished message, with code fences and backtick
-        spans removed first. On a match the hook blocks the stop with
+        in every finished message, with code fences removed and each
+        backtick span replaced by the word CODE first. On a match the hook blocks the stop with
         a reason headed "tic-check: check" (what the checker emits
         whenever it fires, however confident it is) that hands the
         model each matching line with the entry's rule and asks for a

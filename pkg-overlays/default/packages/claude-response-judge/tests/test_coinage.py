@@ -145,6 +145,19 @@ class CoinageTest(unittest.TestCase):
             ["score the replies for readability", "how does it look"],
         )
 
+    def test_a_phrase_on_the_main_branch_is_not_a_coinage(self):
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+        (repo / "notes.md").write_text("The ladder lists the levels.\n")
+        for args in (["init", "-q", "-b", "main"], ["add", "notes.md"], ["commit", "-q", "-m", "notes"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=env)
+        stub = self.stub(answers=OPAQUE)
+        path = self.current({**say("Checking the tarball first."), "cwd": str(repo)}, tool_use())
+        out = self.run_check(path, "Each reply sits on the ladder.", endpoints=[endpoint("local", stub.url)])
+        self.assertEqual(out["candidates"], [])
+        self.assertEqual(stub.requests, [])
+
     def test_report_and_none_levels(self):
         for probs, action in (([0.1, 0.8, 0.1], "report"), ([0.8, 0.2, 0.0], "none")):
             stub = self.stub(answers={"name-opacity": probs})

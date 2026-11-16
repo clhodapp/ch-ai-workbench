@@ -2,6 +2,7 @@
 {
   python3Packages,
   lib,
+  git,
 }:
 python3Packages.buildPythonApplication {
   pname = "claude-response-judge";
@@ -11,6 +12,16 @@ python3Packages.buildPythonApplication {
   src = lib.cleanSource ./.;
 
   build-system = [ python3Packages.setuptools ];
+
+  # The coinage and familiarity checks ask git whether the repository of
+  # the session already uses a name (src/claude_response_judge/repo.py).
+  makeWrapperArgs = [
+    "--prefix"
+    "PATH"
+    ":"
+    (lib.makeBinPath [ git ])
+  ];
+  nativeCheckInputs = [ git ];
 
   checkPhase = ''
     runHook preCheck

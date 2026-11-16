@@ -58,14 +58,15 @@ class CommandTest(unittest.TestCase):
         self.stubs.append(stub)
         return stub
 
-    def run_check(self, text, endpoints, kind="message"):
+    def run_check(self, text, endpoints, kind="message", transcript=None):
         config = self.tmp / "config.json"
         config.write_text(json.dumps({"endpoints": endpoints, "familiarity": {"pushBackAbove": 0.7, "reportAbove": 0.4, "describedBelow": 0.8}}))
         env = dict(os.environ, PYTHONPATH=str(SRC))
         env.pop("http_proxy", None)
         env.pop("HTTP_PROXY", None)
+        extra = ["--transcript", str(transcript)] if transcript else []
         res = subprocess.run(
-            [sys.executable, "-m", "claude_response_judge.familiarity", "--config", str(config), "--kind", kind],
+            [sys.executable, "-m", "claude_response_judge.familiarity", "--config", str(config), "--kind", kind, *extra],
             input=text, capture_output=True, text=True, env=env, timeout=30, check=False,
         )
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -90,6 +91,25 @@ class CommandTest(unittest.TestCase):
         stub = self.stub(answers={"familiarity": CODEBASE, "described": 0.1})
         out = self.run_check("fix: `mkLib` takes `pkgSets`", [endpoint("local", stub.url)], kind="prose")
         self.assertEqual({c["action"] for c in out["candidates"]}, {"none"})
+
+    def test_a_name_on_the_main_branch_is_not_asked_about(self):
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+        for args in (["init", "-q", "-b", "main"], ["commit", "-q", "--allow-empty", "-m", "start"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=env)
+        (repo / "notes.md").write_text("The software-dev folder holds copies of prod.\n")
+        for args in (["add", "notes.md"], ["commit", "-q", "-m", "notes"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, env=env)
+        transcript = self.tmp / "t.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "cwd": str(repo), "message": {"role": "user", "content": "go"}}) + "\n")
+        stub = self.stub(answers={"familiarity": CHAT, "described": 0.2})
+        text = "docs: describe `software-dev` and `brokerage`"
+        out = self.run_check(text, [endpoint("local", stub.url)], kind="prose", transcript=transcript)
+        self.assertEqual([c["candidate"] for c in out["candidates"]], ["brokerage"])
+        # Without the transcript there is no repository to ask, so both names are asked about.
+        out = self.run_check(text, [endpoint("local", stub.url)], kind="prose")
+        self.assertEqual({c["candidate"] for c in out["candidates"]}, {"software-dev", "brokerage"})
 
     def test_no_endpoint(self):
         out = self.run_check("docs: rewrite what a phrasing review flagged", [endpoint("local", closed_port_url())])
