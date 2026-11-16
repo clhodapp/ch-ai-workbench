@@ -64,9 +64,8 @@ The pieces:
   example `agent-sandbox bot NAME`, would write the setting and sync the
   checkout.
 
-The broker makes no decision at run time. What a bot can do is decided by
-each service, through the permissions of its account, which the person
-defines in code.
+What a bot can do is decided by each service, through the permissions of
+its account, which the person defines in code.
 
 ## Providers
 
