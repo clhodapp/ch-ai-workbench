@@ -129,17 +129,26 @@ sandbox, so `gh` and `git` never receive it. The `githubKeyring` mechanism
 of today hands the token of the person to `gh`, which does not meet that
 rule.
 
-`gh` can talk to a GitHub Enterprise Server host. `GH_HOST` names the host,
-`GH_ENTERPRISE_TOKEN` holds the token for it, and the API is at
-`https://<host>/api/v3`. The `github` module would name a host that the
-broker serves, for example `github.local`, and give `gh` the placeholder
-`proxy-replace` as the token, as the `google` module does. `git` over HTTPS
-would reach the same host through a `url.<base>.insteadOf` rewrite of
-`https://github.com/`. Two things are open. The documentation of `gh` shows
-HTTPS only, so the broker would need a TLS endpoint for that host with a
-certificate that `gh` and `git` trust, and the name has to resolve inside
-the sandbox. A `.local` name may be sent to multicast DNS by the resolver
-before an entry of the hosts file, which has not been checked.
+The source of `gh` (`internal/ghinstance/host.go` in `cli/cli`, and
+`pkg/auth/auth.go` in `cli/go-gh`) treats the host `github.localhost` as a
+local development instance. For it, `gh` speaks plain HTTP: the web host
+is `http://github.localhost/`, the REST API is `http://api.github.localhost/`
+with no `/api/v3`, GraphQL is `http://api.github.localhost/graphql`, and
+the token comes from `GH_TOKEN`. Any other unknown host name is classified
+as GitHub Enterprise Server, which means HTTPS, `/api/v3` and
+`GH_ENTERPRISE_TOKEN`, so the module would use `github.localhost`.
+
+The `github` module would set `GH_HOST=github.localhost` and give `gh` the
+placeholder `proxy-replace` as `GH_TOKEN`, as the `google` module does.
+`git` over HTTP would reach the same host through a `url.<base>.insteadOf`
+rewrite of `https://github.com/`. Three things are open. A host name for
+`gh` cannot carry a port, so the broker has to answer on port 80 of the
+loopback address that `github.localhost` and `api.github.localhost` resolve
+to inside the sandbox. Whether the sandbox can bind that port, and whether
+its resolver maps those names to loopback, has not been checked. The source
+shows `HostPrefix` and `RESTPrefix` agreeing on `github.localhost` itself and
+disagreeing for a subdomain such as `foo.github.localhost`, so the module
+should use the exact name.
 
 ### Other services
 
