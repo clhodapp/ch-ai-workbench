@@ -67,6 +67,15 @@ The pieces:
 What a bot can do is decided by each service, through the permissions of
 its account, which the person defines in code.
 
+The agent never receives a token, whether of the person or of the bot. A
+token goes from the broker to the service and stays out of the environment,
+the files and the responses that the sandbox sees. Two consequences follow.
+The broker refuses every request to an endpoint that issues credentials
+(for Google `iamcredentials.googleapis.com`, `sts.googleapis.com` and the
+token endpoint of OAuth), whatever the permissions of the bot say, because
+a successful call would return a token. The broker also keeps tokens out of
+its logs.
+
 ## Providers
 
 ### Google Cloud
@@ -115,10 +124,11 @@ header of every request with the token that it minted.
 The account of a bot at GitHub is a GitHub App. The broker signs a short
 assertion with the key of the app and trades it for an installation token,
 which expires after an hour and reaches only the repositories where the app
-is installed. The `github` module gives the sandboxed `gh` that token
-instead of the token of the person. The mechanism is the one that
-`githubKeyring` uses today, with a different source for the token. The
-details of this provider are not designed yet.
+is installed. The broker applies that token to the GitHub requests of the
+sandbox, so `gh` and `git` never receive it. The `githubKeyring` mechanism
+of today hands the token of the person to `gh`, which does not meet that
+rule. How `gh` and `git` over HTTPS reach the broker has not been
+designed.
 
 ### Other services
 
