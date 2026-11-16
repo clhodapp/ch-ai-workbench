@@ -76,6 +76,39 @@ token endpoint of OAuth), whatever the permissions of the bot say, because
 a successful call would return a token. The broker also keeps tokens out of
 its logs.
 
+## Keeping real credentials out of reach
+
+A tool that asks for a token must get the placeholder `proxy-replace` and
+nothing else, and no file or command that the sandbox can reach may hold a
+real one. Each service module therefore does three things.
+
+- **It sets the placeholder where the tool looks first.** `GH_TOKEN` for
+  `gh`, and for Google the variables of the Google clients (for `gcloud`,
+  `CLOUDSDK_AUTH_ACCESS_TOKEN`).
+- **It provides a configuration directory with the placeholder in it.** The
+  module sets `GH_CONFIG_DIR` and `CLOUDSDK_CONFIG` to directories in the
+  checkout that hold only the placeholder. An agent that unsets the
+  environment variable still gets the placeholder from `gh auth token` and
+  `gcloud auth print-access-token`, and not the credentials of the person.
+- **It grants no path to a real credential.** The `githubKeyring` socket,
+  which returns the token of the person, is not granted. The composer adds
+  the sockets of the bot of the checkout and no others.
+
+The sandbox also has to stop reading the credential stores of the person.
+The tools keep them at `~/.config/gcloud` (the file
+`application_default_credentials.json`, and `credentials.db` of `gcloud`),
+`~/.config/gh/hosts.yml`, and `~/.aws/credentials`. The baseline of
+`agent-sandbox` denies reads of these paths for every enrolled checkout. A
+check on 2026-11-16 found `~/.config/gcloud/credentials.db` readable from
+inside an enrolled sandbox, so the baseline does not cover it yet.
+
+A test in the style of `github-keyring-vm` verifies the rule. A VM holds a
+disposable real token in each place above and in the keyring. A sandboxed
+checkout runs `gh auth token` (with and without `GH_TOKEN`, and with
+`--hostname github.com`), `gcloud auth print-access-token`, `env`, and a
+search of every readable file. The test passes only if the real tokens
+appear in no output and no readable file.
+
 ## Providers
 
 ### Google Cloud
