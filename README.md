@@ -158,7 +158,9 @@ Design notes live under [`docs/development/`](docs/development/):
 [`agent-elisp-isolation.md`](docs/development/agent-elisp-isolation.md)
 is the design for running agent elisp in a sandboxed child Emacs that
 holds only copies of buffer text, instead of gating it in the live
-session.
+session. [`google-bot-identities.md`](docs/development/google-bot-identities.md)
+proposes a broker that gives the sandbox of a checkout a Google Cloud
+service account to act as, without a credential of the person.
 
 ## Binary cache
 
