@@ -112,6 +112,25 @@ listed any path that a tool of those configurations needs. The same
 staging applies to the other steps of this section: each is an option, and
 the default changes only after the downstreams have moved.
 
+The option has two forms, and a downstream configuration can use either.
+
+- **A list of credential stores.** `denyCredentialStores` takes a list of
+  paths, with the stores named above as the default content. The person adds
+  the stores of other tools, such as `~/.ssh`, `~/.netrc`, `~/.docker`,
+  `~/.kube` or the password files of a browser. A list names only the
+  stores that someone thought of, so it closes the known gaps.
+- **A list of the places that the agent may read.** A second option makes
+  reads under `$HOME` and under the other places that tend to hold
+  credentials (`/etc/ssh`, `/root`, the runtime directory of the user) deny
+  by default, and allows the paths in a list. The list starts from the read
+  paths that the chosen modules already declare, plus the checkout, and the
+  person extends it. This closes the unknown gaps, and its cost is that each
+  tool that reads a dotfile has to be named by a module or by the person.
+
+The first form is the first step, since it changes little. The second is the
+end state, and it moves in the same way: an option, off by default, turned
+on by each downstream configuration before the default changes.
+
 A test in the style of `github-keyring-vm` verifies the rule. A VM holds a
 disposable real token in each place above and in the keyring. A sandboxed
 checkout runs `gh auth token` (with and without `GH_TOKEN`, and with
