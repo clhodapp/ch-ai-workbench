@@ -138,6 +138,28 @@ checkout runs `gh auth token` (with and without `GH_TOKEN`, and with
 search of every readable file. The test passes only if the real tokens
 appear in no output and no readable file.
 
+## Compatibility for downstream configurations
+
+A downstream configuration that sets none of the new options must evaluate
+and sandbox as it does before the change. The code has to keep four rules.
+
+- **The sidecar field is optional.** A `binding.json` without a bot setting
+  reads as it does today, and the setting matters only to a checkout that
+  chose a service module.
+- **The `github` module keeps its behavior.** Today it hands the token of
+  the person to `gh` through the keyring broker. The `github.localhost`
+  behavior is a separate module, or an option of the module that is off
+  by default.
+- **Options are off by default** until the defaults change, and the change
+  is announced in the release notes of the repository.
+- **A new flake input needs no setting.** If the broker shares code with
+  another repository, a downstream locks that input through the normal
+  convergence.
+
+While an option is off, `agent-sandbox status` reports which closing steps
+the configuration has not turned on. A running session keeps its sandbox
+rules until it restarts, as it does for any other change.
+
 ## Providers
 
 ### Google Cloud
