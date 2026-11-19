@@ -3,7 +3,7 @@
 This document proposes a second dimension of the sandbox system of
 [`agent-sandbox.md`](agent-sandbox.md). Sandbox modules say what a checkout
 can reach: which tools, domains, sockets and paths. A bot identity says who
-the checkout is while it uses them. Nothing in this document is built, and
+the agent acts as while it uses them. Nothing in this document is built, and
 the open questions at the end decide how much code it needs.
 
 A **bot identity** is one that the coding agents of a person assume, and a
