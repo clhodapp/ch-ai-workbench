@@ -8,8 +8,9 @@ the open questions at the end decide how much code it needs.
 
 A **bot identity** is one that the coding agents of a person assume, and a
 broker manages it. It is one entity with a name, such as `software-dev`,
-and it can have a Google service account, a GitHub App, and an account of
-any other kind that the person declares. The agent proves nothing about
+and it can have a Google account, a GitHub account, and an account of any
+other kind that the person declares. An account is a service account or an
+app that the person grants to the bot identity, or the account of the person. The agent proves nothing about
 itself. The person assigns a bot identity to a checkout, the agents that run
 in the checkout act as that identity, and the broker mints short-lived
 credentials for its accounts. The agent never holds a credential of the
@@ -37,10 +38,13 @@ The sidecar is the file `.agent-sandbox/binding.json` in each enrolled
 checkout. It records the enrollment: the chosen modules, their deadlines,
 the declined modules and the last settings applied.
 
-The two settings are independent. The `google` module lets the agent reach
-Google, and the bot identity supplies the Google service account that the
-agent acts as. An agent whose bot identity has no Google service account
-has no access to Google, even in a checkout with the `google` module. A
+The two settings answer different questions, and an agent needs both to
+use Google. The `google` module lets the agent reach Google, and the bot
+identity supplies the Google account that the agent acts as: a service
+account that the person can impersonate, or the account of the person. An
+agent in a checkout without the module cannot reach Google, whatever its
+bot identity holds, and an agent whose bot identity has no Google account
+has no access to Google even with the module. A
 checkout with no bot identity setting gives its agents the default bot
 identity, which the person declares and which should be the least powerful
 one. Both settings are edits that the person makes outside the sandbox, and
@@ -189,7 +193,8 @@ rules until it restarts, as it does for any other change.
 ### Google Cloud
 
 The Google account of a bot identity is a service account that the person
-can impersonate. The Application Default Credentials (ADC) of the person,
+can impersonate, or the account of the person. The rest of this section
+describes the service account. The Application Default Credentials (ADC) of the person,
 which `gcloud` and the client libraries find on the machine, call
 `generateAccessToken` for the service account, which needs the Service
 Account Token Creator role on it. The call returns a token that lasts up to
