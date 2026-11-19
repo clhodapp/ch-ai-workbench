@@ -30,7 +30,7 @@ A checkout has two settings that concern the services it uses:
 | Dimension | Question | Where it lives | Example |
 |---|---|---|---|
 | Modules | What can this checkout reach? | The chosen modules in the sidecar | `google`, `github` |
-| Bot identity | Who is this checkout? | One setting in the sidecar | `bot = "software-dev"` |
+| Bot identity | Who does the agent act as? | One setting in the sidecar | `bot = "software-dev"` |
 
 The sidecar is the file `.agent-sandbox/binding.json` in each enrolled
 checkout. It records the enrollment: the chosen modules, their deadlines,
@@ -280,7 +280,7 @@ filter adds a check that does not depend on the permissions being right.
 
 ## What the broker does not cover
 
-- A checkout is as strong as the permissions of the accounts of its bot.
+- An agent is as strong as the permissions of the accounts of its bot.
   The code that defines the accounts is where to review them.
 - The credentials of the person stay on the machine outside the sandbox. A
   process with access to them can mint tokens without the broker.
