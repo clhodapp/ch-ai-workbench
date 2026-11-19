@@ -8,10 +8,10 @@ the open questions at the end decide how much code it needs.
 
 A **bot identity** is one that the coding agents of a person assume, and a
 broker manages it. It is one entity with a name, such as `software-dev`,
-and it holds an account at each service that it uses: a service account at
-Google Cloud, an app at GitHub. The agent proves nothing about itself. The
-person assigns a bot identity to a checkout, and the broker mints
-short-lived credentials for the accounts of that bot. The agent never holds
+and it can have a Google service account, a GitHub App, and an account of
+any other kind that the person declares. The agent proves nothing about
+itself. The person assigns a bot identity to a checkout, and the broker
+mints short-lived credentials for the accounts of that bot. The agent never holds
 a credential of the person.
 
 ## Problem
@@ -36,19 +36,18 @@ The sidecar is the file `.agent-sandbox/binding.json` in each enrolled
 checkout. It records the enrollment: the chosen modules, their deadlines,
 the declined modules and the last settings applied.
 
-The two settings are independent. A module lets the checkout reach a
-service, and the bot decides which account it uses there. If the bot has
-no account at the service of a chosen module, the checkout has no access
-there. A checkout with no bot setting gets the default bot, which the
+The two settings are independent. The `google` module lets the checkout
+reach Google, and the bot supplies the Google service account that it uses.
+A bot without a Google service account gives a checkout with the `google`
+module no access to Google. A checkout with no bot setting gets the default bot, which the
 person declares and which should be the least powerful one. Both settings
 are edits that the person makes outside the sandbox, and the sidecar is
 write-guarded, so the agent cannot change either.
 
 The pieces:
 
-- **The declaration** is a home-manager option. It names each bot and the
-  account that the bot holds at each service, for example the service
-  account of its Google identity.
+- **The declaration** is a home-manager option. It names each bot and its
+  accounts, for example a Google service account and a GitHub App.
 - **The broker** is a user service that runs outside every sandbox. It
   holds what the person has (the Application Default Credentials for
   Google, an app key for GitHub) and listens on one unix socket for each
@@ -56,10 +55,9 @@ The pieces:
   started like a trusted executable by a systemd socket unit. It mints a
   short-lived credential for the account of the socket and applies it to
   the requests that arrive there.
-- **Providers** are the adapters of the broker, one for each service. A
-  provider knows how to mint a credential for an account of its service
-  and how to apply it. Google is the first provider, and GitHub is the
-  second.
+- **Providers** are the adapters of the broker. Google is the first and
+  GitHub is the second. A provider knows how to mint a credential for its
+  kind of account and how to apply it.
 - **The composer** (`compose.py`) reads the bot setting of the sidecar. For each
   chosen module that has a provider, it adds the socket of the account of
   that bot to the `allowUnixSockets` of the checkout, and no other account
@@ -82,7 +80,7 @@ its logs.
 
 ## A bot that acts as the person
 
-A bot can hold the account of the person at a service. The broker then
+A bot can use the accounts of the person. The broker then
 applies the token of the person to the requests of the sandbox, with no
 impersonation and no narrowing. The agent acts fully as the person and
 never sees the credential. The person declares such a bot like any other,
