@@ -80,6 +80,25 @@ token endpoint of OAuth), whatever the permissions of the bot say, because
 a successful call would return a token. The broker also keeps tokens out of
 its logs.
 
+## A bot that acts as the person
+
+A bot can hold the account of the person at a service. The broker then
+applies the token of the person to the requests of the sandbox, with no
+impersonation and no narrowing. The agent acts fully as the person and
+never sees the credential. The person declares such a bot like any other,
+and chooses it for a checkout with the same edit of the sidecar. It is never
+the default bot.
+
+Two rules matter most for this bot.
+
+- **Credential-creating calls.** The broker refuses the methods that create
+  a credential as well as the endpoints that issue tokens, for example the
+  creation of a service account key in the IAM API of Google, because a key
+  is a long-lived credential that the agent would then hold.
+- **Audit.** A service records requests from this bot as the person. The log
+  of the broker is the only record that tells them apart, so it names the
+  checkout and the bot on every request.
+
 ## Keeping real credentials out of reach
 
 A tool that asks for a token must get the placeholder `proxy-replace` and
