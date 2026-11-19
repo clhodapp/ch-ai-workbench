@@ -29,8 +29,12 @@ A checkout has two settings that concern the services it uses:
 
 | Dimension | Question | Where it lives | Example |
 |---|---|---|---|
-| Modules | What can this checkout reach? | The chosen modules of the sidecar | `google`, `github` |
-| Bot identity | Who is this checkout? | One setting of the sidecar | `bot = "software-dev"` |
+| Modules | What can this checkout reach? | The chosen modules in the sidecar | `google`, `github` |
+| Bot identity | Who is this checkout? | One setting in the sidecar | `bot = "software-dev"` |
+
+The sidecar is the file `.agent-sandbox/binding.json` in each enrolled
+checkout. It records the enrollment: the chosen modules, their deadlines,
+the declined modules and the last settings applied.
 
 The two settings are independent. A module lets the checkout reach a
 service, and the bot decides which account it uses there. If the bot has
