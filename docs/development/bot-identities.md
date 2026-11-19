@@ -19,7 +19,7 @@ a credential of the person.
 Today a checkout that reaches a service reaches it as the person. The
 GitHub module, for example, gives the sandboxed `gh` the token of the
 person through a trusted executable. That credential can do everything the
-person can do, and the modules offer no way to say less. A checkout should
+person can do, and the sandbox cannot restrict it to a part of that. A checkout should
 act with the narrowest identity that its work needs, and the person should
 be able to choose that identity for each checkout.
 
