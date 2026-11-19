@@ -10,18 +10,19 @@ A **bot identity** is one that the coding agents of a person assume, and a
 broker manages it. It is one entity with a name, such as `software-dev`,
 and it can have a Google service account, a GitHub App, and an account of
 any other kind that the person declares. The agent proves nothing about
-itself. The person assigns a bot identity to a checkout, and the broker
-mints short-lived credentials for the accounts of that bot. The agent never holds
-a credential of the person.
+itself. The person assigns a bot identity to a checkout, the agents that run
+in the checkout act as that identity, and the broker mints short-lived
+credentials for its accounts. The agent never holds a credential of the
+person.
 
 ## Problem
 
 Today a checkout that reaches a service reaches it as the person. The
 GitHub module, for example, gives the sandboxed `gh` the token of the
 person through a trusted executable. That credential can do everything the
-person can do, and the sandbox cannot restrict it to a part of that. A checkout should
-act with the narrowest identity that its work needs, and the person should
-be able to choose that identity for each checkout.
+person can do, and the sandbox cannot restrict it to a part of that. An
+agent should act as the narrowest identity that its work needs, and the
+person should be able to choose that identity for each checkout.
 
 ## Design
 
@@ -36,66 +37,68 @@ The sidecar is the file `.agent-sandbox/binding.json` in each enrolled
 checkout. It records the enrollment: the chosen modules, their deadlines,
 the declined modules and the last settings applied.
 
-The two settings are independent. The `google` module lets the checkout
-reach Google, and the bot supplies the Google service account that it uses.
-A bot without a Google service account gives a checkout with the `google`
-module no access to Google. A checkout with no bot setting gets the default bot, which the
-person declares and which should be the least powerful one. Both settings
-are edits that the person makes outside the sandbox, and the sidecar is
-write-guarded, so the agent cannot change either.
+The two settings are independent. The `google` module lets the agent reach
+Google, and the bot identity supplies the Google service account that the
+agent acts as. An agent whose bot identity has no Google service account
+has no access to Google, even in a checkout with the `google` module. A
+checkout with no bot identity setting gives its agents the default bot
+identity, which the person declares and which should be the least powerful
+one. Both settings are edits that the person makes outside the sandbox, and
+the sidecar is write-guarded, so the agent cannot change either.
 
 The pieces:
 
-- **The declaration** is a home-manager option. It names each bot and its
-  accounts, for example a Google service account and a GitHub App.
+- **The declaration** is a home-manager option. It names each bot identity
+  and its accounts, for example a Google service account and a GitHub App.
 - **The broker** is a user service that runs outside every sandbox. It
   holds what the person has (the Application Default Credentials for
   Google, an app key for GitHub) and listens on one unix socket for each
-  account of each bot, under `$XDG_STATE_HOME/agent-sandbox/trusted/`,
-  started like a trusted executable by a systemd socket unit. It mints a
-  short-lived credential for the account of the socket and applies it to
-  the requests that arrive there.
+  account of each bot identity, under
+  `$XDG_STATE_HOME/agent-sandbox/trusted/`, started like a trusted
+  executable by a systemd socket unit. It mints a short-lived credential
+  for the account of the socket and applies it to the requests that arrive
+  there.
 - **Providers** are the adapters of the broker. Google is the first and
   GitHub is the second. A provider knows how to mint a credential for its
   kind of account and how to apply it.
-- **The composer** (`compose.py`) reads the bot setting of the sidecar. For each
-  chosen module that has a provider, it adds the socket of the account of
-  that bot to the `allowUnixSockets` of the checkout, and no other account
-  socket, so the Landlock narrowing of the sandbox keeps the checkout away
-  from the accounts of other bots. A new verb of `agent-sandbox`, for
-  example `agent-sandbox bot NAME`, would write the setting and sync the
-  checkout.
+- **The composer** (`compose.py`) reads the bot identity setting of the
+  sidecar. For each chosen module that has a provider, it adds the socket
+  of the account of that identity to the `allowUnixSockets` of the
+  checkout, and no other account socket, so the Landlock narrowing of the
+  sandbox keeps the checkout away from the accounts of other bot
+  identities. A new verb of `agent-sandbox`, for example `agent-sandbox bot
+  NAME`, would write the setting and sync the checkout.
 
-What a bot can do is decided by each service, through the permissions of
-its account, which the person defines in code.
+What a bot identity can do is decided by the service that owns the account,
+through the permissions of the account, which the person defines in code.
 
-The agent never receives a token, whether of the person or of the bot. A
-token goes from the broker to the service and stays out of the environment,
-the files and the responses that the sandbox sees. Two consequences follow.
-The broker refuses every request to an endpoint that issues credentials
-(for Google `iamcredentials.googleapis.com`, `sts.googleapis.com` and the
-token endpoint of OAuth), whatever the permissions of the bot say, because
-a successful call would return a token. The broker also keeps tokens out of
-its logs.
+The agent never receives a token, whether of the person or of a bot
+identity. A token goes from the broker to the service and stays out of the
+environment, the files and the responses that the sandbox sees. Two
+consequences follow. The broker refuses every request to an endpoint that
+issues credentials (for Google `iamcredentials.googleapis.com`,
+`sts.googleapis.com` and the token endpoint of OAuth), whatever the
+permissions of the bot identity say, because a successful call would return
+a token. The broker also keeps tokens out of its logs.
 
-## A bot that acts as the person
+## A bot identity that is the person
 
-A bot can use the accounts of the person. The broker then
-applies the token of the person to the requests of the sandbox, with no
+A bot identity can use the accounts of the person. The broker then applies
+the token of the person to the requests of the sandbox, with no
 impersonation and no narrowing. The agent acts fully as the person and
-never sees the credential. The person declares such a bot like any other,
-and chooses it for a checkout with the same edit of the sidecar. It is never
-the default bot.
+never sees the credential. The person declares such a bot identity like any
+other, and assigns it to a checkout with the same edit of the sidecar. It
+is never the default bot identity.
 
-Two rules matter most for this bot.
+Two rules matter most for this bot identity.
 
 - **Credential-creating calls.** The broker refuses the methods that create
   a credential as well as the endpoints that issue tokens, for example the
   creation of a service account key in the IAM API of Google, because a key
   is a long-lived credential that the agent would then hold.
-- **Audit.** A service records requests from this bot as the person. The log
-  of the broker is the only record that tells them apart, so it names the
-  checkout and the bot on every request.
+- **Audit.** A service records requests from this bot identity as the
+  person. The log of the broker is the only record that tells them apart,
+  so it names the checkout and the bot identity on every request.
 
 ## Keeping real credentials out of reach
 
@@ -113,7 +116,7 @@ real one. Each service module therefore does three things.
   `gcloud auth print-access-token`, and not the credentials of the person.
 - **It grants no path to a real credential.** The `githubKeyring` socket,
   which returns the token of the person, is not granted. The composer adds
-  the sockets of the bot of the checkout and no others.
+  the sockets of the bot identity of the checkout and no others.
 
 The sandbox also has to stop reading the credential stores of the person.
 The tools keep them at `~/.config/gcloud` (the file
@@ -164,9 +167,9 @@ appear in no output and no readable file.
 A downstream configuration that sets none of the new options must evaluate
 and sandbox as it does before the change. The code has to keep four rules.
 
-- **The sidecar field is optional.** A `binding.json` without a bot setting
-  reads as it does today, and the setting matters only to a checkout that
-  chose a service module.
+- **The sidecar field is optional.** A `binding.json` without a bot identity
+  setting reads as it does today, and the setting matters only to a
+  checkout that chose a service module.
 - **The `github` module keeps its behavior.** Today it hands the token of
   the person to `gh` through the keyring broker. The `github.localhost`
   behavior is a separate module, or an option of the module that is off
@@ -185,7 +188,7 @@ rules until it restarts, as it does for any other change.
 
 ### Google Cloud
 
-The account of a bot at Google Cloud is a service account that the person
+The Google account of a bot identity is a service account that the person
 can impersonate. The Application Default Credentials (ADC) of the person,
 which `gcloud` and the client libraries find on the machine, call
 `generateAccessToken` for the service account, which needs the Service
@@ -193,8 +196,8 @@ Account Token Creator role on it. The call returns a token that lasts up to
 an hour, and the broker mints a new one when the old one nears its end.
 
 The infrastructure code defines the service accounts and their IAM
-bindings, and the declaration of the bot names them. A binding can restrict
-a service account to a folder, a project or a resource tag. The
+bindings, and the declaration of the bot identity names them. A binding can
+restrict a service account to a folder, a project or a resource tag. The
 organization `hodapp.cloud` has four top-level folders:
 
 ```
@@ -210,9 +213,9 @@ organization
                   to test changes to the automation itself
 ```
 
-Examples of bots are a reader whose Google account has viewer roles at the
-organization, one whose account applies infrastructure in `software-dev`,
-and one whose account changes IAM policies in `infra-dev`.
+Examples of bot identities are a reader whose Google account has viewer
+roles at the organization, one whose account applies infrastructure in
+`software-dev`, and one whose account changes IAM policies in `infra-dev`.
 
 Impersonated tokens appear in the audit log as the service account. From
 the documentation of the audit log, the person who made the call appears in
@@ -226,13 +229,13 @@ header of every request with the token that it minted.
 
 ### GitHub
 
-The account of a bot at GitHub is a GitHub App. The broker signs a short
-assertion with the key of the app and trades it for an installation token,
-which expires after an hour and reaches only the repositories where the app
-is installed. The broker applies that token to the GitHub requests of the
-sandbox, so `gh` and `git` never receive it. The `githubKeyring` mechanism
-of today hands the token of the person to `gh`, which does not meet that
-rule.
+The GitHub account of a bot identity is a GitHub App. The broker signs a
+short assertion with the key of the app and trades it for an installation
+token, which expires after an hour and reaches only the repositories where
+the app is installed. The broker applies that token to the GitHub requests
+of the sandbox, so `gh` and `git` never receive it. The `githubKeyring`
+mechanism of today hands the token of the person to `gh`, which does not
+meet that rule.
 
 The source of `gh` (`internal/ghinstance/host.go` in `cli/cli`, and
 `pkg/auth/auth.go` in `cli/go-gh`) treats the host `github.localhost` as a
@@ -255,7 +258,7 @@ shows `HostPrefix` and `RESTPrefix` agreeing on `github.localhost` itself and
 disagreeing for a subdomain such as `foo.github.localhost`, so the module
 should use the exact name.
 
-### Other services
+### Other providers
 
 AWS and Azure would be providers of the same shape: a role or a managed
 identity that the person can assume, and a short-lived credential for it.
@@ -280,8 +283,8 @@ filter adds a check that does not depend on the permissions being right.
 
 ## What the broker does not cover
 
-- An agent is as strong as the permissions of the accounts of its bot.
-  The code that defines the accounts is where to review them.
+- An agent is as strong as the permissions of the accounts of its bot
+  identity. The code that defines the accounts is where to review them.
 - The credentials of the person stay on the machine outside the sandbox. A
   process with access to them can mint tokens without the broker.
 - A token lasts up to an hour. A token that the broker applies to a request
@@ -315,7 +318,7 @@ filter adds a check that does not depend on the permissions being right.
   host loopback is out of reach. A small relay inside the sandbox, started
   by the module, would listen on a loopback port and copy the bytes to the
   socket. How the module starts it, and for how long, has not been decided.
-- **The bot setting in the sidecar.** The composer and the sidecar
+- **The bot identity setting in the sidecar.** The composer and the sidecar
   format need a place for one setting that is not a module. Whether this
   fits the current `binding.json` has not been checked.
 - **The credential code.** The broker needs a token cache, the reading of
