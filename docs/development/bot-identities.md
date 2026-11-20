@@ -2,7 +2,7 @@
 
 This document proposes a second dimension of the sandbox system of
 [`agent-sandbox.md`](agent-sandbox.md). Sandbox modules say what a checkout
-can reach: which tools, domains, sockets and paths. A bot identity says who
+use: which tools, domains, sockets and paths. A bot identity says who
 the agent acts as while it uses them. Nothing in this document is built, and
 the open questions at the end decide how much code it needs.
 
@@ -18,7 +18,7 @@ person.
 
 ## Problem
 
-Today a checkout that reaches a service reaches it as the person. The
+Today an agent uses a service with the credentials of the person. The
 GitHub module, for example, gives the sandboxed `gh` the token of the
 person through a trusted executable. That credential can do everything the
 person can do, and the sandbox cannot restrict it to a part of that. An
@@ -31,7 +31,7 @@ A checkout has two settings that concern the services it uses:
 
 | Dimension | Question | Where it lives | Example |
 |---|---|---|---|
-| Modules | What can this checkout reach? | The chosen modules in the sidecar | `google`, `github` |
+| Modules | What can this checkout use? | The chosen modules in the sidecar | `google`, `github` |
 | Bot identity | Who does the agent act as? | One setting in the sidecar | `bot = "software-dev"` |
 
 The sidecar is the file `.agent-sandbox/binding.json` in each enrolled
@@ -39,13 +39,13 @@ checkout. It records the enrollment: the chosen modules, their deadlines,
 the declined modules and the last settings applied.
 
 The two settings answer different questions, and an agent needs both to
-use Google. The `google` module lets the agent reach Google, and the bot
-identity supplies the Google account that the agent acts as: a service
-account that the person can impersonate, or the account of the person. An
-agent in a checkout without the module cannot reach Google, whatever its
-bot identity holds, and an agent whose bot identity has no Google account
-has no access to Google even with the module. A
-checkout with no bot identity setting gives its agents the default bot
+use Google. The `google` module gives the agent access to Google, and the
+bot identity supplies the Google account that the agent acts as. That
+account is a service account that the person can impersonate, or the
+account of the person. An agent in a checkout without the module has no
+access to Google, whatever its bot identity holds, and an agent whose bot
+identity has no Google account has no access to Google even with the
+module. A checkout with no bot identity setting gives its agents the default bot
 identity, which the person declares and which should be the least powerful
 one. Both settings are edits that the person makes outside the sandbox, and
 the sidecar is write-guarded, so the agent cannot change either.
@@ -107,7 +107,7 @@ Two rules matter most for this bot identity.
 ## Keeping real credentials out of reach
 
 A tool that asks for a token must get the placeholder `proxy-replace` and
-nothing else, and no file or command that the sandbox can reach may hold a
+nothing else, and no file or command that the sandbox can read may hold a
 real one. Each service module therefore does three things.
 
 - **It sets the placeholder where the tool looks first.** `GH_TOKEN` for
