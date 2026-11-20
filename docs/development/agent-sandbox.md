@@ -698,9 +698,17 @@ auto-sync); the design is correct without it.
   sockets from outside the sandbox are denied wholesale. The socket
   shell's file is named `bash`, because Claude Code runs Bash commands
   in `$SHELL` only when its file name is `bash` or `zsh`, and otherwise
-  in a bash or zsh it finds itself, outside the narrowing. The check
+  in a bash or zsh it finds itself, outside the narrowing. srt runs
+  each command as `SHELL -c "SHELL -c 'SCRIPT'"`, where SCRIPT first
+  starts socat relays from the sandbox's loopback proxy ports to the
+  proxy's unix socket and then evals the command. The socket shell
+  runs the relay preamble, up to the `unset` line that ends it, outside
+  Landlock and the command inside it, so the relays reach the proxy and
+  the command does not reach that socket directly. A script of any
+  other shape runs whole under Landlock. The check
   `agent-sandbox-agents` runs real Claude Code against a mock model
-  and asserts that a socket outside the list is refused. The socket
+  and asserts that a socket outside the list is refused, and that a
+  command reaches an allowed host through the proxy. The socket
   shell is built once, so the composed list reaches it through the
   settings env (`AGENT_SANDBOX_UNIX_SOCKETS`, one path per line).
   The settings files are write-guarded, and a Landlock domain only

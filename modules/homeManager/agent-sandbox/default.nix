@@ -238,6 +238,19 @@ let
   # The script's file name is `bash`: Claude Code runs Bash commands in
   # $SHELL only when its file name is bash or zsh, and otherwise in a
   # bash or zsh it finds itself, which would skip the narrowing.
+  #
+  # srt runs each command as `SHELL -c "SHELL -c 'SCRIPT'"`. SCRIPT
+  # starts socat relays from the sandbox's loopback proxy ports to the
+  # proxy's unix socket, waits for them to listen, and then evals the
+  # command. The relays connect to that socket for every request, and
+  # its path is not in the allowlist, so Landlock applies to the command
+  # only, after the relays have started. The outer layer is recognized
+  # when its script is exactly `$0 -c '...'` with srt's '"'"' quoting,
+  # and runs the inner script directly. The inner layer is split at the
+  # `unset` line that ends srt's relay preamble. The preamble must start
+  # with the relay and must not eval anything. Any other script runs
+  # whole under Landlock, so an unrecognized srt keeps the narrowing and
+  # loses only the proxy.
   socketShell = "${socketShellPackage}/bin/bash";
   socketShellPackage = pkgs.writeTextFile {
     name = "agent-sandbox-socket-shell";
@@ -260,9 +273,30 @@ let
           allow+=(--allow "$socket")
         fi
       done <<<"''$${socketsEnvVar}"
-      exec ${landlockShim}/bin/landlock-shim "''${allow[@]}" \
-        --socket-fallback ${cfg.runtime.landlock.socketFallback} \
-        -- ${runtimeShell} "$@"
+      narrow=(${landlockShim}/bin/landlock-shim "''${allow[@]}"
+        --socket-fallback ${cfg.runtime.landlock.socketFallback} --)
+      if [ "$#" -eq 2 ] && [ "$1" = -c ]; then
+        script=$2
+        prefix="$0 -c '"
+        escape="'\"'\"'"
+        if [[ $script == "$prefix"*"'" ]]; then
+          inner=''${script#"$prefix"}
+          inner=''${inner%"'"}
+          if [[ ''${inner//"$escape"/} != *"'"* ]]; then
+            exec "$0" -c "''${inner//"$escape"/"'"}"
+          fi
+        fi
+        marker=$'\nunset _srt_since _srt_now _srt_up _srt_counts _srt_kind _srt_skip _srt_inuse _srt_http _srt_socks\n'
+        if [[ $script == "{ socat TCP"* && $script == *"$marker"* ]]; then
+          relays=''${script%%"$marker"*}$marker
+          command=''${script#*"$marker"}
+          if [[ $relays != *eval* ]]; then
+            exec ${runtimeShell} -c "$relays"'"$@"' agent-sandbox-relays \
+              "''${narrow[@]}" ${runtimeShell} -c "$command"
+          fi
+        fi
+      fi
+      exec "''${narrow[@]}" ${runtimeShell} "$@"
     fi
     exec ${runtimeShell} "$@"
   '';

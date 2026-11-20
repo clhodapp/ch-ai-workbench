@@ -1144,6 +1144,10 @@
               claude_probe bus agent-bus-probe.py agent-bus-probe-passed
               claude_probe nobus agent-bus-denied-probe.py agent-bus-denied-passed
               echo "agent-bus probes passed under Claude Code's sandbox"
+              # A Bash command under the socket shell reaches an allowed
+              # host through srt's proxy relay.
+              cp ${self}/tests/agent-sandbox/claude-network-probe.py "$TMPDIR/repo-bus/"
+              claude_probe bus claude-network-probe.py claude-network-passed
 
               git worktree add -qb native-linked ../linked HEAD
               cp ${self}/tests/agent-sandbox/native-worktree-probe.py ../linked/native-worktree-probe.py
