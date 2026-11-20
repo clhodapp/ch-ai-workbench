@@ -20,6 +20,11 @@ let
         ./tests
       ];
     };
+    # Evaluation reads both lockfiles. Read from `src`, they would come from
+    # the filtered copy, which `nix flake check --no-build` names without
+    # writing it to the store; these paths are in the flake's source.
+    cargoLock = ./Cargo.lock;
+    lockFile = ./cargo-purifier.lock.json;
   };
 in
 project.packages.agent-bus.overrideAttrs (old: {
