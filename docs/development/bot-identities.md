@@ -7,12 +7,12 @@ the agent acts as while it uses them. Nothing in this document is built, and
 the open questions at the end decide how much code it needs.
 
 A **bot identity** is one that the coding agents of a person assume, and a
-broker manages it. It is one entity with a name, such as `software-dev`,
+proxy manages it. It is one entity with a name, such as `software-dev`,
 and it can have a Google account, a GitHub account, and an account of any
 other kind that the person declares. An account is a service account or an
 app that the person grants to the bot identity, or the account of the person. The agent proves nothing about
 itself. The person assigns a bot identity to a checkout, the agents that run
-in the checkout act as that identity, and the broker mints short-lived
+in the checkout act as that identity, and the proxy mints short-lived
 credentials for its accounts. The agent never holds a credential of the
 person.
 
@@ -54,7 +54,7 @@ The pieces:
 
 - **The declaration** is a home-manager option. It names each bot identity
   and its accounts, for example a Google service account and a GitHub App.
-- **The broker** is a user service that runs outside every sandbox. It
+- **The proxy** is a user service that runs outside every sandbox. It
   holds what the person has (the Application Default Credentials for
   Google, an app key for GitHub) and listens on one unix socket for each
   account of each bot identity, under
@@ -62,7 +62,7 @@ The pieces:
   executable by a systemd socket unit. It mints a short-lived credential
   for the account of the socket and applies it to the requests that arrive
   there.
-- **Providers** are the adapters of the broker. Google is the first and
+- **Providers** are the adapters of the proxy. Google is the first and
   GitHub is the second. A provider knows how to mint a credential for its
   kind of account and how to apply it.
 - **The composer** (`compose.py`) reads the bot identity setting of the
@@ -77,17 +77,17 @@ What a bot identity can do is decided by the service that owns the account,
 through the permissions of the account, which the person defines in code.
 
 The agent never receives a token, whether of the person or of a bot
-identity. A token goes from the broker to the service and stays out of the
+identity. A token goes from the proxy to the service and stays out of the
 environment, the files and the responses that the sandbox sees. Two
-consequences follow. The broker refuses every request to an endpoint that
+consequences follow. The proxy refuses every request to an endpoint that
 issues credentials (for Google `iamcredentials.googleapis.com`,
 `sts.googleapis.com` and the token endpoint of OAuth), whatever the
 permissions of the bot identity say, because a successful call would return
-a token. The broker also keeps tokens out of its logs.
+a token. The proxy also keeps tokens out of its logs.
 
 ## A bot identity that is the person
 
-A bot identity can use the accounts of the person. The broker then applies
+A bot identity can use the accounts of the person. The proxy then applies
 the token of the person to the requests of the sandbox, with no
 impersonation and no narrowing. The agent acts fully as the person and
 never sees the credential. The person declares such a bot identity like any
@@ -96,12 +96,12 @@ is never the default bot identity.
 
 Two rules matter most for this bot identity.
 
-- **Credential-creating calls.** The broker refuses the methods that create
+- **Credential-creating calls.** The proxy refuses the methods that create
   a credential as well as the endpoints that issue tokens, for example the
   creation of a service account key in the IAM API of Google, because a key
   is a long-lived credential that the agent would then hold.
 - **Audit.** A service records requests from this bot identity as the
-  person. The log of the broker is the only record that tells them apart,
+  person. The log of the proxy is the only record that tells them apart,
   so it names the checkout and the bot identity on every request.
 
 ## Keeping real credentials out of reach
@@ -180,7 +180,7 @@ and sandbox as it does before the change. The code has to keep four rules.
   by default.
 - **Options are off by default** until the defaults change, and the change
   is announced in the release notes of the repository.
-- **A new flake input needs no setting.** If the broker shares code with
+- **A new flake input needs no setting.** If the proxy shares code with
   another repository, a downstream locks that input through the normal
   convergence.
 
@@ -198,7 +198,7 @@ describes the service account. The Application Default Credentials (ADC) of the 
 which `gcloud` and the client libraries find on the machine, call
 `generateAccessToken` for the service account, which needs the Service
 Account Token Creator role on it. The call returns a token that lasts up to
-an hour, and the broker mints a new one when the old one nears its end.
+an hour, and the proxy mints a new one when the old one nears its end.
 
 The infrastructure code defines the service accounts and their IAM
 bindings, and the declaration of the bot identity names them. A binding can
@@ -228,16 +228,16 @@ the delegation information of the entry (`serviceAccountDelegationInfo`).
 The field names were not checked against the current reference.
 
 The `google` module supplies the commands (`tofu`, `gcloud`) and the
-environment that points the Google clients at the broker and gives them the
-placeholder token `proxy-replace`. The broker replaces the `Authorization`
+environment that points the Google clients at the proxy and gives them the
+placeholder token `proxy-replace`. The proxy replaces the `Authorization`
 header of every request with the token that it minted.
 
 ### GitHub
 
-The GitHub account of a bot identity is a GitHub App. The broker signs a
+The GitHub account of a bot identity is a GitHub App. The proxy signs a
 short assertion with the key of the app and trades it for an installation
 token, which expires after an hour and reaches only the repositories where
-the app is installed. The broker applies that token to the GitHub requests
+the app is installed. The proxy applies that token to the GitHub requests
 of the sandbox, so `gh` and `git` never receive it. The `githubKeyring`
 mechanism of today hands the token of the person to `gh`, which does not
 meet that rule.
@@ -255,7 +255,7 @@ The `github` module would set `GH_HOST=github.localhost` and give `gh` the
 placeholder `proxy-replace` as `GH_TOKEN`, as the `google` module does.
 `git` over HTTP would reach the same host through a `url.<base>.insteadOf`
 rewrite of `https://github.com/`. Three things are open. A host name for
-`gh` cannot carry a port, so the broker has to answer on port 80 of the
+`gh` cannot carry a port, so the proxy has to answer on port 80 of the
 loopback address that `github.localhost` and `api.github.localhost` resolve
 to inside the sandbox. Whether the sandbox can bind that port, and whether
 its resolver maps those names to loopback, has not been checked. The source
@@ -270,7 +270,7 @@ identity that the person can assume, and a short-lived credential for it.
 
 ## Trust in the machine
 
-The broker holds the credentials of the person, so a service trusts the
+The proxy holds the credentials of the person, so a service trusts the
 whole machine as that person. That trust starts when the credential is
 created, and a service can require a touch of a hardware security key for
 that sign-in and for each renewal. Google offers this, for example. Ending
@@ -286,21 +286,21 @@ ancestors by following the `parent` field of a project or folder. The
 permissions of the account limit what a service accepts either way, and the
 filter adds a check that does not depend on the permissions being right.
 
-## What the broker does not cover
+## What the proxy does not cover
 
 - An agent is as strong as the permissions of the accounts of its bot
   identity. The code that defines the accounts is where to review them.
 - The credentials of the person stay on the machine outside the sandbox. A
-  process with access to them can mint tokens without the broker.
-- A token lasts up to an hour. A token that the broker applies to a request
+  process with access to them can mint tokens without the proxy.
+- A token lasts up to an hour. A token that the proxy applies to a request
   never reaches the sandbox, so the sandbox cannot keep one.
-- Calls that bypass the broker fail, because the sandbox holds no credential.
+- Calls that bypass the proxy fail, because the sandbox holds no credential.
 
 ## Open questions
 
-- **How clients reach the broker.** For Google, the broker has to receive
+- **How clients reach the proxy.** For Google, the proxy has to receive
   each request to replace its token, so a client has to send its requests
-  to a local address in plain HTTP, and the broker re-issues them to Google
+  to a local address in plain HTTP, and the proxy re-issues them to Google
   over TLS. The documentation shows three mechanisms. `gcloud` has an
   `api_endpoint_overrides/<service>` property for each service, with a
   matching environment variable
@@ -310,7 +310,7 @@ filter adds a check that does not depend on the permissions being right.
   libraries read the universe domain from `GOOGLE_CLOUD_UNIVERSE_DOMAIN`.
   The module would set the overrides for the Google services that a
   configuration uses, and a service without an override sends its request
-  to Google without a credential and fails. The broker refuses a request
+  to Google without a credential and fails. The proxy refuses a request
   that carries any bearer value other than the placeholder, so a client
   that found a real credential is noticed. A universe domain setting may
   make a client refuse credentials from the default universe. The fallback
@@ -326,8 +326,8 @@ filter adds a check that does not depend on the permissions being right.
 - **The bot identity setting in the sidecar.** The composer and the sidecar
   format need a place for one setting that is not a module. Whether this
   fits the current `binding.json` has not been checked.
-- **The credential code.** The broker needs a token cache, the reading of
-  ADC files, and the impersonation call. The proxy of
-  `nix-cache-polyfill` (`clhodapp/nix-cache-polyfill`) is building the same
-  pieces for Nix binary caches. Whether the broker depends on a library of
-  that repository or keeps a copy has not been decided.
+- **The credential code.** The proxy needs a token cache, the reading of
+  ADC files, and the impersonation call. The `nix-cache-polyfill` program
+  (`clhodapp/nix-cache-polyfill`), a proxy for Nix binary caches, is
+  building the same pieces. Whether this proxy depends on a library of that
+  repository or keeps a copy has not been decided.
