@@ -22,10 +22,16 @@
 let
   cfg = config.ch-ai-workbench.claude;
 
-  # What the editor's nemacs configuration builds. The bridge below takes
-  # its script from the package set of the editor, so it matches the
-  # mcp-server-lib the editor loads.
-  editor = config.programs.nemacs.settings.build;
+  # The nemacs configuration declared inside this home-manager
+  # configuration that is the editor, and what it builds. The bridge
+  # below takes its script from the package set of the editor, so it
+  # matches the mcp-server-lib the editor loads. The entry is null in the
+  # childless evaluation, which leaves the nemacs configuration out.
+  editorEntry = closure-lib.ch-ai-workbench.editorOf {
+    inherit lib config;
+    name = config.ch-ai-workbench.emacs.configuration;
+  };
+  editor = editorEntry.manifest.value.config.build;
 
   # The MCP stdio bridge: a stable command MCP clients register through
   # the home-manager profile, ~/.nix-profile/bin/emacs-mcp-stdio (the
@@ -68,6 +74,17 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
+        assertion = editorEntry != null || lib.caisson.evalManifest.childless;
+        message = ''
+          ch-ai-workbench.claude reads the editor from the nemacs
+          configuration "${config.ch-ai-workbench.emacs.configuration}",
+          and this home-manager configuration declares none. Declare it
+          with `caisson.nemacs.configurations.${config.ch-ai-workbench.emacs.configuration}`,
+          or set `ch-ai-workbench.emacs.configuration` to the name of the
+          one that is the editor.
+        '';
+      }
+      {
         assertion = config.ch-ai-workbench.emacs.enable;
         message = ''
           ch-ai-workbench.claude needs ch-ai-workbench.emacs: claude-queue
@@ -77,8 +94,10 @@ in
       }
     ];
 
-    programs.nemacs.settings.imports = [ closure-lib.caisson.libManifest.modules.nemacs.claude ];
+    caisson.forChildren.extraDefaultModuleImports.nemacs = _lib: [
+      closure-lib.caisson.libManifest.modules.nemacs.claude
+    ];
 
-    home.packages = [ mcpStdioBridge ];
+    home.packages = lib.optional (editorEntry != null) mcpStdioBridge;
   };
 }

@@ -43,6 +43,24 @@
 let
   cfg = config.ch-ai-workbench.emacs-integration;
 
+  # The nemacs configuration declared inside this home-manager
+  # configuration that is the editor, null in the childless evaluation
+  # and when this configuration declares none.
+  editorEntry =
+    if options.ch-ai-workbench ? emacs then
+      closure-lib.ch-ai-workbench.editorOf {
+        inherit lib config;
+        name = config.ch-ai-workbench.emacs.configuration;
+      }
+    else
+      null;
+
+  # The directory of the Nix profile of the editor, with `$HOME` written
+  # out, which holds its `emacsclient`.
+  editorProfile =
+    lib.replaceStrings [ "$HOME" ] [ config.home.homeDirectory ]
+      editorEntry.manifest.outputs.profile.path;
+
   # Resolved at run time from the profile, not baked to a store path: a
   # generation switch swaps a symlink without changing any mtime, so a
   # hook that captured a store path at build time would keep driving a
@@ -50,6 +68,8 @@ let
   emacsclient =
     if cfg.emacsclientPath != null then
       cfg.emacsclientPath
+    else if editorEntry != null then
+      "${editorProfile}/bin/emacsclient"
     else
       "${config.home.profileDirectory}/bin/emacsclient";
 
@@ -235,10 +255,24 @@ in
       example = "/usr/bin/emacsclient";
       description = ''
         Where the cwd hook finds `emacsclient`. `null` means the Nix
-        profile, which is right whenever Emacs is in the profile, by
-        `programs.emacs`, `programs.nemacs` or `home.packages`. Set it
-        when emacsclient
-        comes from somewhere else.
+        profile of the editor, the nemacs configuration named by
+        `ch-ai-workbench.emacs.configuration`, or the home-manager
+        profile when this home-manager configuration declares no such
+        configuration and installs Emacs with `programs.emacs` or
+        `home.packages`. Set it when emacsclient comes from somewhere
+        else.
+      '';
+    };
+
+    bundleInits = lib.mkOption {
+      type = lib.types.attrsOf lib.types.lines;
+      default = { };
+      readOnly = true;
+      internal = true;
+      description = ''
+        The init this module appends to bundles of the editor, by bundle
+        name. The nemacs module `emacs-integration` reads it from this
+        home-manager configuration and appends each to its bundle.
       '';
     };
 
@@ -299,12 +333,15 @@ in
         ];
       })
       (lib.optionalAttrs (options.ch-ai-workbench ? emacs) {
-        programs.nemacs.settings.bundles = lib.mkIf config.ch-ai-workbench.emacs.enable (
-          lib.optionalAttrs (acpInit != "") { agent-shell.init = lib.mkAfter acpInit; }
+        ch-ai-workbench.emacs-integration.bundleInits = lib.optionalAttrs config.ch-ai-workbench.emacs.enable (
+          lib.optionalAttrs (acpInit != "") { agent-shell = acpInit; }
           // lib.optionalAttrs (queueInit != "" && (config.ch-ai-workbench.claude.enable or false)) {
-            claude-queue.init = lib.mkAfter queueInit;
+            claude-queue = queueInit;
           }
         );
+        caisson.forChildren.extraDefaultModuleImports.nemacs = _lib: [
+          closure-lib.caisson.libManifest.modules.nemacs.emacs-integration
+        ];
       })
       (lib.optionalAttrs (options.ch-ai-workbench ? codex) {
         # Codex asks this hook when a queued task's call would leave its
@@ -350,13 +387,15 @@ in
             assertion =
               cfg.emacsclientPath != null
               || config.programs.emacs.enable
-              || (config.programs.nemacs.enable or false);
+              || editorEntry != null
+              || lib.caisson.evalManifest.childless;
             message = ''
               ch-ai-workbench.emacs-integration needs emacsclient, and
               the hooks fail open, so without it the integration installs
-              and silently does nothing. Either enable programs.emacs or
-              programs.nemacs, or set emacsclientPath to where emacsclient
-              lives.
+              and silently does nothing. Either enable programs.emacs,
+              declare the editor as a nemacs configuration inside this
+              home-manager configuration, or set emacsclientPath to where
+              emacsclient lives.
             '';
           }
           # The skill documents the MCP server's tools and the session hooks

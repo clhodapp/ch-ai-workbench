@@ -45,19 +45,11 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    programs.nemacs.settings = {
-      imports = [ closure-lib.caisson.libManifest.modules.nemacs.gptel ];
-      # The backend and model choices, set on the variables the gptel
-      # init declares for them. Appended to the init of that bundle, so
-      # they are in the same file as the declarations (the byte compiler
-      # sees them) and run at load, before gptel's deferred config reads
-      # them.
-      bundles.gptel.init = lib.mkAfter (
-        lib.concatStringsSep "\n" (
-          lib.optional (cfg.backend != null) "(setq ch-emacs-config-gptel-default-backend '${cfg.backend})"
-          ++ lib.optional (cfg.model != null) "(setq ch-emacs-config-gptel-default-model '${cfg.model})"
-        )
-      );
-    };
+    # The nemacs module `gptel-choices` reads `backend` and `model` from
+    # this configuration.
+    caisson.forChildren.extraDefaultModuleImports.nemacs = _lib: [
+      closure-lib.caisson.libManifest.modules.nemacs.gptel
+      closure-lib.caisson.libManifest.modules.nemacs.gptel-choices
+    ];
   };
 }

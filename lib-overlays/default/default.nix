@@ -19,6 +19,11 @@
       # modules `emacs`, `gptel` and `claude` define the bundles.
       initFiles = builtins.mapAttrs (name: _: ./inits + "/${name}") (builtins.readDir ./inits);
 
+      # `{ lib, config, name }` to the entry of the nemacs configuration
+      # `name` declared inside the home-manager configuration `config`,
+      # which the modules of this layer read the editor from.
+      editorOf = import ./editor-of.nix;
+
       # The in-tree Emacs packages this layer adds, as an overlay on the
       # editor's nemacs package set (`final: prev:`), built with its
       # `nemacsBuild`. The nemacs module `emacs` applies it.
