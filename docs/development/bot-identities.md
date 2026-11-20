@@ -2,9 +2,8 @@
 
 This document proposes a second dimension of the sandbox system of
 [`agent-sandbox.md`](agent-sandbox.md). Sandbox modules say what a checkout
-use: which tools, domains, sockets and paths. A bot identity says who
-the agent acts as while it uses them. Nothing in this document is built, and
-the open questions at the end decide how much code it needs.
+can use: which tools, domains, sockets and paths. A bot identity says who
+the agent acts as while it uses them. Nothing in this document is built.
 
 A **bot identity** is one that the coding agents of a person assume, and a
 proxy manages it. It is one entity with a name, such as `software-dev`,
@@ -92,7 +91,11 @@ a unix socket, the clients need an HTTP address, and the native sandbox of
 Codex runs commands in a separate network namespace, so a listener on the
 host loopback cannot be used. A small relay inside the sandbox, started by
 the module, listens on a loopback port and copies the bytes to the socket.
-The proxy refuses a request that carries any credential other than the
+The wrappers that the module puts on `PATH` for its commands (`tofu`,
+`gcloud`, `gh`) start the relay for the length of the command and stop it
+afterwards, and the module requests `allowLocalBinding`, which
+`agent-sandbox` already offers to a module that needs a local server. The
+proxy refuses a request that carries any credential other than the
 placeholder, so a client that found a real credential is noticed. A client
 without an endpoint setting sends its request straight to the service
 without a credential, and the request fails.
@@ -179,14 +182,23 @@ checkout runs `gh auth token` (with and without `GH_TOKEN`, and with
 search of every readable file. The test passes only if the real tokens
 appear in no output and no readable file.
 
+A second test runs each client (`gcloud`, `tofu`, the Google client
+libraries, `gh`, `git`, the AWS CLI and SDKs, `ssh`) in a sandbox whose only
+network is the proxy. A client that ignores its endpoint setting for some
+call has nowhere else to send it, so the call fails and the test shows
+which client it was.
+
 ## Compatibility for downstream configurations
 
 A downstream configuration that sets none of the new options must evaluate
 and sandbox as it does before the change. The code has to keep four rules.
 
-- **The sidecar field is optional.** A `binding.json` without a bot identity
-  setting reads as it does today, and the setting matters only to a
-  checkout that chose a service module.
+- **The sidecar field is optional.** `read_sidecar` in `files.py` reads the
+  keys that it knows and ignores the rest, so a `binding.json` without a bot
+  identity setting reads as it does today. `write_sidecar` writes only
+  `modules`, `applied`, `expires` and `declined`, so it has to write the new
+  setting too, or the next `add`, `drop` or `sync` erases it. The setting
+  matters only to a checkout that chose a service module.
 - **The `github` module keeps its behavior.** Today it hands the token of
   the person to `gh` through the keyring broker. The `github.localhost`
   behavior is a separate module, or an option of the module that is off
@@ -279,14 +291,20 @@ as GitHub Enterprise Server, which means HTTPS, `/api/v3` and
 The `github` module would set `GH_HOST=github.localhost` and give `gh` the
 placeholder `proxy-replace` as `GH_TOKEN`, as the `google` module does.
 `git` over HTTP would reach the same host through a `url.<base>.insteadOf`
-rewrite of `https://github.com/`. Three things are open. A host name for
-`gh` cannot carry a port, so the proxy has to answer on port 80 of the
-loopback address that `github.localhost` and `api.github.localhost` resolve
-to inside the sandbox. Whether the sandbox can bind that port, and whether
-its resolver maps those names to loopback, has not been checked. The source
-shows `HostPrefix` and `RESTPrefix` agreeing on `github.localhost` itself and
-disagreeing for a subdomain such as `foo.github.localhost`, so the module
-should use the exact name.
+rewrite of `https://github.com/`, and a URL for `git` can carry any port.
+
+A host name for `gh` cannot carry a port, so the relay would have to listen
+on port 80. A test on 2026-11-19 in the Claude Code sandbox of this
+workspace showed that `github.localhost`, `api.github.localhost` and
+`uploads.github.localhost` resolve to `127.0.0.1`, and that binding port 80
+fails with "Permission denied", while binding port 8080 works. The module
+therefore starts with `git` on a high port. `gh` needs a sandbox in which
+the relay may bind a low port, for example a user namespace in which the
+process holds that capability, or the host setting
+`net.ipv4.ip_unprivileged_port_start`, and the Codex native sandbox has to
+be tested for this. The source shows `HostPrefix` and `RESTPrefix` agreeing
+on `github.localhost` itself and disagreeing for a subdomain such as
+`foo.github.localhost`, so the module uses the exact name.
 
 ### AWS
 
@@ -316,10 +334,11 @@ The refusal list covers the calls that issue credentials: `AssumeRole`,
 access key in IAM. The credential stores to deny are all of `~/.aws`, which
 includes the caches of the SSO login and of the CLI.
 
-Signing again needs the whole request, so three things are open: payloads
-that the SDK signs in chunks while it streams an upload, presigned URLs, and
-the endpoint names that differ for each service and region. Which SDKs
-honor the endpoint variables for every call has not been tested.
+Signing again needs the whole request. Payloads that the SDK signs in
+chunks while it streams an upload, and presigned URLs, are the cases that
+the proxy has to handle separately, and the endpoint names differ for each
+service and region. The test of the endpoint settings above shows which
+SDKs ignore them.
 
 ### SSH
 
@@ -336,8 +355,11 @@ chooses from the agent of the person.
 
 A signing socket lets the agent authenticate with the key to any host that
 it can connect to. The network allowlist of the sandbox limits the hosts.
-OpenSSH can also bind a key to destination hosts when it is added to an
-agent (`ssh-add -h`), which has not been checked for this design.
+OpenSSH 10.6, the version installed on this machine, also binds a key to
+destination hosts when it is added to an agent (`ssh-add -h
+destination_constraint`) and gives a key a lifetime (`ssh-add -t life`).
+The proxy for SSH keeps the constraints of the keys that it holds and signs
+only for the hosts that they allow.
 
 ### Other providers
 
@@ -372,17 +394,11 @@ filter adds a check that does not depend on the permissions being right.
   never reaches the sandbox, so the sandbox cannot keep one.
 - Calls that bypass the proxy fail, because the sandbox holds no credential.
 
-## Open questions
+## Credential code
 
-- **The endpoint settings.** Which Google, GitHub and AWS clients honor
-  their endpoint settings on every call has not been tested.
-- **The relay.** How the module starts the relay, and for how long, has not
-  been decided.
-- **The bot identity setting in the sidecar.** The composer and the sidecar
-  format need a place for one setting that is not a module. Whether this
-  fits the current `binding.json` has not been checked.
-- **The credential code.** The proxy needs a token cache, the reading of
-  ADC files, and the impersonation call. The `nix-cache-polyfill` program
-  (`clhodapp/nix-cache-polyfill`), a proxy for Nix binary caches, is
-  building the same pieces. Whether this proxy depends on a library of that
-  repository or keeps a copy has not been decided.
+The proxy needs a token cache, the reading of ADC files, and the
+impersonation call. The `nix-cache-polyfill` program
+(`clhodapp/nix-cache-polyfill`), a proxy for Nix binary caches, builds the
+same pieces. A repository reads another only through what that repository
+publishes, so this proxy starts with a separate copy of that code and moves
+to a library crate when `nix-cache-polyfill` publishes one.
