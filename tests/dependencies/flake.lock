@@ -41,11 +41,11 @@
         "nixpkgs-lib": "nixpkgs-lib"
       },
       "locked": {
-        "lastModified": 1794629932,
-        "narHash": "sha256-CuwvhzVlCbQbx8hqtebtnOJG89POJFjjaSfYu5iU9co=",
+        "lastModified": 1795151024,
+        "narHash": "sha256-xxHfmsNNV2Y1N/PdPCs49F04XDNgoyGdkJqZrinPu8k=",
         "owner": "nix-caisson",
         "repo": "caisson",
-        "rev": "085f53c9c88d06312d080f1b7cb91e91d1cdbf54",
+        "rev": "ba14bab220f426e4db7a4fb73b309db04f744161",
         "type": "github"
       },
       "original": {

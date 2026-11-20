@@ -81,7 +81,7 @@
         };
 
         # The three trees, read from the layout: each entry under
-        # modules/<class>/ and configs/<class>/ registers under its
+        # modules/<class>/ and configs/<integration>/ registers under its
         # directory name, each lib-overlays/<name>/ registers as a
         # library overlay, and the default.nix of each describes what it
         # configures.
