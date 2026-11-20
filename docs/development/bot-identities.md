@@ -125,7 +125,8 @@ real one. Each service module therefore does three things.
 The sandbox also has to stop reading the credential stores of the person.
 The tools keep them at `~/.config/gcloud` (the file
 `application_default_credentials.json`, and `credentials.db` of `gcloud`),
-`~/.config/gh/hosts.yml`, and `~/.aws/credentials`. A check on 2026-11-16
+`~/.config/gh/hosts.yml`, and `~/.aws` (the file `credentials` and the
+caches of the SSO login and the CLI). A check on 2026-11-16
 found `~/.config/gcloud/credentials.db` readable from inside an enrolled
 sandbox, so the baseline of `agent-sandbox` does not cover these paths
 today.
@@ -263,9 +264,60 @@ shows `HostPrefix` and `RESTPrefix` agreeing on `github.localhost` itself and
 disagreeing for a subdomain such as `foo.github.localhost`, so the module
 should use the exact name.
 
+### AWS
+
+The AWS account of a bot identity is an IAM role that the person can
+assume. The proxy calls `sts:AssumeRole` with the credentials of the person
+and receives an access key, a secret key and a session token that last up
+to the maximum session duration of the role, one hour by default. The proxy
+can set the role session name to the bot identity and `SourceIdentity` to
+the person, so that CloudTrail attributes each call.
+
+AWS differs from Google and GitHub in how a request carries its credential.
+The SDK signs each request with the secret key (Signature Version 4), so
+the proxy cannot replace a header. The module gives the SDK a dummy access
+key and secret key in environment variables. The SDK signs with them, and
+the proxy discards that signature, signs the request again with the real
+session credentials, and forwards it. The module points the SDK at the
+proxy with `AWS_ENDPOINT_URL`, or with `AWS_ENDPOINT_URL_<SERVICE>` for one
+service, which takes precedence ([service-specific
+endpoints](https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html)).
+The module must not use a provider that fetches credentials over HTTP, such
+as the container credential provider
+([`AWS_CONTAINER_CREDENTIALS_FULL_URI`](https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html)),
+because it would hand real credentials to the SDK.
+
+The refusal list covers the calls that issue credentials: `AssumeRole`,
+`GetSessionToken` and `GetFederationToken` of STS, and the creation of an
+access key in IAM. The credential stores to deny are all of `~/.aws`, which
+includes the caches of the SSO login and of the CLI.
+
+Signing again needs the whole request, so three things are open: payloads
+that the SDK signs in chunks while it streams an upload, presigned URLs, and
+the endpoint names that differ for each service and region. Which SDKs
+honor the endpoint variables for every call has not been tested.
+
+### SSH
+
+An SSH key can stay inside `ssh-agent`. The agent signs a challenge when a
+client asks, and a client that talks to it through the socket in
+`SSH_AUTH_SOCK` learns the signature and never the key. The proxy for SSH
+is a filtering ssh-agent that runs outside the sandbox. It lists only the
+keys that the bot identity has, signs only with them, and listens on the
+socket that the module places in the sandbox. The account of a bot identity
+is such a key, or an SSH certificate with a short validity that a
+certificate authority signs, which matches the lifetimes of the other
+providers. A bot identity that is the person offers the keys that the person
+chooses from the agent of the person.
+
+A signing socket lets the agent authenticate with the key to any host that
+it can connect to. The network allowlist of the sandbox limits the hosts.
+OpenSSH can also bind a key to destination hosts when it is added to an
+agent (`ssh-add -h`), which has not been checked for this design.
+
 ### Other providers
 
-AWS and Azure would be providers of the same shape: a role or a managed
+Azure would be a provider of the same shape as AWS and Google: a managed
 identity that the person can assume, and a short-lived credential for it.
 
 ## Trust in the machine
