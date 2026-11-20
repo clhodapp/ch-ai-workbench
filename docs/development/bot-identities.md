@@ -30,10 +30,10 @@ A checkout has two settings that concern the services it uses:
 
 | Dimension | Question | Where it lives | Example |
 |---|---|---|---|
-| Modules | What can this checkout use? | The chosen modules in the sidecar | `google`, `github` |
-| Bot identity | Who does the agent act as? | One setting in the sidecar | `bot = "software-dev"` |
+| Modules | What can this checkout use? | The chosen modules in the binding file | `google`, `github` |
+| Bot identity | Who does the agent act as? | One setting in the binding file | `bot = "software-dev"` |
 
-The sidecar is the file `.agent-sandbox/binding.json` in each enrolled
+The binding file is `.agent-sandbox/binding.json` in each enrolled
 checkout. It records the enrollment: the chosen modules, their deadlines,
 the declined modules and the last settings applied.
 
@@ -47,7 +47,7 @@ identity has no Google account has no access to Google even with the
 module. A checkout with no bot identity setting gives its agents the default bot
 identity, which the person declares and which should be the least powerful
 one. Both settings are edits that the person makes outside the sandbox, and
-the sidecar is write-guarded, so the agent cannot change either.
+the binding file is write-guarded, so the agent cannot change either.
 
 The pieces:
 
@@ -65,7 +65,7 @@ The pieces:
   GitHub is the second. A provider knows how to mint a credential for its
   kind of account and how to apply it.
 - **The composer** (`compose.py`) reads the bot identity setting of the
-  sidecar. For each chosen module that has a provider, it adds the socket
+  binding file. For each chosen module that has a provider, it adds the socket
   of the account of that identity to the `allowUnixSockets` of the
   checkout, and no other account socket, so the Landlock narrowing of the
   sandbox keeps the checkout away from the accounts of other bot
@@ -106,7 +106,7 @@ A bot identity can use the accounts of the person. The proxy then applies
 the token of the person to the requests of the sandbox, with no
 impersonation and no narrowing. The agent acts fully as the person and
 never sees the credential. The person declares such a bot identity like any
-other, and assigns it to a checkout with the same edit of the sidecar. It
+other, and assigns it to a checkout with the same edit of the binding file. It
 is never the default bot identity.
 
 Two rules matter most for this bot identity.
@@ -193,7 +193,7 @@ which client it was.
 A downstream configuration that sets none of the new options must evaluate
 and sandbox as it does before the change. The code has to keep four rules.
 
-- **The sidecar field is optional.** `read_sidecar` in `files.py` reads the
+- **The new setting is optional.** `read_sidecar` in `files.py` reads the
   keys that it knows and ignores the rest, so a `binding.json` without a bot
   identity setting reads as it does today. `write_sidecar` writes only
   `modules`, `applied`, `expires` and `declined`, so it has to write the new
