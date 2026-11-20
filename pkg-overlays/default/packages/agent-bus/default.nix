@@ -7,8 +7,20 @@
 {
   cargo-purifier,
   lib,
+  pkg-config,
+  sqlite,
 }:
 let
+  # nixpkgs' cargoSetupHook sets LIBSQLITE3_SYS_USE_PKG_CONFIG=1, so
+  # libsqlite3-sys links the SQLite of nixpkgs, found through pkg-config,
+  # in place of the copy rusqlite's `bundled` feature builds.
+  withSqlite =
+    drv:
+    drv.overrideAttrs (old: {
+      nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkg-config ];
+      buildInputs = (old.buildInputs or [ ]) ++ [ sqlite ];
+    });
+
   project = cargo-purifier.buildCargoProject {
     src = lib.fileset.toSource {
       root = ./.;
@@ -27,9 +39,9 @@ let
     lockFile = ./cargo-purifier.lock.json;
   };
 in
-project.packages.agent-bus.overrideAttrs (old: {
+(withSqlite project.packages.agent-bus).overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
-    inherit (project) tests;
+    tests = withSqlite project.tests;
   };
   meta = (old.meta or { }) // {
     description = "Coordination bus for agent sessions across harnesses: daemon, MCP server and CLI";
