@@ -58,7 +58,7 @@ class CliTest(unittest.TestCase):
         path = self.repo / ".claude" / "settings.local.json"
         return json.loads(path.read_text()) if path.exists() else None
 
-    def sidecar(self):
+    def binding_file(self):
         return json.loads((self.repo / ".agent-sandbox" / "binding.json").read_text())
 
     def run_cli(self, *argv):
@@ -73,7 +73,7 @@ class CliTest(unittest.TestCase):
     def enroll(self, *modules):
         return self.run_cli("enroll", *modules, "-C", str(self.repo), "--quiet")
 
-    def test_enroll_writes_settings_and_sidecar(self):
+    def test_enroll_writes_settings_and_binding_file(self):
         self.assertEqual(self.enroll("work"), 0)
         # The enrolled root is in the env so the ssh wrapper can find the
         # creds dir cwd-independently.
@@ -82,7 +82,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(
             self.settings()["env"]["AGENT_SANDBOX_ROOT"], str(self.repo)
         )
-        self.assertEqual(self.sidecar(), {"modules": ["work"], "applied": expected})
+        self.assertEqual(self.binding_file(), {"modules": ["work"], "applied": expected})
 
     def expiring(self):
         path = self.state / "expiring.json"
@@ -98,11 +98,11 @@ class CliTest(unittest.TestCase):
         rc, out = self.output_of("add", "tools", "--for", "day", "-C", str(self.repo))
         self.assertEqual(rc, 0)
         self.assertIn("[tools] chosen until ", out)
-        at = datetime.fromisoformat(self.sidecar()["expires"]["tools"])
+        at = datetime.fromisoformat(self.binding_file()["expires"]["tools"])
         self.assertAlmostEqual(
             (at - datetime.now(UTC)).total_seconds(), 86400, delta=60
         )
-        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        self.assertEqual(self.binding_file()["modules"], ["tools", "work"])
         self.assertIn("example.org", self.settings()["sandbox"]["network"]["allowedDomains"])
         self.assertEqual(self.expiring(), [str(self.repo)])
         rc, out = self.output_of("status", "-C", str(self.repo))
@@ -113,12 +113,12 @@ class CliTest(unittest.TestCase):
         self.enroll("work")
         self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
         self.assertEqual(self.output_of("expire")[1], "")
-        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        self.assertEqual(self.binding_file()["modules"], ["tools", "work"])
         with self.later(2):
             rc, out = self.output_of("expire")
         self.assertEqual(rc, 0)
         self.assertIn("dropped expired [tools]", out)
-        self.assertEqual(self.sidecar(), {"modules": ["work"], "applied": with_root(WORK_FRAGMENT, self.repo)})
+        self.assertEqual(self.binding_file(), {"modules": ["work"], "applied": with_root(WORK_FRAGMENT, self.repo)})
         self.assertEqual(self.settings(), with_root(WORK_FRAGMENT, self.repo))
         self.assertEqual(self.expiring(), [])
 
@@ -127,10 +127,10 @@ class CliTest(unittest.TestCase):
         self.run_cli("add", "tools", "--for", "week", "-C", str(self.repo), "--quiet")
         with self.later(2):
             self.output_of("expire")
-        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        self.assertEqual(self.binding_file()["modules"], ["tools", "work"])
         with self.later(8):
             self.output_of("expire")
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_status_reports_an_expired_module(self):
         self.enroll("work")
@@ -145,23 +145,23 @@ class CliTest(unittest.TestCase):
         self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
         with self.later(2):
             self.run_cli("sync", "-C", str(self.repo), "--quiet")
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_plain_add_makes_a_temporary_module_lasting(self):
         self.enroll("work")
         self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
         self.run_cli("add", "tools", "-C", str(self.repo), "--quiet")
-        self.assertNotIn("expires", self.sidecar())
+        self.assertNotIn("expires", self.binding_file())
         self.assertEqual(self.expiring(), [])
 
     def test_drop_and_enroll_forget_deadlines(self):
         self.enroll("work")
         self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
         self.run_cli("drop", "tools", "-C", str(self.repo), "--quiet")
-        self.assertNotIn("expires", self.sidecar())
+        self.assertNotIn("expires", self.binding_file())
         self.run_cli("add", "tools", "--for", "day", "-C", str(self.repo), "--quiet")
         self.enroll("work", "tools")
-        self.assertNotIn("expires", self.sidecar())
+        self.assertNotIn("expires", self.binding_file())
         self.assertEqual(self.expiring(), [])
 
     def test_expire_prunes_checkouts_that_are_gone(self):
@@ -174,14 +174,14 @@ class CliTest(unittest.TestCase):
     def test_enroll_composes_several_modules(self):
         self.assertEqual(self.enroll("work", "tools"), 0)
         settings = self.settings()
-        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        self.assertEqual(self.binding_file()["modules"], ["tools", "work"])
         self.assertIn("/nix/store/ccc-tools", settings["sandbox"]["filesystem"]["allowRead"])
         self.assertIn("/nix/store/aaa-hello", settings["sandbox"]["filesystem"]["allowRead"])
         self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], ["example.org"])
 
     def test_enroll_with_no_modules_is_base_only(self):
         self.assertEqual(self.enroll(), 0)
-        self.assertEqual(self.sidecar()["modules"], [])
+        self.assertEqual(self.binding_file()["modules"], [])
         self.assertEqual(
             self.settings()["sandbox"]["filesystem"]["allowRead"], ["/nix/store/bbb-base"]
         )
@@ -197,12 +197,12 @@ class CliTest(unittest.TestCase):
     def test_add_and_drop_edit_the_chosen_set(self):
         self.enroll("work")
         self.assertEqual(self.run_cli("add", "tools", "-C", str(self.repo), "--quiet"), 0)
-        self.assertEqual(self.sidecar()["modules"], ["tools", "work"])
+        self.assertEqual(self.binding_file()["modules"], ["tools", "work"])
         self.assertEqual(
             self.settings()["sandbox"]["network"]["allowedDomains"], ["example.org"]
         )
         self.assertEqual(self.run_cli("drop", "tools", "-C", str(self.repo), "--quiet"), 0)
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
         self.assertNotIn("network", self.settings()["sandbox"])
         self.assertEqual(self.settings(), with_root(WORK_FRAGMENT, self.repo))
 
@@ -224,7 +224,7 @@ class CliTest(unittest.TestCase):
     def test_drop_of_an_unchosen_module_fails_cleanly(self):
         self.enroll("work")
         self.assertEqual(self.run_cli("drop", "tools", "-C", str(self.repo)), 1)
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_add_needs_an_enrollment(self):
         self.assertEqual(self.run_cli("add", "work", "-C", str(self.repo)), 1)
@@ -254,12 +254,12 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("sandbox", settings)
         self.assertNotIn("env", settings)
         self.assertEqual(settings["permissions"], {"allow": ["x"]})
-        self.assertEqual(self.sidecar(), {"modules": None, "applied": {}})
+        self.assertEqual(self.binding_file(), {"modules": None, "applied": {}})
         rc, out = self.output_of("status", "-C", str(self.repo))
         self.assertEqual(rc, 0)
         self.assertIn("abandoned, current", out)
 
-    def test_profile_era_none_sidecar_reads_as_abandoned(self):
+    def test_profile_era_none_binding_file_reads_as_abandoned(self):
         sandbox_dir = self.repo / ".agent-sandbox"
         sandbox_dir.mkdir()
         (sandbox_dir / "binding.json").write_text(
@@ -297,7 +297,7 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("network", settings["sandbox"])
         self.assertEqual(settings["env"]["PATH"], WORK_FRAGMENT["env"]["PATH"])
         self.assertEqual(settings["permissions"], {"allow": ["x"]})
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_status_survives_device_settings_file(self):
         # A worktree / bg-isolation harness can bind the checkout's
@@ -309,8 +309,8 @@ class CliTest(unittest.TestCase):
         settings.unlink()
         os.symlink("/dev/null", settings)
         rc, out = self.output_of("status", "-C", str(self.repo))
-        # /dev/null reads as empty, so no settings match the sidecar, but
-        # the sidecar is intact, so status still reports the modules.
+        # /dev/null reads as empty, so no settings match the binding file, but
+        # the binding file is intact, so status still reports the modules.
         self.assertIn(rc, (0, 2))
         self.assertIn("modules [work]", out)
 
@@ -373,7 +373,7 @@ class CliTest(unittest.TestCase):
         # Inside a masked-store sandbox the HM symlinks for the registry
         # and parts dangle (targets in /nix/store are outside the
         # allowRead closure). Status must still report the enrollment
-        # from the sidecar, with freshness unknown, and not claim a
+        # from the binding file, with freshness unknown, and not claim a
         # module is dangling.
         self.enroll("work")
         for p in (self.parts["work"], self.parts["base"], self.config / "registry.json"):
@@ -449,7 +449,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("dropped expired [tools]", out)
         self.assertNotIn("hook error", out)
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_hook_syncs_stale_checkout(self):
         self.enroll("work")

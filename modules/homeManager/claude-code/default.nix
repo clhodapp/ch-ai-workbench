@@ -72,13 +72,13 @@ let
   # converged in at activation by a merge (lib/claude-hooks-register.nix)
   # rather than rendered as a store symlink.  Ownership follows the
   # agent-sandbox model: the declaration is a store manifest,
-  # a sidecar under the XDG state dir records what was last applied,
+  # a state file under the XDG state dir records what was last applied,
   # and only entries in one of those two are ever touched -- so a
   # hook deleted from Nix is pruned, and a hand-added hook survives.
   # The emacs module registers its consent gate in a separate entry.
   claudeHooksRegister = import ./lib/claude-hooks-register.nix { inherit pkgs; };
 
-  hooksSidecar = "${config.xdg.stateHome}/claude-hooks-register/applied.json";
+  hooksStateFile = "${config.xdg.stateHome}/claude-hooks-register/applied.json";
 
   # Stop hook that turns the peer-programmer style's banned phrasings
   # a regex can catch ("X is yours", em-dashes, "click", ...) into a
@@ -277,7 +277,7 @@ let
 
   # The declaration as a store manifest: enabled hooks and the deny
   # rules, so a switched-off or deleted entry is absent from "new" and
-  # the register prunes it against the sidecar's "base".
+  # the register prunes it against the state file's "base".
   #
   # A hook whose package this module installs is registered through the
   # home-manager profile's bin directory rather than by bare name. The
@@ -545,7 +545,7 @@ in
         ~/.claude/settings.json at activation (the CLI rewrites that
         file at runtime, so it cannot be a store symlink). Ownership
         follows the agent-sandbox model: the enabled entries are
-        rendered into a store manifest, a sidecar under
+        rendered into a store manifest, a state file under
         $XDG_STATE_HOME/claude-hooks-register/ records what the last
         activation applied, and the merge touches only entries found
         in one of the two, keeping hand-added hooks in place and
@@ -615,7 +615,7 @@ in
       example = lib.literalExpression ''[ "Edit(/''${XDG_RUNTIME_DIR}/claude-consent/**)" ]'';
       description = ''
         User-level permissions.deny rules, converged into
-        ~/.claude/settings.json by the same manifest-plus-sidecar merge
+        ~/.claude/settings.json by the same manifest-plus-state file merge
         as hooks: a rule is identified by its text, deleting one here
         removes it on the next activation, and hand-added rules stay in
         place. The literal ''${XDG_RUNTIME_DIR} is replaced at activation
@@ -1474,7 +1474,7 @@ in
 
     home.activation.claudeCodeHooksRegister = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       run ${lib.getExe claudeHooksRegister} "$HOME/.claude/settings.json" \
-        ${hooksManifest} ${lib.escapeShellArg hooksSidecar}
+        ${hooksManifest} ${lib.escapeShellArg hooksStateFile}
     '';
 
     # The declared settings and user-scope MCP servers, merged into the

@@ -2,11 +2,11 @@
 """agent-config: converge declared settings into the config file an agent reads.
 
     agent-config apply --format json|toml --target FILE \\
-        --fragment FRAGMENT.json --sidecar SIDECAR.json [--name NAME] [--dry-run]
+        --fragment FRAGMENT.json --state-file STATE-FILE.json [--name NAME] [--dry-run]
 
 The fragment is JSON whatever the target's format, because Nix renders
-it with ``builtins.toJSON``. The sidecar records the target and the
-fragment applied, and is the merge base of the next run. A sidecar that
+it with ``builtins.toJSON``. The state file records the target and the
+fragment applied, and is the merge base of the next run. A state file that
 names a different target is ignored, so moving a target starts over
 rather than removing entries from the wrong file.
 
@@ -119,7 +119,7 @@ def apply(
     fmt: str,
     target: Path,
     fragment: dict[str, Any],
-    sidecar: Path,
+    state_file: Path,
     name: str,
     dry_run: bool = False,
     retries: int = 5,
@@ -130,7 +130,7 @@ def apply(
         nulls = _nulls(fragment)
         if nulls:
             raise ToolError(f"TOML has no null; the fragment sets {', '.join(nulls)} to null")
-    recorded = _read_json_file(sidecar, "sidecar")
+    recorded = _read_json_file(state_file, "state file")
     base = recorded.get("applied") if recorded.get("target") == str(target) else {}
     if not isinstance(base, dict):
         base = {}
@@ -153,7 +153,7 @@ def apply(
                 mode = 0o600
             _write_atomic(target, merged, mode)
         _write_atomic(
-            sidecar,
+            state_file,
             json.dumps({"target": str(target), "applied": fragment}, indent=2) + "\n",
             0o600,
         )
@@ -171,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=["json", "toml"], required=True)
     p.add_argument("--target", type=Path, required=True)
     p.add_argument("--fragment", type=Path, required=True)
-    p.add_argument("--sidecar", type=Path, required=True)
+    p.add_argument("--state-file", type=Path, required=True)
     p.add_argument("--name", default="agent-config", help="the label of report lines")
     p.add_argument("--dry-run", action="store_true", help="print the merged file, write nothing")
     return parser
@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         fragment = _read_json_file(args.fragment, "fragment")
         merged, lines = apply(
-            args.format, args.target, fragment, args.sidecar, args.name, args.dry_run
+            args.format, args.target, fragment, args.state_file, args.name, args.dry_run
         )
     except ToolError as e:
         print(f"agent-config: {e}", file=sys.stderr)

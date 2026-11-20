@@ -22,7 +22,7 @@ from typing import Any
 from .files import ToolError, ensure_excluded, update_json, write_text_atomic
 
 POLICY_ENV = "AGENT_SANDBOX_CODEX_POLICY"
-PROJECT_SIDECAR = ".agent-sandbox/codex-config.json"
+PROJECT_STATE_FILE = ".agent-sandbox/codex-config.json"
 
 
 def permission_profile_id(project: Path) -> str:
@@ -117,7 +117,7 @@ def apply_project_config(root: Path, config: dict[str, Any], base: dict[str, Any
         (root / ".claude").mkdir(exist_ok=True)
     result = subprocess.run(
         [merger, "apply", "--format", "toml", "--target", str(root / ".codex/config.toml"),
-         "--fragment", "/dev/stdin", "--sidecar", str(root / PROJECT_SIDECAR),
+         "--fragment", "/dev/stdin", "--state-file", str(root / PROJECT_STATE_FILE),
          "--name", "agent-sandbox-codex"],
         input=json.dumps(config), text=True, capture_output=True,
     )
@@ -132,7 +132,7 @@ def inheriting_worktrees(root: Path) -> list[Path]:
     Explicit local enrollments and local abandonment are authoritative.
     """
     from .run import native_enrollment_root
-    from .files import read_sidecar
+    from .files import read_binding
 
     metadata_root = root / ".git/worktrees"
     if not metadata_root.is_dir():
@@ -149,7 +149,7 @@ def inheriting_worktrees(root: Path) -> list[Path]:
                 continue
             if (linked / pointer.removeprefix("gitdir:").strip()).resolve() != metadata.resolve():
                 continue
-            if read_sidecar(linked) is None and native_enrollment_root(linked) == root:
+            if read_binding(linked) is None and native_enrollment_root(linked) == root:
                 result.append(linked)
         except (OSError, ValueError, ToolError):
             continue
@@ -172,7 +172,7 @@ def sync_enrollment(root: Path, modules: list[str] | None, registry: dict[str, A
     project_root = project_root or root
     inherited = inheriting_worktrees(root) if project_root == root else []
     if modules is None:
-        if (project_root / PROJECT_SIDECAR).exists():
+        if (project_root / PROJECT_STATE_FILE).exists():
             apply_project_config(project_root, {}, base)
         for linked in inherited:
             sync_enrollment(root, modules, registry, project_root=linked)
@@ -264,9 +264,9 @@ def configuration(settings: dict[str, Any], root: Path, scratch: Path,
     # Runtime policy and wrappers must stay immutable even if a module
     # grants a broader directory, such as /run/user/UID.
     paths[str(scratch.parent.parent)] = "read"
-    paths[str(root / PROJECT_SIDECAR)] = "read"
+    paths[str(root / PROJECT_STATE_FILE)] = "read"
     paths[str(root / ".codex/config.toml")] = "read"
-    paths[str(project_root / PROJECT_SIDECAR)] = "read"
+    paths[str(project_root / PROJECT_STATE_FILE)] = "read"
     paths[str(project_root / ".codex/config.toml")] = "read"
     net = settings["network"]
     domains = {}
@@ -402,7 +402,7 @@ def _managed_manifest_owner(cwd: Path) -> str | None:
     """
     for candidate in (cwd, *cwd.parents):
         try:
-            managed = json.loads((candidate / PROJECT_SIDECAR).read_text())
+            managed = json.loads((candidate / PROJECT_STATE_FILE).read_text())
             owner = managed.get("applied", {}).get("shell_environment_policy", {}).get("set", {}).get("AGENT_SANDBOX_ROOT")
             if owner and managed.get("target") == str(candidate / ".codex/config.toml"):
                 return owner
@@ -423,7 +423,7 @@ def socket_boundary_command(args: list[str], landlock: str, env: dict[str, str],
     Read-only file mounts, not chmod bits, establish enrollment authority.
     """
     from .run import native_enrollment_root
-    from .files import read_sidecar
+    from .files import read_binding
 
     cwd = cwd or Path.cwd()
     # Native guards synthesize empty files for absent local bindings in
@@ -435,10 +435,10 @@ def socket_boundary_command(args: list[str], landlock: str, env: dict[str, str],
     root = native_enrollment_root(cwd)
     if str(root) == env.get("AGENT_SANDBOX_ROOT"):
         return [landlock, *args], env
-    binding = read_sidecar(root)
+    binding = read_binding(root)
     if binding is None:
         return [landlock, *args], env
-    manifest = root / PROJECT_SIDECAR
+    manifest = root / PROJECT_STATE_FILE
     guard_paths = [manifest, root / ".agent-sandbox/binding.json"]
     if guarded is None:
         guarded = (os.access(root, os.W_OK)
@@ -473,7 +473,7 @@ def policy_for_command(args: list[str], policy: dict[str, Any]) -> dict[str, Any
     in the untouched argv and continues to enforce the turn's permissions.
     """
     from .run import native_enrollment_root
-    from .files import read_sidecar
+    from .files import read_binding
 
     try:
         cwd_flag = "--command-cwd" if "--command-cwd" in args else "--sandbox-policy-cwd"
@@ -486,20 +486,20 @@ def policy_for_command(args: list[str], policy: dict[str, Any]) -> dict[str, Any
     root = native_enrollment_root(cwd)
     if str(root) == old_env.get("AGENT_SANDBOX_ROOT"):
         return policy
-    binding = read_sidecar(root)
+    binding = read_binding(root)
     if binding is None:
         # A command may legitimately run in /tmp while retaining the
         # thread's workspace policy. Prefer that enrolled policy cwd.
         try:
             root = native_enrollment_root(Path(args[args.index("--sandbox-policy-cwd") + 1]).resolve())
-            binding = read_sidecar(root)
+            binding = read_binding(root)
         except (ValueError, IndexError):
             return policy
         if str(root) == old_env.get("AGENT_SANDBOX_ROOT") or binding is None:
             return policy
     if binding["modules"] is None:
         raise ToolError("moved native command has no active enrollment")
-    manifest = root / PROJECT_SIDECAR
+    manifest = root / PROJECT_STATE_FILE
     try:
         native = json.loads(args[args.index("--permission-profile") + 1])
         entries = native["file_system"]["entries"]

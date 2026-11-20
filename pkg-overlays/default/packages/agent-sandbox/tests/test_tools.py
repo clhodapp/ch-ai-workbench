@@ -103,7 +103,7 @@ class ToolsTest(unittest.TestCase):
             rc = cli.main([*argv[:1], "-C", str(self.repo), *argv[1:]])
         return rc, out.getvalue()
 
-    def sidecar(self):
+    def binding_file(self):
         return json.loads((self.repo / ".agent-sandbox" / "binding.json").read_text())
 
     def consent_script(self, results):
@@ -159,7 +159,7 @@ class ToolsTest(unittest.TestCase):
         self.cli("enroll", "work", "--quiet")
         rc, _ = self.cli("decline", "nix", "--reason", "no store access here")
         self.assertEqual(rc, 0)
-        refusal = self.sidecar()["declined"]["nix"]
+        refusal = self.binding_file()["declined"]["nix"]
         self.assertEqual(refusal["reason"], "no store access here")
         self.assertIn("at", refusal)
         _, out = self.cli("status")
@@ -170,28 +170,28 @@ class ToolsTest(unittest.TestCase):
         self.cli("decline", "nix", "--quiet")
         self.cli("sync", "--quiet")
         self.cli("drop", "git", "--quiet")
-        self.assertIn("nix", self.sidecar()["declined"])
+        self.assertIn("nix", self.binding_file()["declined"])
 
     def test_adding_a_module_withdraws_its_refusal(self):
         self.cli("enroll", "work", "--quiet")
         self.cli("decline", "nix", "git", "--quiet")
         self.cli("add", "nix", "--quiet")
-        self.assertEqual(sorted(self.sidecar()["declined"]), ["git"])
+        self.assertEqual(sorted(self.binding_file()["declined"]), ["git"])
         self.cli("enroll", "git", "--quiet")
-        self.assertNotIn("declined", self.sidecar())
+        self.assertNotIn("declined", self.binding_file())
 
     def test_undecline_withdraws(self):
         self.cli("enroll", "work", "--quiet")
         self.cli("decline", "nix", "--quiet")
         self.assertEqual(self.cli("undecline", "nix", "--quiet")[0], 0)
-        self.assertNotIn("declined", self.sidecar())
+        self.assertNotIn("declined", self.binding_file())
         self.assertEqual(self.cli("undecline", "nix", "--quiet")[0], 1)
 
     def test_an_enabled_module_cannot_be_declined(self):
         self.cli("enroll", "github", "--quiet")
         # git is enabled because github requires it.
         self.assertEqual(self.cli("decline", "git")[0], 1)
-        self.assertNotIn("declined", self.sidecar())
+        self.assertNotIn("declined", self.binding_file())
 
     def test_show_names_the_grants(self):
         self.cli("enroll", "work", "--quiet")
@@ -336,7 +336,7 @@ class ToolsTest(unittest.TestCase):
         self.assertFalse(error, value)
         self.assertIn("enabled github", value)
         self.assertIn("/stop", value)
-        self.assertEqual(self.sidecar()["modules"], ["github", "work"])
+        self.assertEqual(self.binding_file()["modules"], ["github", "work"])
         settings = json.loads((self.repo / ".claude" / "settings.local.json").read_text())
         self.assertIn("/nix/store/gh-farm/bin", settings["env"]["PATH"])
         self.assertIn("/nix/store/git-farm/bin", settings["env"]["PATH"])
@@ -358,8 +358,8 @@ class ToolsTest(unittest.TestCase):
         self.consent_script([{"status": "answered", "value": "decline", "text": "not in this repo"}])
         value, _ = self.call(self.server(), "request-module", module="nix", reason="build")
         self.assertIn("declined nix", value)
-        self.assertEqual(self.sidecar()["declined"]["nix"]["reason"], "not in this repo")
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["declined"]["nix"]["reason"], "not in this repo")
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_not_now_and_timeout_record_nothing(self):
         self.cli("enroll", "work", "--quiet")
@@ -368,8 +368,8 @@ class ToolsTest(unittest.TestCase):
         self.assertIn("not now", value)
         value, _ = self.call(self.server(), "request-module", module="nix", reason="build")
         self.assertIn("did not answer", value)
-        self.assertNotIn("declined", self.sidecar())
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertNotIn("declined", self.binding_file())
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_the_question_key_ignores_the_reason(self):
         # A re-issued request consumes an answer stored for the first
@@ -392,7 +392,7 @@ class ToolsTest(unittest.TestCase):
 
         value, _ = self.call(self.server(elicit), "request-module", module="nix", reason="build")
         self.assertIn("declined nix", value)
-        self.assertEqual(self.sidecar()["declined"]["nix"]["reason"], "use the CI")
+        self.assertEqual(self.binding_file()["declined"]["nix"]["reason"], "use the CI")
         self.assertIn("Unmasks the whole Nix store", asked[0]["message"])
         (call,) = self.consent_calls()
         self.assertEqual(call["argv"][call["argv"].index("--fallback") + 1], "elicit")
@@ -403,8 +403,8 @@ class ToolsTest(unittest.TestCase):
         server = self.server(lambda _: {"action": "accept", "content": {"decision": "enable permanently"}})
         value, _ = self.call(server, "request-module", module="nix", reason="build")
         self.assertIn("enabled nix", value)
-        self.assertEqual(self.sidecar()["modules"], ["nix", "work"])
-        self.assertNotIn("expires", self.sidecar())
+        self.assertEqual(self.binding_file()["modules"], ["nix", "work"])
+        self.assertNotIn("expires", self.binding_file())
 
     def test_elicitation_enable_for_a_day(self):
         self.cli("enroll", "work", "--quiet")
@@ -413,7 +413,7 @@ class ToolsTest(unittest.TestCase):
         value, _ = self.call(server, "request-module", module="nix", reason="build")
         self.assertIn("enabled nix", value)
         self.assertIn(" until ", value)
-        self.assertEqual(list(self.sidecar()["expires"]), ["nix"])
+        self.assertEqual(list(self.binding_file()["expires"]), ["nix"])
 
     def test_the_prompt_offers_a_day_a_week_and_permanently(self):
         self.cli("enroll", "work", "--quiet")
@@ -425,7 +425,7 @@ class ToolsTest(unittest.TestCase):
             options[:3], ["day=Enable for a day", "week=Enable for a week", "enable=Enable permanently"]
         )
         self.assertIn(" until ", value)
-        at = datetime.fromisoformat(self.sidecar()["expires"]["nix"])
+        at = datetime.fromisoformat(self.binding_file()["expires"]["nix"])
         self.assertAlmostEqual((at - datetime.now(UTC)).total_seconds(), 7 * 86400, delta=60)
 
     def test_an_expired_module_is_asked_for_again(self):
@@ -437,7 +437,7 @@ class ToolsTest(unittest.TestCase):
             value, _ = self.call(self.server(), "request-module", module="nix", reason="build")
         self.assertIn("not now", value)
         self.assertEqual(len(self.consent_calls()), 1)
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_cancelled_elicitation_stores_the_question(self):
         # Headless sessions cancel an elicitation at once; the question
@@ -455,15 +455,15 @@ class ToolsTest(unittest.TestCase):
         first, second = self.consent_calls()
         self.assertIn("--fallback", first["argv"])
         self.assertNotIn("--fallback", second["argv"])
-        self.assertEqual(self.sidecar()["modules"], ["work"])
-        self.assertNotIn("declined", self.sidecar())
+        self.assertEqual(self.binding_file()["modules"], ["work"])
+        self.assertNotIn("declined", self.binding_file())
 
     def test_elicitation_decline_action_is_a_refusal(self):
         self.cli("enroll", "work", "--quiet")
         self.consent_script([{"status": "fallback", "value": "elicit"}])
         server = self.server(lambda _: {"action": "decline"})
         self.call(server, "request-module", module="nix", reason="build")
-        self.assertNotIn("reason", self.sidecar()["declined"]["nix"])
+        self.assertNotIn("reason", self.binding_file()["declined"]["nix"])
 
     def test_cancelling_the_call_stops_the_prompt(self):
         self.cli("enroll", "work", "--quiet")
@@ -471,7 +471,7 @@ class ToolsTest(unittest.TestCase):
         server = self.server()
         server.incoming_queue.put({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 7}})
         self.assertIsNone(self.call(server, "request-module", module="nix", reason="build"))
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
     def test_requests_arriving_during_a_prompt_are_served_after_it(self):
         self.cli("enroll", "work", "--quiet")
@@ -490,7 +490,7 @@ class ToolsTest(unittest.TestCase):
         server.incoming_queue.put(None)
         self.assertIsNone(self.call(server, "request-module", module="nix", reason="build"))
         self.assertEqual(server.run(), 0)
-        self.assertEqual(self.sidecar()["modules"], ["work"])
+        self.assertEqual(self.binding_file()["modules"], ["work"])
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ Where things live in this repository:
 - **Enrollment is the user's act.** Nothing is ambient: unenrolled
   repos get only the monotone baseline, and no file ever lands in a
   shared repository.
-- **The checkout is self-describing.** The sidecar
+- **The checkout is self-describing.** The binding file
   (`.agent-sandbox/binding.json`) carries the binding and the
   last-applied blob; there is no central inventory to rot when folders
   move. The same `.agent-sandbox/` directory holds the checkout's owned
@@ -129,14 +129,14 @@ masked enrollment the registry and parts (store symlinks) are
 unreadable, so status there reports the modules and settings integrity
 with freshness marked unknown rather than guessing.
 
-An abandoned checkout keeps its sidecar, so the session-start hook
+An abandoned checkout keeps its binding file, so the session-start hook
 still redirects job scratch and provisions credentials there; only the
 sandbox fragment is gone.
 
 Parts regenerate at every home-manager switch; enrolled checkouts
 converge at point of use: the session-start hook heals staleness in
 the session it fires in, and an unhealed checkout keeps running its
-previous closure consistently. The sidecar records the chosen names,
+previous closure consistently. The binding file records the chosen names,
 not their expansion, so a checkout tracks what its modules, their
 `requires` and `baseModules` become. No enumeration of enrollments
 exists anywhere, so nothing breaks when folders move. A session reads
@@ -147,7 +147,7 @@ session only after the user stops it with `/stop` and starts it again.
 
 `add --for day` or `add --for week` chooses a module until a deadline,
 and the user picks the same durations when answering `request-module`.
-The sidecar records the deadline under `expires`, keyed by module name.
+The binding file records the deadline under `expires`, keyed by module name.
 Running `add` again for a module replaces its deadline, and `add`
 without `--for` makes the choice last until someone drops the module.
 `enroll` and `drop` clear the deadlines of the modules they bind or
@@ -160,18 +160,18 @@ restarted. The CLI therefore keeps a per-user index of the checkouts
 that have a deadline, `$XDG_STATE_HOME/agent-sandbox/expiring.json`,
 and a systemd user timer runs `agent-sandbox expire` every ten
 minutes. The index lists checkouts only; the deadlines stay in each
-checkout's sidecar. `expire` drops due modules, re-applies the rest,
+checkout's binding file. `expire` drops due modules, re-applies the rest,
 and removes checkouts with no deadline left from the index, including
-checkouts whose sidecar is gone. `sync`, `request-module` and the
+checkouts whose binding file is gone. `sync`, `request-module` and the
 SessionStart hook also drop due modules in their checkout. The baseline
-write-guards the index like the sidecar, so an agent cannot remove its
+write-guards the index like the binding file, so an agent cannot remove its
 checkout from the index to keep a module past its deadline.
 
 A session that is already running when a deadline passes keeps the
 module's rules until it is stopped and started again, as with any other
 change to its rules.
 
-A checkout enrolled before sandbox modules existed has a sidecar naming
+A checkout enrolled before sandbox modules existed has a binding file naming
 a profile. A profile named `none` reads as abandoned. Any other profile
 has no module equivalent, so `status` and the session-start hook report
 it and `sync` refuses; the checkout keeps the fragment it last applied
@@ -182,7 +182,7 @@ cleanly because the old applied blob is the merge base.
 
 An agent inside the sandbox cannot inspect or change the sandbox it runs in
 from Bash: in a masked enrollment the registry and parts are
-unreadable, the settings and sidecar files are write-guarded, and the
+unreadable, the settings and binding files are write-guarded, and the
 consent spool (`$XDG_RUNTIME_DIR/claude-consent`) is outside the write
 scope. The plugin therefore declares an MCP server, `agent-sandbox
 mcp`, which Claude Code starts outside the Bash sandbox. Its tools act on
@@ -221,8 +221,8 @@ so the agent can ask for it again. The running
 session keeps its old sandbox rules until the user stops it with
 `/stop` and starts it again, so the tool result tells the agent to
 relay that restart to the user.
-On "decline" the refusal goes into the sidecar under `declined`, with
-the time and the reason; the sidecar is write-guarded, so an agent
+On "decline" the refusal goes into the binding file under `declined`, with
+the time and the reason; the binding file is write-guarded, so an agent
 cannot erase it. "Not now", a dismissed dialog, and a prompt left
 unanswered for fifteen minutes record nothing. Choosing the module with
 `enroll` or `add`, or running `undecline`, withdraws a refusal.
@@ -387,7 +387,7 @@ the Claude Code fragment:
   every granted directory that is missing before the sandbox starts, so
   an agent can create its state directory on first use.
 - The baseline's write guards (the checkout's settings files and
-  sidecar, the old sidecar path, the index of expiring checkouts) go to
+  binding file, the old binding file path, the index of expiring checkouts) go to
   `denyWrite`, because a whole agent writes files with its built-in tools,
   which no permission rule governs.
 - The composed `PATH`, `SHELL` and `AGENT_SANDBOX_*` variables are set
@@ -842,15 +842,15 @@ records which checkouts were enrolled under the old name, so the CLI
 migrates each checkout the first time it touches it: every
 checkout-local verb, the session-start hook, the MCP server, `scan` and
 `expire`. When `.claude/claude-code-sandbox.json` exists and
-`.agent-sandbox/binding.json` does not, the CLI moves the sidecar to the
+`.agent-sandbox/binding.json` does not, the CLI moves the binding file to the
 new path and removes `.claude/claude-code-sandbox/creds`, which the
 session-start hook regenerates under `.agent-sandbox/creds`. A checkout
 that already has the new binding keeps both files as they are. The
 directory `.claude/claude-code-sandbox/jobs` stays, because the tmp
 symlinks of live background jobs point into it; the job-scratch pruner
 removes the scratch of vanished jobs there as well, and the CLI removes
-`.claude/claude-code-sandbox` once it is empty. The sidecar's applied
-fragment moves with the sidecar and is the base of the next three-way
+`.claude/claude-code-sandbox` once it is empty. The binding file's applied
+fragment moves with the binding file and is the base of the next three-way
 merge, so the next `sync` removes the old `CLAUDE_CODE_SANDBOX_*` keys
 from `.claude/settings.local.json` and writes the `AGENT_SANDBOX_*`
 ones. The CLI also moves `$XDG_STATE_HOME/claude-code-sandbox/expiring.json`
@@ -859,7 +859,7 @@ to `$XDG_STATE_HOME/agent-sandbox/expiring.json` unless
 home-manager switch, from `$XDG_CONFIG_HOME/claude-code-sandbox` to
 `$XDG_CONFIG_HOME/agent-sandbox`. The monotone baseline keeps
 write-guarding `.claude/claude-code-sandbox.json`, because the migration
-would turn a sidecar an agent wrote there into a binding.
+would turn a binding file an agent wrote there into a binding.
 
 ### USB hotplug in native Codex
 
@@ -907,7 +907,7 @@ helper and `AGENT_SANDBOX_ROOT`. At the native bwrap boundary,
 `policy_for_command` resolves the actual command's enrollment and uses that
 clone's IPC grants and command routing. Before reading a different clone's
 manifest, it requires explicit native read-only guards on both the binding
-and managed config sidecar. A writable nested manifest is not grant authority.
+file and the managed config state file. A writable nested manifest is not grant authority.
 The original clone's shared helper grants are not expanded, and the native
 filesystem and IP-network argv are left intact. Commands in an unenrolled
 scratch directory retain the thread's enrolled policy cwd.

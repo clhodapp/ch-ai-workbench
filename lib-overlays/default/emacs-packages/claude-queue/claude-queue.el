@@ -196,8 +196,8 @@ is no project."
 (defcustom claude-queue-sandboxed-tools '("Bash" "WebFetch" "WebSearch")
   "Tools lifted from `claude-queue-denied-tools' inside a sandboxed checkout.
 
-A checkout enrolled in agent-sandbox (its sidecar
-`claude-queue--sandbox-sidecar' binds a profile other than the
+A checkout enrolled in agent-sandbox (its binding file
+`claude-queue--sandbox-binding' binds a profile other than the
 reserved empty profile \"none\") confines every Bash command at the
 OS level: the profile's closed toolset, filesystem, and network
 rules.  That is the confinement the deny floor otherwise stands in
@@ -208,7 +208,7 @@ CLI process, outside the Bash sandbox's network namespace: the
 profile's domain rules do not reach them, and the dispatch
 permission mode alone gates their calls.  The emacs server's tools
 have nothing to do with this list: they run in the Emacs process,
-which the sandbox never reaches.  An unreadable or absent sidecar
+which the sandbox never reaches.  An unreadable or absent binding file
 counts as unenrolled."
   :type '(repeat string)
   :group 'claude-queue)
@@ -522,26 +522,26 @@ AGENT is the agent the task goes to, `claude' when nil."
 
 ;;; Dispatch
 
-(defconst claude-queue--sandbox-sidecar ".agent-sandbox/binding.json"
-  "Checkout-relative path of the agent-sandbox enrollment sidecar.
+(defconst claude-queue--sandbox-binding ".agent-sandbox/binding.json"
+  "Checkout-relative path of the agent-sandbox enrollment binding file.
 Written only by the `agent-sandbox' CLI; a JSON object whose
 \"modules\" lists the sandbox modules the checkout chose (an empty
 list is the base modules alone, null an abandoned checkout).  A
-sidecar written before sandbox modules existed names a \"profile\"
+binding file written before sandbox modules existed names a \"profile\"
 instead (\"none\" = abandoned).")
 
 (defun claude-queue--sandboxed-p (root)
   "Non-nil when the checkout at ROOT is enrolled in agent-sandbox.
 
-Nil when ROOT is nil, has no sidecar, the sidecar is unreadable or
+Nil when ROOT is nil, has no binding file, the binding file is unreadable or
 malformed -- every failure reads as unenrolled -- or the checkout
 is abandoned."
   (when root
-    (let ((sidecar (expand-file-name claude-queue--sandbox-sidecar root)))
-      (when (file-readable-p sidecar)
+    (let ((binding-file (expand-file-name claude-queue--sandbox-binding root)))
+      (when (file-readable-p binding-file)
         (condition-case nil
             (with-temp-buffer
-              (insert-file-contents sidecar)
+              (insert-file-contents binding-file)
               (let* ((binding (json-parse-buffer))
                      (modules (gethash "modules" binding 'absent))
                      (profile (gethash "profile" binding)))
@@ -568,7 +568,7 @@ directory."
 ROOT is a project checkout enrolled in a sandbox profile, plus
 `claude-queue-bare-root-denied-tools' when ROOT is no project.  The
 sandbox lift needs the project: the sandbox tool only enrolls git
-roots, so a sidecar found under a bare directory is not an
+roots, so a binding file found under a bare directory is not an
 enrollment and lifts nothing."
   (let ((project (claude-queue--project-root-p root)))
     (append (if (and project (claude-queue--sandboxed-p root))

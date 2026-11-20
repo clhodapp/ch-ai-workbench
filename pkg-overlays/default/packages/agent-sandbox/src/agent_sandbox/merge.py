@@ -9,7 +9,7 @@ bounded domain and copies everything else through untouched.
 
 Domain invariant: only paths present in ``paths(base) | paths(new)`` are
 ever modified. ``base`` is the blob this tool last applied (from the
-sidecar); ``new`` is the profile fragment being applied now. Keys owned by
+binding file); ``new`` is the profile fragment being applied now. Keys owned by
 Claude Code or added by hand outside that domain are never visited, so the
 merge stays correct when Claude Code adds keys, including new keys
 *inside* subtrees this tool also writes to (co-ownership is interleaved at

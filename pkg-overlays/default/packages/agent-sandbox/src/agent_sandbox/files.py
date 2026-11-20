@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""File plumbing: repo discovery, atomic JSON IO, sidecar, registry.
+"""File plumbing: repo discovery, atomic JSON IO, binding file, registry.
 
 The settings file is written the same way Claude Code writes it (temp file
 in the same directory, mode 0600, atomic rename) with optimistic
@@ -22,12 +22,12 @@ from typing import Any
 
 SETTINGS_NAME = "settings.local.json"
 SANDBOX_DIR_NAME = ".agent-sandbox"
-SIDECAR_NAME = "binding.json"
+BINDING_NAME = "binding.json"
 EXPIRING_NAME = "expiring.json"
 
 # Where checkouts and the user's state kept these before the tool was
 # renamed from claude-code-sandbox. Only the migration reads them.
-OLD_SIDECAR_NAME = "claude-code-sandbox.json"
+OLD_BINDING_NAME = "claude-code-sandbox.json"
 OLD_DIR_NAME = "claude-code-sandbox"
 
 # How long a module chosen for a limited time stays chosen.
@@ -97,12 +97,12 @@ def sandbox_dir(root: Path) -> Path:
     return root / SANDBOX_DIR_NAME
 
 
-def sidecar_path(root: Path) -> Path:
-    return sandbox_dir(root) / SIDECAR_NAME
+def binding_path(root: Path) -> Path:
+    return sandbox_dir(root) / BINDING_NAME
 
 
-def old_sidecar_path(root: Path) -> Path:
-    return claude_dir(root) / OLD_SIDECAR_NAME
+def old_binding_path(root: Path) -> Path:
+    return claude_dir(root) / OLD_BINDING_NAME
 
 
 def _state_base() -> Path:
@@ -121,14 +121,14 @@ def migrate_checkout(root: Path) -> bool:
     """Move a checkout bound under the tool's old name to the new layout.
 
     When ``.claude/claude-code-sandbox.json`` exists and
-    ``.agent-sandbox/binding.json`` does not, the sidecar moves to the
+    ``.agent-sandbox/binding.json`` does not, the binding file moves to the
     new place and the old credentials directory is removed (it is
     regenerated). The old jobs directory stays, because live jobs' tmp
     symlinks point into it; the scratch pruner empties it, and the old
     directory goes when it is empty. A checkout that has the new binding
-    is left alone. Returns True when the sidecar moved."""
-    old = old_sidecar_path(root)
-    new = sidecar_path(root)
+    is left alone. Returns True when the binding file moved."""
+    old = old_binding_path(root)
+    new = binding_path(root)
     old_dir = claude_dir(root) / OLD_DIR_NAME
     moved = False
     try:
@@ -174,7 +174,7 @@ def migrate_state() -> bool:
 
 def expiring_path() -> Path:
     """The user's index of checkouts that chose a module for a limited
-    time. The deadlines live in each checkout's sidecar; the index only
+    time. The deadlines live in each checkout's binding file; the index only
     tells the expiry run which checkouts to read."""
     return state_dir() / EXPIRING_NAME
 
@@ -275,14 +275,14 @@ def update_json(
     )
 
 
-def _is_native_worktree_placeholder(root: Path, sidecar: Path) -> bool:
+def _is_native_worktree_placeholder(root: Path, binding_file: Path) -> bool:
     """An empty native missing-file guard is not a local enrollment.
     Accept only a previously managed, back-registered inherited worktree;
     a real local binding/abandonment or a primary-root corruption still
     fails closed. This also tolerates concurrent native guard lifetimes.
     """
     try:
-        if sidecar.is_symlink() or sidecar.read_bytes() != b"":
+        if binding_file.is_symlink() or binding_file.read_bytes() != b"":
             return False
         managed = json.loads((root / ".agent-sandbox/codex-config.json").read_text())
         if managed.get("target") != str(root / ".codex/config.toml"):
@@ -307,7 +307,7 @@ def _is_native_worktree_placeholder(root: Path, sidecar: Path) -> bool:
         return False
 
 
-def read_sidecar(root: Path) -> dict[str, Any] | None:
+def read_binding(root: Path) -> dict[str, Any] | None:
     """The checkout's binding, normalized to ``modules`` (the sorted
     chosen names, or None when abandoned), ``applied`` (the fragment this
     tool last wrote), ``expires``, ``declined`` and ``legacy_profile``.
@@ -318,37 +318,37 @@ def read_sidecar(root: Path) -> dict[str, Any] | None:
 
     ``declined`` maps each module the user refused for this checkout to
     the refusal: ``at`` (an ISO 8601 time) and an optional ``reason``.
-    The sidecar is write-guarded from sandboxed commands and file tools,
+    The binding file is write-guarded from sandboxed commands and file tools,
     so an agent cannot erase a refusal.
 
-    A sidecar written before sandbox modules existed names a ``profile``
+    A binding file written before sandbox modules existed names a ``profile``
     instead. The reserved empty profile ``none`` is the abandoned state,
     so it reads as such. Any other profile has no module equivalent: it
     reads with ``legacy_profile`` set, and the checkout keeps its applied
     fragment (the merge base for re-enrollment) until someone enrolls it
     with modules."""
-    sidecar = sidecar_path(root)
-    if not sidecar.exists() or _is_native_worktree_placeholder(root, sidecar):
+    binding_file = binding_path(root)
+    if not binding_file.exists() or _is_native_worktree_placeholder(root, binding_file):
         return None
-    value = read_json(sidecar)
+    value = read_json(binding_file)
     applied = value.get("applied")
     if not isinstance(applied, dict):
-        raise ToolError(f"{sidecar} is malformed (expected an applied object)")
+        raise ToolError(f"{binding_file} is malformed (expected an applied object)")
     declined = value.get("declined", {})
     if not (isinstance(declined, dict) and all(isinstance(v, dict) for v in declined.values())):
-        raise ToolError(f"{sidecar} is malformed (declined must map module names to objects)")
+        raise ToolError(f"{binding_file} is malformed (declined must map module names to objects)")
     try:
         expires = {name: datetime.fromisoformat(at) for name, at in value.get("expires", {}).items()}
     except (AttributeError, TypeError, ValueError) as e:
-        raise ToolError(f"{sidecar} is malformed (expires must map module names to ISO 8601 times)") from e
+        raise ToolError(f"{binding_file} is malformed (expires must map module names to ISO 8601 times)") from e
     if any(at.tzinfo is None for at in expires.values()):
-        raise ToolError(f"{sidecar} is malformed (expires times need a timezone)")
+        raise ToolError(f"{binding_file} is malformed (expires times need a timezone)")
     if "modules" in value:
         modules = value["modules"]
         if modules is not None and not (
             isinstance(modules, list) and all(isinstance(m, str) for m in modules)
         ):
-            raise ToolError(f"{sidecar} is malformed (modules must be a list of names or null)")
+            raise ToolError(f"{binding_file} is malformed (modules must be a list of names or null)")
         return {
             "modules": modules,
             "applied": applied,
@@ -358,12 +358,12 @@ def read_sidecar(root: Path) -> dict[str, Any] | None:
         }
     profile = value.get("profile")
     if not isinstance(profile, str):
-        raise ToolError(f"{sidecar} is malformed (expected modules + applied)")
+        raise ToolError(f"{binding_file} is malformed (expected modules + applied)")
     legacy = None if profile == "none" else profile
     return {"modules": None, "applied": applied, "expires": {}, "declined": declined, "legacy_profile": legacy}
 
 
-def write_sidecar(
+def write_binding(
     root: Path,
     modules: list[str] | None,
     applied: dict[str, Any],
@@ -378,7 +378,7 @@ def write_sidecar(
         value["expires"] = {name: at.isoformat(timespec="seconds") for name, at in sorted(kept.items())}
     if declined:
         value["declined"] = dict(sorted(declined.items()))
-    write_json_atomic(sidecar_path(root), value)
+    write_json_atomic(binding_path(root), value)
     index_expiring(root, bool(kept))
 
 

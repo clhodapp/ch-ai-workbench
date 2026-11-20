@@ -4,7 +4,7 @@ the skills-dir plugin.
 
 A sandboxed agent cannot inspect or change the sandbox it runs in from Bash: in
 a masked enrollment the registry and parts are unreadable, the settings
-and sidecar files are write-guarded, and the consent spool is outside
+and binding files are write-guarded, and the consent spool is outside
 the write scope. Claude Code starts MCP servers outside the Bash
 sandbox, so these tools can read the registry, prompt the user, and
 apply the user's answer. The agent asks; only the user's answer changes
@@ -27,7 +27,7 @@ The checkout is the one the session was launched in
    agent is told how the user answers it; calling the tool again consumes
    the answer.
 
-An explicit refusal is recorded in the checkout's sidecar, so later
+An explicit refusal is recorded in the checkout's binding file, so later
 requests for that module report it instead of asking again. A dismissed
 or unanswered prompt records nothing.
 """

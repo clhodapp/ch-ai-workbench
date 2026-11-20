@@ -21,7 +21,7 @@ API hosts). What differs from the Claude Code fragment:
 - srt grants no write access that is not listed, so the checkout root and
   a per-run scratch directory (the agent's ``TMPDIR``) are added to
   ``allowWrite``. The registry's
-  write guards (the checkout's settings files and sidecar, the index of
+  write guards (the checkout's settings files and binding file, the index of
   expiring checkouts) go to ``denyWrite``.
 - A unix-socket allowlist is enforced by starting the agent itself through
   the socket shell, so the agent process is narrowed and not only the
@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Any
 
 from .compose import SOCKETS_ENV_VAR, compose, resolve
-from .files import ToolError, find_repo_root, migrate_checkout, migrate_state, read_sidecar, write_text_atomic
+from .files import ToolError, find_repo_root, migrate_checkout, migrate_state, read_binding, write_text_atomic
 from .registry import load_part, load_registry
 
 ROOT_ENV_VAR = "AGENT_SANDBOX_ROOT"
@@ -234,7 +234,7 @@ def native_enrollment_root(project: Path) -> Path:
     inheritance grant: the worktree registration must point back to it.
     """
     for candidate in [project, *project.parents]:
-        if read_sidecar(candidate) is not None:
+        if read_binding(candidate) is not None:
             return candidate
     git = project / ".git"
     if git.is_file():
@@ -248,7 +248,7 @@ def native_enrollment_root(project: Path) -> Path:
             if (backlink == git.resolve() and metadata.parent == common / "worktrees"
                     and common.name == ".git"):
                 for candidate in [common.parent, *common.parent.parents]:
-                    if read_sidecar(candidate) is not None:
+                    if read_binding(candidate) is not None:
                         return candidate
         except (OSError, ValueError):
             pass
@@ -268,24 +268,24 @@ def prepare(
     project_root = root
     migrate_state()
     migrate_checkout(root)
-    sidecar = read_sidecar(root)
+    binding_file = read_binding(root)
     registry = None
-    if sidecar is None:
+    if binding_file is None:
         inherited = native_enrollment_root(root)
         if inherited != root:
             registry = load_registry()
             if (registry.get("agents") or {}).get(agent_name, {}).get("backend") != "codex":
                 return None
             root = inherited
-            sidecar = read_sidecar(root)
-    if sidecar is None or sidecar["modules"] is None:
+            binding_file = read_binding(root)
+    if binding_file is None or binding_file["modules"] is None:
         return None
     from .cli import due_modules, expire_due
 
-    if due_modules(sidecar):
+    if due_modules(binding_file):
         expire_due(root)
-        sidecar = read_sidecar(root)
-        if sidecar is None or sidecar["modules"] is None:
+        binding_file = read_binding(root)
+        if binding_file is None or binding_file["modules"] is None:
             return None
 
     registry = registry or load_registry()
@@ -304,7 +304,7 @@ def prepare(
 
     fragment = compose(
         registry,
-        [*sidecar["modules"], *(agent.get("modules") or [])],
+        [*binding_file["modules"], *(agent.get("modules") or [])],
         {ROOT_ENV_VAR: str(root)},
     )
     env = {**os.environ, **fragment.get("env", {}), **(agent.get("env") or {})}
@@ -361,7 +361,7 @@ def prepare(
 
         try:
             git_write = any(part.get("allowGit", False) for part in resolve(
-                registry, [*sidecar["modules"], *(agent.get("modules") or [])]
+                registry, [*binding_file["modules"], *(agent.get("modules") or [])]
             ).values())
             args = prepare_native(settings, root, scratch, base, env, git_write=git_write,
                                   project_root=project_root, module_env=fragment["env"])

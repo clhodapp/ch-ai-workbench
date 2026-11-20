@@ -8,7 +8,7 @@ a tool result see the same account of each grant.
 A module is *enabled* in a checkout when the checkout chose it, when it
 is one of the registry's ``baseModules``, or when an enabled module
 requires it. A module is *declined* when the user answered a request for
-it with a refusal; the sidecar keeps that answer until the user enables
+it with a refusal; the binding file keeps that answer until the user enables
 the module or withdraws the refusal with ``undecline``.
 """
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .compose import check_known, module_names
-from .files import ToolError, read_sidecar
+from .files import ToolError, read_binding
 from .registry import load_part
 
 
@@ -48,27 +48,27 @@ def checkout_state(root: Path, registry: dict[str, Any] | None) -> dict[str, Any
     checkout also reports ``chosen``, ``expires`` (each module chosen for
     a limited time, to its deadline) and, given the registry,
     ``enabled`` (name to reason)."""
-    sidecar = read_sidecar(root)
+    binding_file = read_binding(root)
     state: dict[str, Any] = {"checkout": str(root)}
-    if sidecar is None:
+    if binding_file is None:
         state["enrollment"] = "not enrolled"
         state["declined"] = {}
         return state
-    state["declined"] = sidecar["declined"]
-    if sidecar["legacy_profile"] is not None:
+    state["declined"] = binding_file["declined"]
+    if binding_file["legacy_profile"] is not None:
         state["enrollment"] = "legacy profile"
-        state["profile"] = sidecar["legacy_profile"]
+        state["profile"] = binding_file["legacy_profile"]
         return state
-    if sidecar["modules"] is None:
+    if binding_file["modules"] is None:
         state["enrollment"] = "abandoned"
         return state
     state["enrollment"] = "enrolled"
-    state["chosen"] = sidecar["modules"]
+    state["chosen"] = binding_file["modules"]
     state["expires"] = {
-        name: at.astimezone().isoformat(timespec="minutes") for name, at in sorted(sidecar["expires"].items())
+        name: at.astimezone().isoformat(timespec="minutes") for name, at in sorted(binding_file["expires"].items())
     }
     if registry is not None:
-        state["enabled"] = enabled_by(registry, sidecar["modules"])
+        state["enabled"] = enabled_by(registry, binding_file["modules"])
     return state
 
 

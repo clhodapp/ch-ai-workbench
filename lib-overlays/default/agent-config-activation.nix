@@ -6,7 +6,7 @@
 # because the agent rewrites it at runtime, so `agent-config apply`
 # merges the settings in: it changes only what the settings declare now
 # or declared at the last activation, and keeps everything the agent or
-# a person wrote. The sidecar under the XDG state directory records what
+# a person wrote. The state file under the XDG state directory records what
 # was applied, and is the merge base of the next activation.
 #
 # The entry runs after `linkGeneration`, so a file Home Manager linked
@@ -15,7 +15,7 @@
 #
 # Arguments: `lib` and `pkgs` of the home-manager configuration,
 # `config` for the state directory, and per file a `name`
-# (the sidecar's name and the label of report lines), `format` ("json"
+# (the state file's name and the label of report lines), `format` ("json"
 # or "toml"), `target` (an absolute path string, which may use $HOME),
 # and `settings` (an attribute set; TOML has no null).
 {
@@ -36,12 +36,12 @@ let
       home-manager configuration evaluates with.
     '');
   fragment = pkgs.writeText "agent-config-${name}.json" (builtins.toJSON settings);
-  sidecar = "${config.xdg.stateHome}/ch-ai-workbench/agent-config/${name}.json";
+  stateFile = "${config.xdg.stateHome}/ch-ai-workbench/agent-config/${name}.json";
 in
 lib.hm.dag.entryAfter [ "linkGeneration" ] ''
   run ${lib.getExe tool} apply --format ${format} \
     --target "${target}" \
     --fragment ${fragment} \
-    --sidecar "${sidecar}" \
+    --state-file "${stateFile}" \
     --name ${lib.escapeShellArg name}
 ''
