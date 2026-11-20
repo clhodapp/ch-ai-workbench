@@ -85,6 +85,18 @@ issues credentials (for Google `iamcredentials.googleapis.com`,
 permissions of the bot identity say, because a successful call would return
 a token. The proxy also keeps tokens out of its logs.
 
+A client finds the proxy at a local address in plain HTTP, and the proxy
+sends the request on to the service over TLS. Each provider section below
+names the setting that points its clients at the proxy. The sandbox offers
+a unix socket, the clients need an HTTP address, and the native sandbox of
+Codex runs commands in a separate network namespace, so a listener on the
+host loopback cannot be used. A small relay inside the sandbox, started by
+the module, listens on a loopback port and copies the bytes to the socket.
+The proxy refuses a request that carries any credential other than the
+placeholder, so a client that found a real credential is noticed. A client
+without an endpoint setting sends its request straight to the service
+without a credential, and the request fails.
+
 ## A bot identity that is the person
 
 A bot identity can use the accounts of the person. The proxy then applies
@@ -233,6 +245,18 @@ environment that points the Google clients at the proxy and gives them the
 placeholder token `proxy-replace`. The proxy replaces the `Authorization`
 header of every request with the token that it minted.
 
+The Google clients take an endpoint in three ways. `gcloud` has an
+`api_endpoint_overrides/<service>` property for each service, with a
+matching environment variable (`CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>`).
+The Google provider for Terraform and OpenTofu has a `*_custom_endpoint`
+setting for each product, and a `universe_domain` setting since version
+5.18.0. The Python client libraries read the universe domain from
+`GOOGLE_CLOUD_UNIVERSE_DOMAIN`. The module sets the overrides for the Google
+services that a configuration uses. A universe domain setting may make a
+client refuse credentials from the default universe. If a client cannot take
+an endpoint, the fallback is a proxy that terminates TLS with a certificate
+authority that the sandbox trusts, which is more code and a larger risk.
+
 ### GitHub
 
 The GitHub account of a bot identity is a GitHub App. The proxy signs a
@@ -350,31 +374,10 @@ filter adds a check that does not depend on the permissions being right.
 
 ## Open questions
 
-- **How clients reach the proxy.** For Google, the proxy has to receive
-  each request to replace its token, so a client has to send its requests
-  to a local address in plain HTTP, and the proxy re-issues them to Google
-  over TLS. The documentation shows three mechanisms. `gcloud` has an
-  `api_endpoint_overrides/<service>` property for each service, with a
-  matching environment variable
-  (`CLOUDSDK_API_ENDPOINT_OVERRIDES_<SERVICE>`). The Google provider for
-  Terraform and OpenTofu has a `*_custom_endpoint` setting for each product,
-  and a `universe_domain` setting since version 5.18.0. The Python client
-  libraries read the universe domain from `GOOGLE_CLOUD_UNIVERSE_DOMAIN`.
-  The module would set the overrides for the Google services that a
-  configuration uses, and a service without an override sends its request
-  to Google without a credential and fails. The proxy refuses a request
-  that carries any bearer value other than the placeholder, so a client
-  that found a real credential is noticed. A universe domain setting may
-  make a client refuse credentials from the default universe. The fallback
-  is a proxy that terminates TLS with a certificate authority that the
-  sandbox trusts, which is more code and a larger risk. Which libraries
-  respect these settings for every call has not been tested.
-- **From a unix socket to a local address.** The clients need an HTTP
-  address, the sandbox offers a unix socket, and the native sandbox of
-  Codex runs commands in a separate network namespace, so a listener on the
-  host loopback is out of reach. A small relay inside the sandbox, started
-  by the module, would listen on a loopback port and copy the bytes to the
-  socket. How the module starts it, and for how long, has not been decided.
+- **The endpoint settings.** Which Google, GitHub and AWS clients honor
+  their endpoint settings on every call has not been tested.
+- **The relay.** How the module starts the relay, and for how long, has not
+  been decided.
 - **The bot identity setting in the sidecar.** The composer and the sidecar
   format need a place for one setting that is not a module. Whether this
   fits the current `binding.json` has not been checked.
