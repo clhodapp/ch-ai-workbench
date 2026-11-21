@@ -11,7 +11,7 @@ executables, domains, unix sockets and writable paths. A checkout opts
 into the set of modules its work needs by *enrollment*, which composes
 them into Claude Code's native sandbox rules through two files: the
 co-owned `.claude/settings.local.json` (tool-owned `sandbox`/`env` keys
-merged alongside the keys Claude Code writes) and the sidecar
+merged alongside the keys Claude Code writes) and the binding file
 `.agent-sandbox/binding.json` (the chosen modules and the last-applied
 blob).
 
@@ -68,7 +68,7 @@ Facts that prevent wrong conclusions:
 - A checkout bound to a *profile* predates sandbox modules. `status`
   reports it and `sync` refuses; enrolling it with modules replaces the
   old rules cleanly.
-- Never edit the sidecar by hand, and never delete
+- Never edit the binding file by hand, and never delete
   `settings.local.json` to "reset"; use `abandon`.
 - Modules are declared in home-manager
   (`ch-ai-workbench.agent-sandbox.modules`); changing what a

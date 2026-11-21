@@ -11,7 +11,7 @@ declared settings are merged into the live file instead.
 The merge follows the rules of agent-sandbox's ``merge.py``:
 
 - Only paths present in ``paths(base) | paths(new)`` are modified.
-  ``base`` is the fragment this tool last applied (from the sidecar) and
+  ``base`` is the fragment this tool last applied (from the state file) and
   ``new`` is the fragment declared now. Everything else in the document
   passes through untouched, including keys the agent adds inside a table
   this tool also writes.

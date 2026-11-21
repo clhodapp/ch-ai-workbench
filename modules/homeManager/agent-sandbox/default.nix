@@ -130,7 +130,7 @@ let
   # ("Bad owner or permissions": the userns maps its root owner to
   # nobody). The session-start hook writes an owned copy at the
   # ENROLLED-CHECKOUT root: <root>/.agent-sandbox/creds/ssh_config,
-  # beside the sidecar (.agent-sandbox/binding.json).
+  # beside the binding file (.agent-sandbox/binding.json).
   # This wrapper points ssh at it with -F, then passes through every
   # argument the sandbox's injected GIT_SSH_COMMAND supplies (the CONNECT
   # ProxyCommand included): git invokes `ssh` by bare name and PATH
@@ -142,11 +142,11 @@ let
   # CLAUDE_PROJECT_DIR is hook-only). This is authoritative: it names the
   # checkout the session is enrolled in, regardless of where the
   # command's cwd has wandered. Fallback (an un-applied checkout, or a
-  # stale session predating this key): walk up from $PWD to the sidecar.
+  # stale session predating this key): walk up from $PWD to the binding file.
   # That is correct whenever cwd is inside the checkout, and it is NOT
   # `git rev-parse --show-toplevel`, which gives the SUBMODULE root in the
   # multi-repo case, while the creds live at the OUTER enrolled root
-  # beside the sidecar. Outside the sandbox, or with no root or copy, it
+  # beside the binding file. Outside the sandbox, or with no root or copy, it
   # falls through to real ssh unchanged, so it is inert there.
   sshWrapper = pkgs.writeShellScriptBin "ssh" ''
     real=${cfg.runtime.opensshPackage}/bin/ssh
@@ -751,8 +751,8 @@ let
   # The expiry timer reads it; an agent that could edit it could keep a
   # module past its deadline.
   #
-  # The baseline also guards the sidecar's old place,
-  # .claude/claude-code-sandbox.json: the CLI moves a sidecar found there
+  # The baseline also guards the binding file's old place,
+  # .claude/claude-code-sandbox.json: the CLI moves a binding file found there
   # into .agent-sandbox/ when the checkout has no binding yet, so a file
   # an agent wrote there would become a binding.
   expiringIndex = "${config.xdg.stateHome}/agent-sandbox/expiring.json";

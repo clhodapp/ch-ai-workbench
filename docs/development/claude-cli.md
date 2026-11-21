@@ -158,19 +158,19 @@ on the command line:
   unattended disk writes on either path; it keeps reads, comments,
   `present`, and `edit-buffer`, whose changes land in the buffer for
   the resident user to save. The sandbox lift also requires a project
-  root: the sandbox tool only enrolls git roots, so a sidecar under a
+  root: the sandbox tool only enrolls git roots, so a binding file under a
   bare directory lifts nothing.
 - **Lifted inside a sandboxed checkout** (`claude-queue-sandboxed-tools`,
   default `Bash`, `WebFetch`, `WebSearch`): when the dispatch root
-  carries an agent-sandbox sidecar file
+  carries an agent-sandbox binding file
   (`.agent-sandbox/binding.json`) that binds a profile other than
   the reserved empty `none`, shell and network are dropped from the
   deny floor before rendering, so the session keeps them under the
   profile's OS-level confinement (closed toolset, filesystem,
-  network). Detection is the sidecar alone (absent, unreadable, or
+  network). Detection is the binding file alone (absent, unreadable, or
   malformed all read as unenrolled), and the root is the outermost git
   checkout (`claude-queue--root`), so a dispatch from a linked worktree
-  under the primary checkout reads the primary's sidecar. Approval of
+  under the primary checkout reads the primary's binding file. Approval of
   the lifted calls is then the sandbox settings' business (the
   dispatch permission mode and the profile's `autoAllowBashIfSandboxed`
   if set), not the dispatcher's. `WebFetch` and `WebSearch` run inside

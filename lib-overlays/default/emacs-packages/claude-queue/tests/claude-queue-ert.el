@@ -172,8 +172,8 @@ bare-root guard stays out of the floor."
 
 ;;; Sandbox-enrolled and bare roots
 
-(defun claude-queue-ert--with-checkout (sidecar-json fn &optional bare)
-  "Call FN with a fresh root holding SIDECAR-JSON (nil = none).
+(defun claude-queue-ert--with-checkout (binding-json fn &optional bare)
+  "Call FN with a fresh root holding BINDING-JSON (nil = none).
 The root is a git checkout (an empty .git directory, enough for
 project.el) unless BARE, which leaves it a plain directory."
   (let ((root (make-temp-file "claude-queue-ert-" t)))
@@ -181,11 +181,11 @@ project.el) unless BARE, which leaves it a plain directory."
         (progn
           (unless bare
             (make-directory (expand-file-name ".git" root)))
-          (when sidecar-json
-            (let ((sidecar (expand-file-name claude-queue--sandbox-sidecar
+          (when binding-json
+            (let ((binding-file (expand-file-name claude-queue--sandbox-binding
                                              root)))
-              (make-directory (file-name-directory sidecar) t)
-              (with-temp-file sidecar (insert sidecar-json))))
+              (make-directory (file-name-directory binding-file) t)
+              (with-temp-file binding-file (insert binding-json))))
           (funcall fn (file-name-as-directory root)))
       (delete-directory root t))))
 
@@ -230,8 +230,8 @@ territory).  Rooted in a project they stay allowed."
      (should (equal claude-queue-denied-tools
                     (claude-queue-ert--denied root))))))
 
-(ert-deftest claude-queue-command-bare-root-ignores-sidecar ()
-  "A sidecar under a bare directory is not an enrollment (the sandbox
+(ert-deftest claude-queue-command-bare-root-ignores-binding-file ()
+  "A binding file under a bare directory is not an enrollment (the sandbox
 tool only enrolls git roots): shell and network stay floored, and
 the bare-root guard applies in full."
   (claude-queue-ert--with-checkout
@@ -243,7 +243,7 @@ the bare-root guard applies in full."
    t))
 
 (ert-deftest claude-queue-sandbox-reads-modules ()
-  "A sidecar that lists modules is an enrollment, an empty list (the
+  "A binding file that lists modules is an enrollment, an empty list (the
 base modules alone) included."
   (claude-queue-ert--with-checkout
    "{\"modules\": [\"git\", \"nix\"], \"applied\": {}}"
@@ -253,14 +253,14 @@ base modules alone) included."
    (lambda (root) (should (claude-queue--sandboxed-p root)))))
 
 (ert-deftest claude-queue-sandbox-reads-legacy-profile ()
-  "A sidecar from before sandbox modules names a profile."
+  "A binding file from before sandbox modules names a profile."
   (claude-queue-ert--with-checkout
    "{\"profile\": \"nix\", \"applied\": {}}"
    (lambda (root) (should (claude-queue--sandboxed-p root)))))
 
 (ert-deftest claude-queue-sandbox-unenrolled-shapes ()
-  "No root, no sidecar, an abandoned checkout in either format, and a
-malformed sidecar all read as unenrolled."
+  "No root, no binding file, an abandoned checkout in either format, and a
+malformed binding file all read as unenrolled."
   (should-not (claude-queue--sandboxed-p nil))
   (claude-queue-ert--with-checkout
    nil (lambda (root) (should-not (claude-queue--sandboxed-p root))))

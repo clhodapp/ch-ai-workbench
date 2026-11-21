@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Idempotent user-level registration of the module's Claude Code hooks
 # and permissions.deny rules
-# (usage: claude-hooks-register <settings-file> <manifest> <sidecar>).
+# (usage: claude-hooks-register <settings-file> <manifest> <state-file>).
 #
 # ~/.claude/settings.json is runtime-mutable state (the CLI rewrites
 # it for theme/model toggles, and a person may hand-add entries), so
@@ -9,7 +9,7 @@
 # in by a merge that follows the agent-sandbox model for
 # co-owned settings files: <manifest> is the store-rendered
 # declaration (the "new" fragment: {hooks: [{event, matcher|null,
-# command, timeout|null}], permissions: {deny: [rule]}}), <sidecar>
+# command, timeout|null}], permissions: {deny: [rule]}}), <state-file>
 # records what this tool last applied (the "base"), and only entries
 # in base or new are ever touched.  Per hook event, and for the deny
 # list, the next list is
@@ -27,7 +27,7 @@
 # replaced with the activation environment's runtime dir
 # (/run/user/<uid> when unset): that path is not known at evaluation,
 # and a rule must name it concretely.  Preserved ad-hoc entries are
-# reported on stderr.  A sidecar from before the deny fragment
+# reported on stderr.  A state file from before the deny fragment
 # existed (applied = {event: [entries]}) is read as hooks only.
 { pkgs }:
 pkgs.writeShellApplication {
@@ -39,17 +39,17 @@ pkgs.writeShellApplication {
   text = ''
     settings=$1
     manifest=$2
-    sidecar=$3
+    state_file=$3
     runtime="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-    mkdir -p "$(dirname "$settings")" "$(dirname "$sidecar")"
+    mkdir -p "$(dirname "$settings")" "$(dirname "$state_file")"
     [ -s "$settings" ] || echo '{}' > "$settings"
     base='{"hooks":{},"deny":[]}'
-    if [ -s "$sidecar" ]; then
+    if [ -s "$state_file" ]; then
       base=$(jq -c '
         .applied // {}
         | if has("hooks") or has("deny") then {hooks: (.hooks // {}), deny: (.deny // [])}
           else {hooks: ., deny: []} end
-      ' "$sidecar" 2>/dev/null || echo '{"hooks":{},"deny":[]}')
+      ' "$state_file" 2>/dev/null || echo '{"hooks":{},"deny":[]}')
     fi
     # The declaration rendered into the settings shape: hooks grouped
     # by event as {event: [ {matcher?, hooks: [{type, command, timeout?}]} ]},
@@ -91,7 +91,7 @@ pkgs.writeShellApplication {
     fi
     mv "$tmp" "$settings"
     jq -n --arg manifest "$manifest" --argjson applied "$new" \
-      '{manifest: $manifest, applied: $applied}' > "$sidecar"
+      '{manifest: $manifest, applied: $applied}' > "$state_file"
     # Ad-hoc entries kept in place: in the file, in a list the module
     # touches, but neither declared now nor applied before.
     jq -r --argjson new "$new" --argjson base "$base" '

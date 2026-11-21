@@ -31,23 +31,23 @@ class MigrateTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         os.environ.pop("AGENT_SANDBOX_STATE", None)
         self.old_dir = self.repo / ".claude" / "claude-code-sandbox"
-        self.old_sidecar = self.repo / ".claude" / "claude-code-sandbox.json"
-        self.new_sidecar = self.repo / ".agent-sandbox" / "binding.json"
+        self.old_binding_file = self.repo / ".claude" / "claude-code-sandbox.json"
+        self.new_binding_file = self.repo / ".agent-sandbox" / "binding.json"
 
     def write_old_checkout(self, applied=None):
         (self.repo / ".claude").mkdir(exist_ok=True)
-        self.old_sidecar.write_text(
+        self.old_binding_file.write_text(
             json.dumps({"modules": ["work"], "applied": applied if applied is not None else {}})
         )
         (self.old_dir / "creds").mkdir(parents=True)
         (self.old_dir / "creds" / "ssh_config").write_text("Host x\n")
         (self.old_dir / "jobs" / "job1" / "tmp").mkdir(parents=True)
 
-    def test_sidecar_moves_and_creds_go(self):
+    def test_binding_file_moves_and_creds_go(self):
         self.write_old_checkout({"env": {"A": "1"}})
         self.assertTrue(files.migrate_checkout(self.repo))
-        self.assertFalse(self.old_sidecar.exists())
-        self.assertEqual(json.loads(self.new_sidecar.read_text())["applied"], {"env": {"A": "1"}})
+        self.assertFalse(self.old_binding_file.exists())
+        self.assertEqual(json.loads(self.new_binding_file.read_text())["applied"], {"env": {"A": "1"}})
         self.assertFalse((self.old_dir / "creds").exists())
 
     def test_jobs_dir_is_kept(self):
@@ -58,9 +58,9 @@ class MigrateTest(unittest.TestCase):
     def test_idempotent(self):
         self.write_old_checkout()
         self.assertTrue(files.migrate_checkout(self.repo))
-        before = self.new_sidecar.read_text()
+        before = self.new_binding_file.read_text()
         self.assertFalse(files.migrate_checkout(self.repo))
-        self.assertEqual(self.new_sidecar.read_text(), before)
+        self.assertEqual(self.new_binding_file.read_text(), before)
 
     def test_checkout_without_any_binding_is_untouched(self):
         self.assertFalse(files.migrate_checkout(self.repo))
@@ -68,16 +68,16 @@ class MigrateTest(unittest.TestCase):
 
     def test_existing_new_binding_wins(self):
         self.write_old_checkout({"env": {"OLD": "1"}})
-        self.new_sidecar.parent.mkdir()
-        self.new_sidecar.write_text(json.dumps({"modules": [], "applied": {}}))
+        self.new_binding_file.parent.mkdir()
+        self.new_binding_file.write_text(json.dumps({"modules": [], "applied": {}}))
         self.assertFalse(files.migrate_checkout(self.repo))
-        self.assertEqual(json.loads(self.new_sidecar.read_text()), {"modules": [], "applied": {}})
-        self.assertTrue(self.old_sidecar.exists())
+        self.assertEqual(json.loads(self.new_binding_file.read_text()), {"modules": [], "applied": {}})
+        self.assertTrue(self.old_binding_file.exists())
         self.assertTrue((self.old_dir / "creds" / "ssh_config").exists())
 
     def test_empty_old_dir_is_removed(self):
         (self.repo / ".claude").mkdir()
-        self.old_sidecar.write_text(json.dumps({"modules": [], "applied": {}}))
+        self.old_binding_file.write_text(json.dumps({"modules": [], "applied": {}}))
         (self.old_dir / "creds").mkdir(parents=True)
         files.migrate_checkout(self.repo)
         self.assertFalse(self.old_dir.exists())
@@ -136,8 +136,8 @@ class MigrateTest(unittest.TestCase):
         self.write_old_checkout()
         with contextlib.redirect_stdout(io.StringIO()):
             cli.main(["status", "-C", str(self.repo)])
-        self.assertTrue(self.new_sidecar.exists())
-        self.assertFalse(self.old_sidecar.exists())
+        self.assertTrue(self.new_binding_file.exists())
+        self.assertFalse(self.old_binding_file.exists())
 
     def test_scan_finds_and_migrates_old_checkouts(self):
         self.write_old_checkout()
@@ -145,7 +145,7 @@ class MigrateTest(unittest.TestCase):
         with contextlib.redirect_stdout(buf):
             cli.main(["scan", str(Path(self._tmp.name) / "projects")])
         self.assertIn(str(self.repo), buf.getvalue())
-        self.assertTrue(self.new_sidecar.exists())
+        self.assertTrue(self.new_binding_file.exists())
 
     def test_session_start_hook_migrates(self):
         self.write_old_checkout()
@@ -156,10 +156,10 @@ class MigrateTest(unittest.TestCase):
                 self.assertEqual(cli.main(["hook-session-start"]), 0)
         finally:
             os.chdir(cwd)
-        self.assertTrue(self.new_sidecar.exists())
+        self.assertTrue(self.new_binding_file.exists())
 
     def test_sync_swaps_the_old_env_key_for_the_new_one(self):
-        # The sidecar's applied fragment moves with it and is the merge
+        # The binding file's applied fragment moves with it and is the merge
         # base, so the next sync removes the old key and adds the new.
         old_applied = {
             **WORK_FRAGMENT,
@@ -182,7 +182,7 @@ class MigrateTest(unittest.TestCase):
         old.mkdir(parents=True)
         (old / "expiring.json").write_text(json.dumps({"checkouts": [str(self.repo)]}))
         self.assertEqual(cli.main(["expire", "--quiet"]), 0)
-        self.assertTrue(self.new_sidecar.exists())
+        self.assertTrue(self.new_binding_file.exists())
         self.assertFalse((old / "expiring.json").exists())
 
 

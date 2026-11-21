@@ -8,7 +8,7 @@ the set of modules its work needs. Enrollment composes them into one
 fragment, writes it into the checkout's co-owned
 ``.claude/settings.local.json`` (three-way merge; the keys Claude Code writes
 are never touched), and records the chosen set and what was applied in
-the sidecar ``.agent-sandbox/binding.json``. A session reads its
+the binding file ``.agent-sandbox/binding.json``. A session reads its
 sandbox rules at launch, so a change reaches a running session only
 after it is stopped and started again.
 """
@@ -34,15 +34,15 @@ from .files import (
     index_expiring,
     migrate_checkout,
     migrate_state,
-    old_sidecar_path,
+    old_binding_path,
     read_json,
     remove_if_empty,
     sandbox_dir,
-    sidecar_path,
-    read_sidecar,
+    binding_path,
+    read_binding,
     settings_path,
     update_json,
-    write_sidecar,
+    write_binding,
     write_text_atomic,
 )
 from .merge import adhoc_additions, merge
@@ -99,14 +99,14 @@ def _apply(
     recorded refusal, because choosing it is the user's newer answer.
     ``expires`` replaces the recorded deadlines; when it is None, each
     module still chosen keeps the deadline it had."""
-    sidecar = read_sidecar(root)
+    binding_file = read_binding(root)
     declined = {
         name: refusal
-        for name, refusal in (sidecar["declined"] if sidecar else {}).items()
+        for name, refusal in (binding_file["declined"] if binding_file else {}).items()
         if name not in (modules or [])
     }
     if expires is None:
-        expires = sidecar["expires"] if sidecar else {}
+        expires = binding_file["expires"] if binding_file else {}
     fragment = _fragment_for(root, modules)
     reports = []
 
@@ -116,7 +116,7 @@ def _apply(
         return merged
 
     changed = update_json(settings_path(root), transform)
-    write_sidecar(root, modules, fragment, declined, expires)
+    write_binding(root, modules, fragment, declined, expires)
     from .codex import sync_enrollment
 
     sync_enrollment(root, modules, load_registry())
@@ -142,25 +142,25 @@ def _when(at: datetime) -> str:
     return at.astimezone().isoformat(timespec="minutes")
 
 
-def due_modules(sidecar: dict[str, Any], now: datetime | None = None) -> list[str]:
+def due_modules(binding_file: dict[str, Any], now: datetime | None = None) -> list[str]:
     """The chosen modules whose deadline has passed."""
     now = now or _now()
-    return sorted(name for name, at in sidecar["expires"].items() if at <= now)
+    return sorted(name for name, at in binding_file["expires"].items() if at <= now)
 
 
 def expire_due(root: Path, now: datetime | None = None) -> list[str]:
     """Drop the chosen modules of ``root`` whose deadline has passed and
     apply the rest. Returns the dropped names. A checkout with nothing
     expiring leaves the user's index."""
-    sidecar = read_sidecar(root)
-    if sidecar is None or sidecar["modules"] is None or sidecar["legacy_profile"] is not None:
+    binding_file = read_binding(root)
+    if binding_file is None or binding_file["modules"] is None or binding_file["legacy_profile"] is not None:
         index_expiring(root, False)
         return []
-    due = due_modules(sidecar, now)
+    due = due_modules(binding_file, now)
     if not due:
-        index_expiring(root, bool(sidecar["expires"]))
+        index_expiring(root, bool(binding_file["expires"]))
         return []
-    _apply(root, [m for m in sidecar["modules"] if m not in due], sidecar["applied"], quiet=True)
+    _apply(root, [m for m in binding_file["modules"] if m not in due], binding_file["applied"], quiet=True)
     return due
 
 
@@ -173,18 +173,18 @@ def _legacy_message(root: Path, profile: str) -> str:
 
 def _status_line(root: Path) -> tuple[str, bool]:
     """One status line for a checkout; second element = needs attention."""
-    sidecar = read_sidecar(root)
+    binding_file = read_binding(root)
     settings = read_json(settings_path(root))
-    if sidecar is None:
+    if binding_file is None:
         if "sandbox" in settings or "env" in settings:
-            return (f"{root}: unmanaged (sandbox/env keys present, no sidecar)", True)
+            return (f"{root}: unmanaged (sandbox/env keys present, no binding file)", True)
         return (f"{root}: not enrolled", False)
-    if sidecar["legacy_profile"] is not None:
-        return (_legacy_message(root, sidecar["legacy_profile"]), True)
-    modules = sidecar["modules"]
-    applied = sidecar["applied"]
+    if binding_file["legacy_profile"] is not None:
+        return (_legacy_message(root, binding_file["legacy_profile"]), True)
+    modules = binding_file["modules"]
+    applied = binding_file["applied"]
     # From inside a masked-store sandbox the registry and parts (HM
-    # symlinks into /nix/store) are unreadable; the sidecar and settings
+    # symlinks into /nix/store) are unreadable; the binding file and settings
     # still are, so enrollment and integrity remain reportable. Only
     # freshness needs the parts.
     stale: bool | None
@@ -195,7 +195,7 @@ def _status_line(root: Path) -> tuple[str, bool]:
     except ToolError as e:
         return (f"{root}: {_describe(modules)} DANGLING ({e})", True)
     else:
-        # The sidecar stores what _apply wrote (root env included), and
+        # The binding file stores what _apply wrote (root env included), and
         # _fragment_for adds the same root env, so equal means current.
         stale = fragment != applied
     # Replay the applied blob: if re-merging it changes anything, a
@@ -205,10 +205,10 @@ def _status_line(root: Path) -> tuple[str, bool]:
     clobbered = replayed != settings
     adhoc = adhoc_additions(settings, applied)
     bits = [_describe(modules)]
-    due = due_modules(sidecar)
+    due = due_modules(binding_file)
     if due:
         bits.append(f"EXPIRED [{', '.join(due)}] (sync drops)")
-    lasting = {name: at for name, at in sidecar["expires"].items() if name not in due}
+    lasting = {name: at for name, at in binding_file["expires"].items() if name not in due}
     if lasting:
         bits.append(
             "temporary [" + ", ".join(f"{name} until {_when(at)}" for name, at in sorted(lasting.items())) + "]"
@@ -223,8 +223,8 @@ def _status_line(root: Path) -> tuple[str, bool]:
         entries = sum(len(x) for _, x in adhoc)
         paths = ", ".join(p for p, _ in adhoc)
         bits.append(f"{entries} local addition(s) in {paths}")
-    if sidecar["declined"]:
-        bits.append(f"declined [{', '.join(sorted(sidecar['declined']))}]")
+    if binding_file["declined"]:
+        bits.append(f"declined [{', '.join(sorted(binding_file['declined']))}]")
     return (f"{root}: " + ", ".join(bits), bool(stale) or clobbered or bool(due))
 
 
@@ -237,8 +237,8 @@ def _iter_enrolled(roots: list[Path]) -> list[Path]:
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
             here = Path(dirpath)
             if (
-                sidecar_path(here).is_file()
-                or old_sidecar_path(here).is_file()
+                binding_path(here).is_file()
+                or old_binding_path(here).is_file()
                 or (here / ".claude" / "settings.local.json").is_file()
             ):
                 migrate_checkout(here)
@@ -248,49 +248,49 @@ def _iter_enrolled(roots: list[Path]) -> list[Path]:
 
 
 def _chosen_modules(root: Path) -> tuple[dict[str, Any], list[str]]:
-    """The sidecar and chosen modules of a checkout enrolled with
+    """The binding file and chosen modules of a checkout enrolled with
     modules, the binding that add and drop edit."""
-    sidecar = read_sidecar(root)
-    if sidecar is None:
+    binding_file = read_binding(root)
+    if binding_file is None:
         raise ToolError(f"{root} is not enrolled (use enroll)")
-    if sidecar["legacy_profile"] is not None:
-        raise ToolError(_legacy_message(root, sidecar["legacy_profile"]))
-    if sidecar["modules"] is None:
+    if binding_file["legacy_profile"] is not None:
+        raise ToolError(_legacy_message(root, binding_file["legacy_profile"]))
+    if binding_file["modules"] is None:
         raise ToolError(f"{root} is abandoned (use enroll to choose modules again)")
-    return sidecar, sidecar["modules"]
+    return binding_file, binding_file["modules"]
 
 
 def cmd_enroll(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
     modules = sorted(set(args.modules))
     check_known(load_registry(), modules)
-    sidecar = read_sidecar(root)
-    base = sidecar["applied"] if sidecar else {}
+    binding_file = read_binding(root)
+    base = binding_file["applied"] if binding_file else {}
     _apply(root, modules, base, args.quiet, expires={})
     return 0
 
 
 def _choose(
-    root: Path, sidecar: dict[str, Any], current: list[str], names: list[str], duration: str | None, quiet: bool
+    root: Path, binding_file: dict[str, Any], current: list[str], names: list[str], duration: str | None, quiet: bool
 ) -> dict[str, datetime]:
     """Add ``names`` to the chosen set, for ``duration`` (a key of
     DURATIONS) or until dropped, and apply it. Choosing a module again
     replaces its deadline. Returns the recorded deadlines."""
-    expires = dict(sidecar["expires"])
+    expires = dict(binding_file["expires"])
     for name in names:
         if duration is None:
             expires.pop(name, None)
         else:
             expires[name] = _now() + DURATIONS[duration]
-    _apply(root, sorted(set(current) | set(names)), sidecar["applied"], quiet, expires=expires)
+    _apply(root, sorted(set(current) | set(names)), binding_file["applied"], quiet, expires=expires)
     return expires
 
 
 def cmd_add(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
-    sidecar, current = _chosen_modules(root)
+    binding_file, current = _chosen_modules(root)
     check_known(load_registry(), args.modules)
-    expires = _choose(root, sidecar, current, args.modules, args.duration, args.quiet)
+    expires = _choose(root, binding_file, current, args.modules, args.duration, args.quiet)
     if args.duration and not args.quiet:
         at = _when(expires[args.modules[0]])
         print(f"  [{', '.join(sorted(set(args.modules)))}] chosen until {at}")
@@ -299,18 +299,18 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 def cmd_drop(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
-    sidecar, current = _chosen_modules(root)
+    binding_file, current = _chosen_modules(root)
     absent = sorted(set(args.modules) - set(current))
     if absent:
         raise ToolError(f"{root} has not chosen {', '.join(absent)} ({_describe(current)})")
-    _apply(root, sorted(set(current) - set(args.modules)), sidecar["applied"], args.quiet)
+    _apply(root, sorted(set(current) - set(args.modules)), binding_file["applied"], args.quiet)
     return 0
 
 
 def cmd_abandon(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
-    sidecar = read_sidecar(root)
-    base = sidecar["applied"] if sidecar else {}
+    binding_file = read_binding(root)
+    base = binding_file["applied"] if binding_file else {}
     _apply(root, None, base, args.quiet)
     if not args.quiet:
         print(
@@ -322,34 +322,34 @@ def cmd_abandon(args: argparse.Namespace) -> int:
 
 def cmd_sync(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
-    sidecar = read_sidecar(root)
-    if sidecar is None:
+    binding_file = read_binding(root)
+    if binding_file is None:
         from .run import native_enrollment_root
         from .codex import sync_enrollment
 
         owner = native_enrollment_root(root)
-        inherited = read_sidecar(owner) if owner != root else None
+        inherited = read_binding(owner) if owner != root else None
         registry = load_registry()
         if inherited is not None and any(
             agent.get("backend") == "codex" for agent in (registry.get("agents") or {}).values()
         ):
             if due_modules(inherited):
                 expire_due(owner)
-                inherited = read_sidecar(owner)
+                inherited = read_binding(owner)
             assert inherited is not None
             sync_enrollment(owner, inherited["modules"], registry, project_root=root)
             if not args.quiet:
                 print(f"{root}: Codex enrollment inherited from {owner}, updated")
             return 0
         raise ToolError(f"{root} is not enrolled (use enroll)")
-    if sidecar["legacy_profile"] is not None:
-        raise ToolError(_legacy_message(root, sidecar["legacy_profile"]))
+    if binding_file["legacy_profile"] is not None:
+        raise ToolError(_legacy_message(root, binding_file["legacy_profile"]))
     due = expire_due(root)
     if due and not args.quiet:
         print(f"{root}: dropped expired [{', '.join(due)}]")
-    sidecar = read_sidecar(root)
-    assert sidecar is not None
-    _apply(root, sidecar["modules"], sidecar["applied"], args.quiet)
+    binding_file = read_binding(root)
+    assert binding_file is not None
+    _apply(root, binding_file["modules"], binding_file["applied"], args.quiet)
     return 0
 
 
@@ -374,7 +374,7 @@ def cmd_expire(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
-    if read_sidecar(root) is None:
+    if read_binding(root) is None:
         from .run import native_enrollment_root
 
         owner = native_enrollment_root(root)
@@ -436,9 +436,9 @@ def enable_modules(root: Path, names: list[str], duration: str | None = None) ->
     """Add ``names`` to the checkout's chosen set, for ``duration`` (a
     key of DURATIONS) or until dropped, and apply it; returns the
     deadline, or None for a lasting choice."""
-    sidecar, current = _chosen_modules(root)
+    binding_file, current = _chosen_modules(root)
     check_known(load_registry(), names)
-    expires = _choose(root, sidecar, current, names, duration, quiet=True)
+    expires = _choose(root, binding_file, current, names, duration, quiet=True)
     return expires[names[0]] if duration else None
 
 
@@ -452,13 +452,13 @@ def decline_modules(root: Path, names: list[str], reason: str | None) -> None:
     on = sorted(name for name in names if name in state["enabled"])
     if on:
         raise ToolError(f"{', '.join(on)} enabled in {root}; drop before declining")
-    sidecar = read_sidecar(root)
-    assert sidecar is not None
+    binding_file = read_binding(root)
+    assert binding_file is not None
     at = datetime.now(UTC).isoformat(timespec="seconds")
-    declined = dict(sidecar["declined"])
+    declined = dict(binding_file["declined"])
     for name in names:
         declined[name] = {"at": at, **({"reason": reason} if reason else {})}
-    write_sidecar(root, sidecar["modules"], sidecar["applied"], declined)
+    write_binding(root, binding_file["modules"], binding_file["applied"], declined)
 
 
 def cmd_decline(args: argparse.Namespace) -> int:
@@ -471,14 +471,14 @@ def cmd_decline(args: argparse.Namespace) -> int:
 
 def cmd_undecline(args: argparse.Namespace) -> int:
     root = _root_or_die(Path(args.directory))
-    sidecar = read_sidecar(root)
-    if sidecar is None:
+    binding_file = read_binding(root)
+    if binding_file is None:
         raise ToolError(f"{root} is not enrolled (use enroll)")
-    absent = sorted(set(args.modules) - set(sidecar["declined"]))
+    absent = sorted(set(args.modules) - set(binding_file["declined"]))
     if absent:
         raise ToolError(f"{root} has not declined {', '.join(absent)}")
-    declined = {k: v for k, v in sidecar["declined"].items() if k not in args.modules}
-    write_sidecar(root, sidecar["modules"], sidecar["applied"], declined)
+    declined = {k: v for k, v in binding_file["declined"].items() if k not in args.modules}
+    write_binding(root, binding_file["modules"], binding_file["applied"], declined)
     if not args.quiet:
         print(f"{root}: withdrew the refusal of [{', '.join(sorted(set(args.modules)))}]")
     return 0
@@ -626,8 +626,8 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
             return 0
         migrate_state()
         migrate_checkout(root)
-        sidecar = read_sidecar(root)
-        if sidecar is None:
+        binding_file = read_binding(root)
+        if binding_file is None:
             return 0
         target = redirect_job_tmp(root)
         if target:
@@ -647,16 +647,16 @@ def cmd_hook_session_start(args: argparse.Namespace) -> int:
                 f"agent-sandbox: dropped expired [{', '.join(due)}]; this session "
                 "keeps their rules until it is stopped and started again"
             )
-            sidecar = read_sidecar(root)
-            assert sidecar is not None
+            binding_file = read_binding(root)
+            assert binding_file is not None
         line, attention = _status_line(root)
-        if attention and sidecar["legacy_profile"] is not None:
+        if attention and binding_file["legacy_profile"] is not None:
             # The checkout keeps the fragment it last applied; choosing
             # its modules is the user's act, so the hook only reports.
             print(f"agent-sandbox: {line}")
         elif attention:
             try:
-                _apply(root, sidecar["modules"], sidecar["applied"], quiet=True)
+                _apply(root, binding_file["modules"], binding_file["applied"], quiet=True)
                 print(
                     f"agent-sandbox: {line}; synced now. This session keeps "
                     "its old rules until it is stopped and started again"
