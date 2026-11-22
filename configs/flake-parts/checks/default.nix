@@ -464,6 +464,10 @@
               # Codex's native domain policies are host-scoped.
               allowedDomains = [ "127.0.0.2" ];
               allowLocalBinding = true;
+              # Claude Code runs a sandboxed Bash command without asking
+              # only with this setting, as on the hosts, where `/sandbox`
+              # sets it.
+              extraSettings.sandbox.autoAllowBashIfSandboxed = true;
             };
             modules.git = {
               description = "Git repository writes";
