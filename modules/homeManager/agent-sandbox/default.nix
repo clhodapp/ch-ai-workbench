@@ -99,6 +99,23 @@ let
     fi
     exec ${lib.getExe pkgs.gh} auth token --hostname github.com
   '';
+  # The global git config of a module with githubKeyring, which the
+  # module names in GIT_CONFIG_GLOBAL. It includes the user's global git
+  # config and makes gh the credential helper for github.com, so git over
+  # HTTPS authenticates with the token the broker gives gh. The file is
+  # in the module's farm, so the sandbox can read it.
+  githubGitConfig = pkgs.writeTextDir "share/agent-sandbox/github-gitconfig" ''
+    [include]
+    	path = ${config.home.homeDirectory}/.gitconfig
+    	path = ${config.xdg.configHome}/git/config
+    [credential "https://github.com"]
+    	helper =
+    	helper = !gh auth git-credential
+    [credential "https://gist.github.com"]
+    	helper =
+    	helper = !gh auth git-credential
+  '';
+  githubGitConfigFile = "${githubGitConfig}/share/agent-sandbox/github-gitconfig";
   githubCli = pkgs.writeShellScriptBin "gh" ''
     # This executable is the enrolled module's gh. Resumed Codex commands
     # can lose shell markers; credential routing must not silently fall
@@ -522,7 +539,10 @@ let
         paths =
           module.toolset
           ++ lib.optional module.udevMonitor udevMonitorBridge
-          ++ lib.optional module.githubKeyring (lib.hiPrio githubCli)
+          ++ lib.optionals module.githubKeyring [
+            (lib.hiPrio githubCli)
+            githubGitConfig
+          ]
           ++ stubs;
       };
       hasFarm = module.toolset != [ ] || module.udevMonitor || stubs != [ ];
@@ -583,6 +603,9 @@ let
           // lib.optionalAttrs module.udevMonitor {
             LD_PRELOAD = "${udevMonitorBridge}/lib/libudev-monitor-bridge.so";
             AGENT_SANDBOX_UDEV_SOCKET = udevMonitorSocket;
+          }
+          // lib.optionalAttrs module.githubKeyring {
+            GIT_CONFIG_GLOBAL = githubGitConfigFile;
           };
         settings = module.extraSettings;
       };
@@ -1005,8 +1028,12 @@ let
           trusted-executable broker. The broker reads the host keyring;
           gh itself runs inside the sandbox with GH_TOKEN set only for
           that process. Explicit GH_TOKEN/GITHUB_TOKEN values take priority.
-          No token is written to enrollment files or native policy JSON,
-          and the module does not grant the session D-Bus socket.
+          The module also sets GIT_CONFIG_GLOBAL to a git config that
+          includes the user's global git config and names gh as the
+          credential helper for github.com, so git over HTTPS uses the
+          same token. No token is written to enrollment files or native
+          policy JSON, and the module does not grant the session D-Bus
+          socket.
         '';
       };
       allowedDomains = lib.mkOption {

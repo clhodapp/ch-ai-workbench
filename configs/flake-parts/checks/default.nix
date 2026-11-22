@@ -1153,6 +1153,26 @@
               cp ${self}/tests/agent-sandbox/claude-network-probe.py "$TMPDIR/repo-bus/"
               claude_probe bus claude-network-probe.py claude-network-passed
 
+              # The github module names a global git config that makes gh
+              # the credential helper for github.com: the git of the
+              # sandbox asks gh, here a stand-in ahead of the module's gh
+              # that answers with a fixed token.
+              sandboxPath=$(jq -r .env.PATH "$TMPDIR/repo-bus/.claude/settings.local.json")
+              gitconfig=$(jq -r .env.GIT_CONFIG_GLOBAL "$TMPDIR/repo-bus/.claude/settings.local.json")
+              test -f "$gitconfig"
+              mkdir -p "$TMPDIR/fake-gh"
+              cat > "$TMPDIR/fake-gh/gh" <<'GH'
+              #!${pkgs.runtimeShell}
+              if [ "$*" = "auth git-credential get" ]; then
+                printf 'username=x-access-token\npassword=probe-token\n'
+              fi
+              GH
+              chmod +x "$TMPDIR/fake-gh/gh"
+              creds=$(printf 'protocol=https\nhost=github.com\n\n' \
+                | env PATH="$TMPDIR/fake-gh:$sandboxPath" GIT_CONFIG_GLOBAL="$gitconfig" GIT_TERMINAL_PROMPT=0 \
+                  git credential fill)
+              grep -qx 'password=probe-token' <<<"$creds" || { echo "git did not ask gh: $creds"; exit 1; }
+
               git worktree add -qb native-linked ../linked HEAD
               cp ${self}/tests/agent-sandbox/native-worktree-probe.py ../linked/native-worktree-probe.py
               (
