@@ -314,8 +314,8 @@ let
   # sandbox through this wrapper. It inserts `--dev-bind-try NODE NODE`
   # for every node of the composed device list right after the first
   # `--dev /dev`, then execs the next bwrap on PATH. A call without
-  # `--dev /dev` (Claude Code's version and feature probes) and a call
-  # with an empty list reach that bwrap unchanged.
+  # `--dev /dev` (Claude Code's version and feature probes) reaches that
+  # bwrap unchanged.
   #
   # The list arrives one pattern per line in the settings env, like the
   # socket allowlist. The settings files are write-guarded, so a
@@ -330,6 +330,16 @@ let
   # that does not resolve to a character or block device under /dev is
   # skipped with a warning. A pattern outside /dev
   # makes the wrapper refuse to build the sandbox.
+  #
+  # The wrapper also carries the user's identity into the sandbox. A
+  # homed or userdb account is not in /etc/passwd, and the socket shell
+  # refuses connections to systemd's userdb sockets, so getpwuid fails
+  # inside the sandbox and OpenSSH, for one, exits. When the uid or gid
+  # is missing from /etc/passwd or /etc/group, the wrapper resolves it
+  # with getent outside the sandbox, writes the file with the record
+  # appended under $XDG_RUNTIME_DIR/agent-sandbox/identity, and binds it
+  # read-only over the original after `--dev /dev`, which comes after
+  # the binds of / that Claude Code makes.
   devicesBwrap = pkgs.writeShellScriptBin "bwrap" ''
     # Resumed chats may have the stable store PATH rather than a launch's
     # runtime-bin prefix. Keep the native post-seccomp boundary reachable
@@ -354,11 +364,35 @@ let
       echo "agent-sandbox: no bwrap on PATH after the device wrapper" >&2
       exit 127
     fi
-    if [ -z "''${${devicesEnvVar}:-}" ]; then
+    builds=false
+    for argument in "$@"; do
+      if [ "$argument" = /dev ]; then
+        builds=true
+        break
+      fi
+    done
+    if ! $builds; then
       exec "$real" "$@"
     fi
 
     binds=()
+    identity() {
+      local database=$1 id=$2 source=/etc/$1 dir target record tmp
+      if ${pkgs.gnugrep}/bin/grep -q "^[^:]*:[^:]*:$id:" "$source"; then
+        return
+      fi
+      record=$(${pkgs.getent}/bin/getent "$database" "$id") || return
+      dir=''${XDG_RUNTIME_DIR:-/run/user/$(${pkgs.coreutils}/bin/id -u)}/agent-sandbox/identity
+      ${pkgs.coreutils}/bin/mkdir -p "$dir" || return
+      target=$dir/$database
+      tmp=$(${pkgs.coreutils}/bin/mktemp "$target.XXXXXX") || return
+      { ${pkgs.coreutils}/bin/cat "$source"; printf '%s\n' "$record"; } >"$tmp" \
+        && ${pkgs.coreutils}/bin/mv -f "$tmp" "$target" || { ${pkgs.coreutils}/bin/rm -f "$tmp"; return; }
+      binds+=(--ro-bind "$target" "$source")
+    }
+    identity passwd "$(${pkgs.coreutils}/bin/id -u)"
+    identity group "$(${pkgs.coreutils}/bin/id -g)"
+
     shopt -s nullglob
     # The patterns arrive on fd 3, so the loop body keeps the stdin bwrap
     # was given.
