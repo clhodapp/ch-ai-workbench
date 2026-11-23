@@ -1224,15 +1224,16 @@ in
           pkgs.cacert
           pkgs.diffutils
           pkgs.findutils
+          pkgs.gawk
           pkgs.gnugrep
           pkgs.gnused
           pkgs.jq
           pkgs.ripgrep
         ];
-        defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert pkgs.diffutils pkgs.findutils pkgs.gnugrep pkgs.gnused pkgs.jq pkgs.ripgrep ]";
+        defaultText = lib.literalExpression "[ pkgs.bashNonInteractive pkgs.coreutils pkgs.cacert pkgs.diffutils pkgs.findutils pkgs.gawk pkgs.gnugrep pkgs.gnused pkgs.jq pkgs.ripgrep ]";
         description = ''
           The floor of every enrollment: shell, the GNU basics
-          (coreutils, diff/cmp, find/xargs, grep, sed), TLS
+          (coreutils, diff/cmp, find/xargs, awk, grep, sed), TLS
           certificates, and the JSON and search tools agent sessions
           reach for whatever modules a checkout chooses. On NixOS even
           /bin/sh and /etc/ssl resolve into the store, so a farm without
