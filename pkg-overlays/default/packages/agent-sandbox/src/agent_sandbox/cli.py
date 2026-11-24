@@ -119,7 +119,11 @@ def _apply(
     write_sidecar(root, modules, fragment, declined, expires)
     from .codex import sync_enrollment
 
-    sync_enrollment(root, modules, load_registry())
+    registry = load_registry()
+    sync_enrollment(root, modules, registry)
+    from .shell import sync_shell_rules
+
+    sync_shell_rules(root, modules, registry)
     if quiet:
         return
     state = "updated" if changed else "already current"
@@ -677,15 +681,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run(args.agent, command, Path(args.directory))
 
 
-def cmd_shell_rules(args: argparse.Namespace) -> int:
-    from .shell import write_shell_rules
-
-    path = write_shell_rules(args.agent, Path(args.directory))
-    if path is not None:
-        print(path)
-    return 0
-
-
 def cmd_codex_bwrap(args: argparse.Namespace) -> int:
     from .codex import bwrap_command, policy_for_command
 
@@ -819,9 +814,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("agent", metavar="AGENT")
     p.add_argument("agent_command", nargs=argparse.REMAINDER, metavar="-- COMMAND")
-
-    p = add("shell-rules", cmd_shell_rules, help=argparse.SUPPRESS)
-    p.add_argument("agent", metavar="AGENT")
 
     p = add("codex-bwrap", cmd_codex_bwrap, checkout=False, help=argparse.SUPPRESS)
     p.add_argument("--policy", required=True)

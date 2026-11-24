@@ -1,13 +1,11 @@
 # SPDX-License-Identifier: MIT
-"""`agent-sandbox shell-rules`: the rules the srt step of the bash chain
-reads, and the domain forms srt accepts."""
+"""The rules the srt step of the bash chain reads, written at enroll and
+sync time, and the domain forms srt accepts."""
 
-import io
 import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -69,28 +67,31 @@ class ShellRulesTest(unittest.TestCase):
         self.env.stop()
         self._tmp.cleanup()
 
-    def rules(self) -> dict | None:
-        out = io.StringIO()
-        with redirect_stdout(out):
-            self.assertEqual(main(["shell-rules", "-C", str(self.root), "coder"]), 0)
-        path = out.getvalue().strip()
-        return json.loads(Path(path).read_text()) if path else None
+    def rules(self) -> dict:
+        return json.loads((self.root / ".agent-sandbox" / "shell-coder.json").read_text())
 
-    def test_unenrolled_checkout_has_no_rules(self):
-        self.assertIsNone(self.rules())
+    def test_abandoned_checkout_has_no_rules(self):
+        self.assertEqual(main(["enroll", "-C", str(self.root), "work", "--quiet"]), 0)
+        self.assertEqual(main(["abandon", "-C", str(self.root), "--quiet"]), 0)
+        self.assertFalse((self.root / ".agent-sandbox" / "shell-coder.json").exists())
+
+    def test_adding_a_module_rewrites_the_rules(self):
+        self.assertEqual(main(["enroll", "-C", str(self.root), "work", "--quiet"]), 0)
+        self.assertFalse(self.rules()["allowAll"])
+        self.assertEqual(main(["add", "-C", str(self.root), "open", "--quiet"]), 0)
+        self.assertTrue(self.rules()["allowAll"])
 
     def test_enrolled_checkout_writes_rules(self):
         self.assertEqual(main(["enroll", "-C", str(self.root), "work", "--quiet"]), 0)
         rules = self.rules()
-        self.assertEqual(rules["root"], str(self.root))
         self.assertFalse(rules["allowAll"])
         self.assertEqual(rules["settings"]["network"]["allowedDomains"], ["api.example.com"])
         self.assertEqual(rules["settings"]["bwrapPath"], RUN_BASE["bwrap"])
         self.assertEqual(rules["shell"], RUN_BASE["shell"])
         self.assertEqual(rules["env"]["AGENT_SANDBOX_ROOT"], str(self.root))
-        self.assertTrue(Path(rules["env"]["TMPDIR"]).is_dir())
-        self.assertEqual(rules["settings"]["filesystem"]["allowWrite"][:2], [str(self.root), rules["env"]["TMPDIR"]])
-        self.assertIsNotNone(rules["stamp"]["sidecar"])
+        self.assertEqual(rules["env"]["TMPDIR"], rules["scratch"])
+        self.assertTrue(rules["scratch"].startswith(str(self.runtime)))
+        self.assertEqual(rules["settings"]["filesystem"]["allowWrite"][:2], [str(self.root), rules["scratch"]])
 
     def test_socket_grants_use_the_socket_restriction_step(self):
         self.assertEqual(main(["enroll", "-C", str(self.root), "work", "sockets", "--quiet"]), 0)
