@@ -82,9 +82,14 @@ def sync_shell_rules(root: Path, modules: list[str] | None, registry: dict[str, 
             continue
         rules = shell_rules(root, modules, registry, name)
         # srt can grant only a path that exists, and inside the sandbox the
-        # parent of a missing directory is read-only, so an agent could not
-        # create its state directory on first use.
+        # parent of a missing directory is read-only, so a command could not
+        # create a granted state directory on first use. The srt step
+        # creates the ones still missing when it starts srt.
         for granted in rules["settings"]["filesystem"]["allowWrite"]:
-            if granted != rules["scratch"]:
+            if granted == rules["scratch"]:
+                continue
+            try:
                 Path(granted).mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
         write_text_atomic(path, json.dumps(rules, indent=2) + "\n")

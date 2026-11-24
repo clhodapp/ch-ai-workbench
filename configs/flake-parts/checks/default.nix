@@ -469,6 +469,10 @@
               # sets it.
               extraSettings.sandbox.autoAllowBashIfSandboxed = true;
             };
+            modules.open = {
+              description = "every host, as the internet module grants it";
+              allowedDomains = [ "*" ];
+            };
             modules.git = {
               description = "Git repository writes";
               toolset = [ pkgs.git ];
@@ -514,7 +518,12 @@
           ch-ai-workbench.opencode = {
             enable = true;
             package = llmAgents.opencode;
-            mcpServers.emacs.command = "${mcpRelay}";
+            # OpenCode runs outside the sandbox and starts the stand-in
+            # of the Emacs bridge directly.
+            mcpServers.emacs = {
+              command = lib.getExe pkgs.python3;
+              args = [ "${self}/tests/agent-sandbox/fake-mcp.py" ];
+            };
             providers = lib.mkForce { };
             settings = {
               model = "mock/mock-model";
@@ -995,7 +1004,8 @@
               codex = lib.getExe agentsConfiguration.config.programs.codex.package;
               opencode = lib.getExe agentsConfiguration.config.programs.opencode.package;
               opencode2 = lib.getExe agentsConfiguration2.config.programs.opencode.package;
-              opencodePlugin = agentsConfiguration.config.ch-ai-workbench.opencode.plugins.workbench-consent;
+              opencodeShell = lib.getExe agentsConfiguration.config.ch-ai-workbench.agent-sandbox.bashChains.opencode;
+              opencodePlugin =agentsConfiguration.config.ch-ai-workbench.opencode.plugins.workbench-consent;
               opencodePlugin2 = agentsConfiguration2.config.ch-ai-workbench.opencode.plugins.workbench-consent;
               agentBus = lib.getExe agentsConfiguration.config.ch-ai-workbench.agent-bus.package;
               agentBusSocket = agentsConfiguration.config.ch-ai-workbench.agent-bus.socket;
@@ -1113,17 +1123,16 @@
                 cd "$TMPDIR/repo-bus"
                 timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:agent-bus-probe.py' < /dev/null
                 test -e agent-bus-probe-passed
-                agent-sandbox run opencode -- "$agentBus" ls < /dev/null > "$TMPDIR/opencode-bus.out"
+                "$opencodeShell" -c "$agentBus ls" < /dev/null > "$TMPDIR/opencode-bus.out"
                 grep -q probe-session "$TMPDIR/opencode-bus.out"
               )
               (
                 cd "$TMPDIR/repo-nobus"
                 timeout 60 "$codex" exec --skip-git-repo-check 'SHELL-PROBE:agent-bus-denied-probe.py' < /dev/null
                 test -e agent-bus-denied-passed
-                if agent-sandbox run opencode -- "$agentBus" --socket "$agentBusSocket" ls < /dev/null 2> "$TMPDIR/opencode-nobus.err"; then
-                  echo "OpenCode's sandbox reached the agent-bus socket without the module"; exit 1
-                fi
-                grep -q 'Permission denied' "$TMPDIR/opencode-nobus.err"
+                rm agent-bus-denied-passed
+                "$opencodeShell" -c 'python3 agent-bus-denied-probe.py' < /dev/null
+                test -e agent-bus-denied-passed
               )
               # The same probes from real Claude Code, whose Bash tool
               # runs each command in the sandbox that enrollment wrote
@@ -1189,14 +1198,60 @@
                 test -e nested-passed
               )
 
-              # Inside, the checkout is writable and the
-              # home directory is not.
-              agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch inside' < /dev/null
+              # OpenCode's shell is the bash chain. Through it the
+              # checkout is writable and the home directory is not, and
+              # outside an enrolled checkout a command runs unchanged.
+              grep -q "$opencodeShell" "$opencode"
+              "$opencodeShell" -c 'touch inside' < /dev/null
               test -e inside
-              if agent-sandbox run opencode -- ${pkgs.bash}/bin/sh -c 'touch /build/home/outside' < /dev/null; then
+              if "$opencodeShell" -c 'touch /build/home/outside' < /dev/null; then
                 echo "a sandboxed command wrote outside the checkout"; exit 1
               fi
               test ! -e /build/home/outside
+              mkdir "$TMPDIR/unenrolled"
+              (cd "$TMPDIR/unenrolled" && "$opencodeShell" -c 'test -z "''${SANDBOX_RUNTIME:-}" && touch /build/home/unenrolled')
+              test -e /build/home/unenrolled
+              # The status of the command, and its arguments after the
+              # script, come through the chain.
+              set +e
+              "$opencodeShell" -c 'exit 7' < /dev/null
+              status=$?
+              set -e
+              test "$status" = 7
+              test "$("$opencodeShell" -c 'echo "$0:$1"' zero one < /dev/null)" = zero:one
+              # The cost of starting srt for a command, in the log.
+              start=$(date +%s%N)
+              for _ in $(seq 10); do "$opencodeShell" -c true < /dev/null; done
+              echo "agent-sandbox-agents: the bash chain ran a command in $(( ($(date +%s%N) - start) / 10000000 )) ms on average"
+
+              # Real OpenCode runs the probes with its bash tool: in this
+              # checkout, and in one whose modules grant every host.
+              cp ${self}/tests/agent-sandbox/opencode-shell-probe.py ${self}/tests/agent-sandbox/proxy_status.py .
+              timeout 300 "$opencode" run 'SHELL-PROBE:opencode-shell-probe.py' < /dev/null
+              test -e opencode-shell-passed
+              git init -q "$TMPDIR/repo-open"
+              agent-sandbox enroll mock open -C "$TMPDIR/repo-open" --quiet
+              jq -e '.allowAll and (.settings.network.allowedDomains | index("*") | not)' \
+                "$TMPDIR/repo-open/.agent-sandbox/shell-opencode.json"
+              cp ${self}/tests/agent-sandbox/opencode-open-probe.py ${self}/tests/agent-sandbox/proxy_status.py "$TMPDIR/repo-open/"
+              (
+                cd "$TMPDIR/repo-open"
+                timeout 300 "$opencode" run 'SHELL-PROBE:opencode-open-probe.py' < /dev/null
+                test -e opencode-open-passed
+              )
+
+              # Rules srt does not accept stop the chain before the
+              # command runs.
+              git init -q "$TMPDIR/repo-broken"
+              agent-sandbox enroll mock -C "$TMPDIR/repo-broken" --quiet
+              rules="$TMPDIR/repo-broken/.agent-sandbox/shell-opencode.json"
+              jq '.settings.filesystem = 5' "$rules" > "$TMPDIR/broken.json"
+              cat "$TMPDIR/broken.json" > "$rules"
+              if (cd "$TMPDIR/repo-broken" && "$opencodeShell" -c 'touch ran' < /dev/null 2> "$TMPDIR/broken.err"); then
+                echo "the bash chain ran a command with rules srt refuses"; exit 1
+              fi
+              test ! -e "$TMPDIR/repo-broken/ran"
+              grep -q 'srt cannot start' "$TMPDIR/broken.err"
 
               timeout 300 "$codex" exec --skip-git-repo-check 'Call the tool mark.' < /dev/null
               test "$(cat "$FAKE_MCP_MARKS")" = "$root"
@@ -1235,7 +1290,11 @@
                 ${emacs}/bin/emacs --batch \
                   -L ${claudeQueueSrc} -L ${semanticFinderSrc} \
                   -l ${self}/tests/agent-sandbox/claude-queue-agents.el
-              test "$(sort -u "$FAKE_MCP_MARKS")" = "$root"
+              # The Emacs MCP server runs in the working directory of
+              # the agent that started it: the enrolled checkout, or the
+              # checkout that is not enrolled, where OpenCode starts it.
+              test "$(sort -u "$FAKE_MCP_MARKS")" = "$(printf '%s\n' "$root" "$plain" | sort)" \
+                || { cat "$FAKE_MCP_MARKS"; exit 1; }
               echo "agent-sandbox-agents: ran at Landlock ABI $abi" > $out
             '';
 

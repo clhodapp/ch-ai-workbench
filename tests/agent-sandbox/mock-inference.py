@@ -6,7 +6,9 @@ OpenAI-compatible chat completions API (POST .../chat/completions) and
 Claude Code's Messages API (POST .../messages), streamed as server-sent
 events. A Messages request whose messages name `SHELL-PROBE:PATH`, that
 offers `Bash` and carries no tool result yet gets a `Bash` call running
-`python3 PATH`; any other Messages request gets the text `done`. A request that offers a tool whose name
+`python3 PATH`, and one of Codex or OpenCode that names it gets a call of
+their shell tool (`exec_command`, `bash`) running the same; any other
+Messages request gets the text `done`. A request that offers a tool whose name
 contains TOOL (default `mark`) and carries no tool result yet gets a
 call to that tool. OpenCode 2 offers the tools of MCP servers only
 inside its Code Mode tool `execute`; a request that offers `execute`
@@ -83,14 +85,21 @@ def shell_probe(body):
         body = {**body, "input": items[users[-1]:]}
     if tool_results(body):
         return None
-    found = re.search(r"SHELL-PROBE:([A-Za-z0-9_./-]+)", json.dumps(body.get("input") or []))
-    if not found:
+    found = re.search(r"SHELL-PROBE:([A-Za-z0-9_./-]+)",
+                      json.dumps(body.get("input") or body.get("messages") or []))
+    # A request that offers no tools, such as OpenCode's request for a
+    # session title, gets a text answer.
+    if not found or not body.get("tools"):
         return None
     for namespace, name in tool_names(body):
         if name == "exec_command":
             return (namespace, name, json.dumps({"cmd": "python3 " + found.group(1), "login": False,
                                                 "yield_time_ms": 10000, "max_output_tokens": 2000}))
-    raise RuntimeError("Codex did not offer exec_command for the native sandbox probe")
+        # OpenCode's shell tool, on the chat completions API.
+        if name == "bash":
+            return (namespace, name, json.dumps({"command": "python3 " + found.group(1),
+                                                "description": "Run the sandbox probe"}))
+    raise RuntimeError("the agent offered no shell tool (exec_command or bash) for the shell probe")
 
 
 def outside_write(body):

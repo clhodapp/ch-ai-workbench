@@ -322,6 +322,21 @@ let
   # wrapper; the CLI's composer writes it (DEVICES_ENV_VAR there).
   devicesEnvVar = "AGENT_SANDBOX_DEVICES";
 
+  # The agents whose shell commands the bash chain sandboxes, and the
+  # chain of each: the srt step, named `bash`, which starts
+  # sandbox-runtime around a command with the rules the CLI wrote to the
+  # checkout's .agent-sandbox/shell-<agent>.json, and runs the rules'
+  # shell (the socket-restriction step or bash) inside it.
+  srtAgents = lib.filterAttrs (_: agent: agent.backend == "srt") cfg.agents;
+  bashChain =
+    name:
+    pkgs.callPackage ../../../pkg-overlays/default/packages/srt-step {
+      sandbox-runtime = cfg.runtime.sandboxRuntimePackage;
+      agent = name;
+      bash = cfg.runtime.shellPackage;
+    };
+  shellRulesFile = name: ".agent-sandbox/shell-${name}.json";
+
   # The `bwrap` that every enrollment's PATH finds ahead of the one in
   # runtime.sandboxTools. Claude Code builds each sandbox with its
   # filesystem binds first and `--dev /dev` after them. That mounts a
@@ -825,7 +840,8 @@ let
         ".codex/config.toml"
         ".claude/claude-code-sandbox.json"
         expiringIndex
-      ];
+      ]
+      ++ map shellRulesFile (lib.attrNames srtAgents);
     };
     permissions.deny = [
       "Edit(.claude/settings.json)"
@@ -835,7 +851,8 @@ let
       "Edit(.codex/config.toml)"
       "Edit(.claude/claude-code-sandbox.json)"
       "Edit(/${expiringIndex})"
-    ];
+    ]
+    ++ map (name: "Edit(${shellRulesFile name})") (lib.attrNames srtAgents);
   };
 
   trustedExecutable = lib.types.submodule {
@@ -1427,6 +1444,20 @@ in
         the whole agent under sandbox-runtime. Both compose the checkout's
         modules, baseModules and the agent's modules. Elsewhere the command
         runs unchanged. The codex and opencode modules declare their agents.
+      '';
+    };
+
+    bashChains = lib.mkOption {
+      type = lib.types.attrsOf lib.types.package;
+      readOnly = true;
+      default = lib.mapAttrs (name: _: bashChain name) srtAgents;
+      defaultText = lib.literalMD "the bash chain of each agent with backend `srt`";
+      description = ''
+        The bash chain of each agent with backend `srt`: a package whose
+        `bin/bash` runs each shell command of the agent inside
+        sandbox-runtime, with the rules of the enrolled checkout holding
+        the working directory, and runs bash unchanged elsewhere. The
+        agent's module points `SHELL` at it.
       '';
     };
 

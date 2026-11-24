@@ -1,7 +1,8 @@
 # agent-sandbox
 
 Nix-authored per-project configuration for the native command sandboxes
-of [Claude Code] and Codex, and a whole-agent sandbox for OpenCode.
+of [Claude Code] and Codex, and a sandbox for the shell commands of
+OpenCode.
 The `agent-sandbox` Home Manager module declares named
 sandbox **modules**, each saying what one kind of tooling (git, nix, a
 language toolchain) needs inside the sandbox: its executables, domains,
@@ -25,7 +26,8 @@ Where things live in this repository:
 ## Principles
 
 - **Native command sandboxes enforce the policy** for Claude Code and
-  Codex; OpenCode runs whole under sandbox-runtime. Nix authors the grants.
+  Codex; OpenCode's shell commands run under sandbox-runtime through the
+  bash chain (see "Polyfill chains"). Nix authors the grants.
 - **Enrollment is the user's act.** Nothing is ambient: unenrolled
   repos get only the monotone baseline, and no file ever lands in a
   shared repository.
@@ -231,14 +233,16 @@ The tools go through Claude Code's usual permission check for MCP
 tools, so the first call of each may itself ask for permission, unless
 a permission rule allows `mcp__plugin_agent-sandbox_sandbox`.
 
-## Codex's native sandbox and whole-agent OpenCode
+## Codex's native sandbox and `agent-sandbox run`
 
 `agent-sandbox run` composes the checkout's modules and the modules the
 agent declares at launch. In unenrolled checkouts and outside checkouts it runs
 the command unchanged. `agents.<name>.backend` selects the enforcement:
-`codex` compiles native permission profiles; `srt` runs the whole agent
-under sandbox-runtime. The Codex and OpenCode modules select their
-backends automatically for both their CLI and ACP commands.
+`codex` compiles native permission profiles, and `run` with an `srt`
+agent runs the whole agent under sandbox-runtime. The Codex module runs
+its CLI and ACP commands through `run`. An `srt` agent is also given a
+bash chain (see "Polyfill chains"), which is how the OpenCode module
+sandboxes OpenCode.
 
 Codex uses its **native command sandbox**, followed by our Landlock
 socket filter, just as Claude Code does. The trusted Codex/ACP parent
@@ -368,10 +372,9 @@ launch refuses to execute. User configuration must not select the older
 `sandbox_mode` or `sandbox_workspace_write` system, which takes
 precedence over permission profiles.
 
-OpenCode continues to run whole under srt, including its MCP children.
-The following srt details describe that backend. The section "Polyfill
-chains" plans a backend that sandboxes OpenCode's shell commands
-instead.
+The following details describe `run` with an `srt` agent, which runs
+the whole agent under srt, including its MCP children. No module of
+this repository runs an agent this way.
 
 The run composes the checkout's chosen modules, `baseModules` and the
 agent's modules at each launch, so a whole agent never runs stale
@@ -449,29 +452,23 @@ and stays untested.
 
 ## Polyfill chains
 
-Status: design, not built. It replaces the whole-agent srt backend of
-OpenCode described above.
+OpenCode runs its shell commands through the bash chain.
 
 ### Why
 
-Running OpenCode whole under srt has two problems.
+Claude Code and Codex sandbox the commands an agent runs and leave the
+agent process outside. OpenCode has no sandbox for its shell commands
+(the `sandbox` settings in its bundle belong to the Claude Agent SDK it
+includes). agent-sandbox therefore supplies the step that Claude Code
+performs with the srt library it embeds: starting srt around each shell
+command. OpenCode runs outside the sandbox, like Claude Code and Codex.
 
-- srt's settings file rejects patterns that Claude Code accepts from
-  the same modules: `*` (the `internet` module) and a wildcard inside a
-  label (`productionresultssa*.blob.core.windows.net`, the `github`
-  module). srt then refuses the whole file, so OpenCode cannot start in
-  a checkout enrolled with either module. srt has no allow-all setting;
-  only its library's ask callback can admit a host that no list names.
-- Claude Code and Codex sandbox the commands an agent runs and leave the
-  agent process outside. OpenCode is the only agent sandboxed whole,
-  which is also why `run` relays the Emacs MCP bridge and owns a
-  pseudo-terminal.
-
-OpenCode has no sandbox for the shell commands it runs (the `sandbox`
-settings in its bundle belong to the Claude Agent SDK it includes). In
-this design OpenCode runs outside the sandbox, like Claude Code and
-Codex, and agent-sandbox supplies the step Claude Code performs with the
-srt library it embeds: starting srt around each shell command.
+srt's settings file rejects two patterns that the modules use and Claude
+Code accepts: `*` (the `internet` module) and a wildcard inside a label
+(`productionresultssa*.blob.core.windows.net`, the `github` module). srt
+has no allow-all setting. Only its library's ask callback can admit a
+host that no list names, and only a program that drives the library can
+register one.
 
 ### Polyfills and chains
 
@@ -501,83 +498,110 @@ that needs rules is given them.
 
 ### The steps
 
-- **srt.** A compiled entry point and a Node program that drives srt
-  through its library (`SandboxManager.initialize` and
-  `wrapWithSandbox`). It always starts srt, with the rules file the CLI
-  composed for the checkout, and fails when srt cannot start, including
-  inside another sandbox where nested bubblewrap is refused. Its ask
-  callback answers `true` only when the checkout grants `*`. srt's deny
-  list, allow list and resolved-address check apply as before, so
-  loopback, private, link-local and metadata addresses stay unreachable
-  except for IP literals the rules list. srt is a Node package
-  (`engines.node >= 22.12.0`), so the program runs on Node, not on the
-  Bun that OpenCode embeds. It passes the bwrap chain to srt as
-  `bwrapPath`.
-- **Socket restriction.** Today's socket shell (`socketShell` in the
-  module), renamed. Inside srt it runs the command under `landlock-shim`
-  with the composed socket list and keeps its handling of srt's relay
-  preamble. In the OpenCode chain the srt step calls it with the list
-  from the rules file. As Claude Code's `SHELL` it also serves the
-  commands Claude Code runs outside its sandbox (excluded and
-  sandbox-disabled commands), so there it still checks
+- **srt** (`pkg-overlays/default/packages/srt-step/`). A binary wrapper
+  around a Node program that drives srt through its library
+  (`SandboxManager.initialize` and `wrapWithSandbox`). The module builds
+  one per agent with backend `srt`, with `runtime.sandboxRuntimePackage`
+  as its srt, and publishes it as `bashChains.<agent>`. The program finds
+  the checkout from the working directory (the nearest directory holding
+  `.agent-sandbox/binding.json`) and reads the rules file the CLI wrote
+  there. Without a rules file it runs bash unchanged. With one it always
+  starts srt, and it exits without running the command when srt cannot
+  start, including inside another sandbox where nested bubblewrap is
+  refused. The rules' environment is merged into the environment of the
+  program, so the composed `PATH`, device list and socket list reach
+  srt, the bwrap chain and the command. `bash -c SCRIPT` hands srt the
+  script; any other arguments run the rules' shell with the same
+  arguments. srt is a Node package (`engines.node >= 22.12.0`), so the
+  program runs on Node, not on the Bun that OpenCode embeds. It passes
+  the bwrap chain to srt as `bwrapPath`.
+
+  srt asks the ask callback about each host no list decides. The
+  callback admits a hostname when the checkout grants `*`. srt checks
+  the addresses a hostname resolves to and refuses loopback, link-local
+  and metadata addresses, but it dials an IP literal as given. The
+  callback therefore refuses every IP literal and the loopback names
+  (`localhost`, `*.localhost`), so an address is reachable only when a
+  module lists it.
+- **Socket restriction** (`socketRestriction` in the module). Inside
+  srt it runs the command under `landlock-shim` with the composed socket
+  list and handles srt's relay preamble. In the OpenCode chain the rules
+  name it as the shell when the modules grant sockets. As Claude Code's
+  `SHELL` it also serves the commands Claude Code runs outside its
+  sandbox (excluded and sandbox-disabled commands), so it checks
   `SANDBOX_RUNTIME`. That check only chooses between narrowing and
   passing through, and both use the rules Claude Code applied from the
   checkout's settings.
-- **Devices.** Today's `bwrap` wrapper, renamed. It reads the composed
+- **Devices** (`devicesBwrap` in the module). It reads the composed
   device list and inserts `--dev-bind-try` for each node after the first
   `--dev /dev`. srt's settings have no device field, so device grants
   are srt configuration that this step carries out.
 
-The steps are compiled, as `landlock-shim` is, so no shell command
-starts Python. The CLI keeps its role at enroll and sync time.
+The socket-restriction and devices steps are shell scripts, and the srt
+step runs Node, so no shell command starts Python. The CLI composes the
+rules at enroll and sync time. In the `agent-sandbox-agents` check, a
+command through the chain has taken between 110 and 280 ms.
 
 ### Rules
 
-The CLI composes the checkout's modules as it does now and writes:
+Whenever the CLI applies a checkout's modules (enroll, add, drop, sync,
+expiry), it writes:
 
-- Claude Code's rules into `.claude/settings.local.json`, as now.
-- The rules of OpenCode's shell commands into the sidecar directory
-  (`.agent-sandbox/`), write-guarded like the other enrollment files.
-  When writing them for srt it removes `*` from `allowedDomains` and
-  records that the checkout grants it, for the ask callback. A wildcard
-  inside a label becomes a leading wildcard over the rest of the name:
-  `productionresultssa*.blob.core.windows.net` becomes
-  `*.blob.core.windows.net`. Widening a deny entry the same way only
-  denies more. Port suffixes are kept.
+- Claude Code's rules into `.claude/settings.local.json`.
+- For each agent with backend `srt`, the rules of its shell commands
+  into `.agent-sandbox/shell-<agent>.json` (`shell.py`), write-guarded
+  like the binding. They are composed from the checkout's modules,
+  `baseModules` and the agent's modules, and hold the srt settings, the
+  command environment, the shell to run inside srt, and a scratch
+  directory under `$XDG_RUNTIME_DIR/agent-sandbox/`. Abandoning the
+  checkout removes the file.
+
+srt settings written to a file (these rules, and the settings of
+`agent-sandbox run`) take domains in srt's forms (`run.srt_file_settings`).
+A bare `*` is left out of `allowedDomains` and recorded as `allowAll`,
+for the ask callback. A wildcard inside a label becomes a leading
+wildcard over the rest of the name:
+`productionresultssa*.blob.core.windows.net` becomes
+`*.blob.core.windows.net`. Widening a deny entry the same way only
+denies more. Port suffixes are kept.
 
 ### OpenCode outside the sandbox
 
-- The `opencode` command sets `SHELL` to the bash chain and puts it
-  first on `PATH`. It no longer runs `agent-sandbox run`.
+- The `opencode` command sets `SHELL` to `bashChains.opencode` and
+  starts OpenCode. The `opencode` module declares the agent with no
+  modules, so a shell command gets the checkout's modules and
+  `baseModules`.
 - OpenCode's file tools are gated by OpenCode's permission rules and the
-  consent plugin, with deny rules for the files the baseline guards, as
-  Claude Code's file tools are gated by its permission rules.
-- OpenCode starts its MCP servers outside the sandbox, as Claude Code
-  does, so the Emacs MCP relay of `run` is not needed for it.
-- The model APIs and local model servers, such as
-  `127.0.0.2:<port>` for ch-local-llms' Strata servers, are reached from
-  the OpenCode process. The `opencode` module stops granting them.
+  consent plugin, as Claude Code's file tools are gated by its
+  permission rules.
+- OpenCode starts its MCP servers outside the sandbox, in its working
+  directory, as Claude Code does.
+- OpenCode reaches the model APIs and local model servers, such as
+  `127.0.0.2:<port>` for ch-local-llms' Strata servers, from outside the
+  sandbox.
 
-`agent-sandbox run`, the `srt` backend of `agents.<name>.backend` and
-the sandbox grants of the `opencode` module go away once no agent uses
-them. Codex keeps its native backend.
+Codex runs through `agent-sandbox run` with its native backend.
 
 ### Testing
 
-The `agent-sandbox-agents` check runs real OpenCode against the mock
-model with the bash chain, and the shell probes it runs for Codex:
-workspace and scratch writes, write guards, allowed and denied hosts
-(including a checkout that grants `*`), allowed and denied sockets, and
-refusal when srt cannot start. A Claude Code probe checks that an
-excluded command still passes through the socket-restriction step
-unnarrowed.
+The `agent-sandbox-agents` check runs the chain directly, and through
+real OpenCode 1, whose bash tool the mock model calls. It checks these
+behaviors:
 
-### Open questions
+- Commands write to the checkout and the scratch directory, and writes
+  to the home directory and the guarded enrollment files fail.
+- The mock model API on 127.0.0.2 is reachable, and srt's proxy refuses
+  a host no module lists with 403.
+- In a checkout that grants `*`, the proxy tries an unlisted hostname,
+  and it refuses IP literals (loopback, link-local, `[::1]`) and the
+  loopback names.
+- The agent-bus socket is reachable with the `agent-bus` module and
+  refused without it, and a socket no module lists is refused.
+- Outside an enrolled checkout a command runs unchanged. Exit statuses
+  and positional parameters pass through the chain.
+- When srt refuses the rules, the chain stops before the command runs.
 
-- OpenCode's acceptance of a `SHELL` named `bash` is read from its
-  bundled code, not yet tested.
-- The cost of starting Node for each shell command, to be measured
-  before the bash chain replaces `run`.
+The check also logs the average time a command through the chain takes.
 
 ## Trusted executables
 
