@@ -222,7 +222,7 @@ let
   '';
 
   # The env variable that carries a composed unix-socket allowlist to the
-  # socket shell; the CLI's composer writes it (SOCKETS_ENV_VAR there).
+  # socket-restriction step; the CLI's composer writes it (SOCKETS_ENV_VAR there).
   socketsEnvVar = "AGENT_SANDBOX_UNIX_SOCKETS";
 
   # The SHELL of every enrollment whose chosen modules declare unix
@@ -268,17 +268,17 @@ let
   # with the relay and must not eval anything. Any other script runs
   # whole under Landlock, so an unrecognized srt keeps the narrowing and
   # loses only the proxy.
-  socketShell = "${socketShellPackage}/bin/bash";
-  socketShellPackage = pkgs.writeTextFile {
-    name = "agent-sandbox-socket-shell";
+  socketRestriction = "${socketRestrictionPackage}/bin/bash";
+  socketRestrictionPackage = pkgs.writeTextFile {
+    name = "agent-sandbox-socket-restriction";
     destination = "/bin/bash";
     executable = true;
     text = ''
       #!${pkgs.runtimeShell}
     ''
-    + socketShellBody;
+    + socketRestrictionBody;
   };
-  socketShellBody = ''
+  socketRestrictionBody = ''
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
       if [ -z "''${${socketsEnvVar}:-}" ]; then
         echo "agent-sandbox: ${socketsEnvVar} is empty, so the unix-socket allowlist cannot be enforced; refusing to run" >&2
@@ -349,7 +349,7 @@ let
   # makes the wrapper refuse to build the sandbox.
   #
   # The wrapper also carries the user's identity into the sandbox. A
-  # homed or userdb account is not in /etc/passwd, and the socket shell
+  # homed or userdb account is not in /etc/passwd, and the socket-restriction step
   # refuses connections to systemd's userdb sockets, so getpwuid fails
   # inside the sandbox and OpenSSH, for one, exits. When the uid or gid
   # is missing from /etc/passwd or /etc/group, the wrapper resolves it
@@ -473,7 +473,7 @@ let
           [
             baseFarm
             sshWrapper
-            socketShellPackage
+            socketRestrictionPackage
             nativeSocketBoundary
             devicesBwrap
             cfg.runtime.claudePackage
@@ -498,7 +498,7 @@ let
           ]
           ++ map (p: "${p}/bin") cfg.runtime.sandboxTools;
           shell = runtimeShell;
-          socketShell = "${socketShell}";
+          socketRestriction = "${socketRestriction}";
           # For agents that run whole inside the sandbox: the setsid that
           # gives the agent its pseudo-terminal as controlling terminal,
           # and the bwrap sandbox-runtime builds sandboxes with, which

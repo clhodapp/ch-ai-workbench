@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Landlock-based unix-socket narrowing that the home-manager module's
-# socket shell wraps around the sandbox shell of every enrollment with a
+# socket-restriction step wraps around the sandbox shell of every enrollment with a
 # socket allowlist. Not meant to be invoked by hand. See the C source header for
 # mechanism, ABI gating and failure posture.
 {

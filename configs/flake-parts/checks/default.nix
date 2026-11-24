@@ -702,16 +702,16 @@
               jq -e '.env.AGENT_SANDBOX_UNIX_SOCKETS == "/run/agent.sock"' "$settings"
               jq -e '.env.AGENT_SANDBOX_DEVICES == ""' "$settings"
               shell=$(jq -r .env.SHELL "$settings")
-              case "$shell" in *agent-sandbox-socket-shell/bin/bash) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
+              case "$shell" in *agent-sandbox-socket-restriction/bin/bash) ;; *) echo "SHELL is $shell"; exit 1 ;; esac
               for cmd in fd gh git ssh agent-sandbox bwrap; do
                 PATH=$(jq -r .env.PATH "$settings") command -v "$cmd"
               done
               agent-sandbox status -C repo
 
-              # The socket shell refuses an empty allowlist inside a
+              # The socket-restriction step refuses an empty allowlist inside a
               # sandbox and runs commands plainly outside one.
               if SANDBOX_RUNTIME=1 ${pkgs.coreutils}/bin/env -u AGENT_SANDBOX_UNIX_SOCKETS "$shell" -c true; then
-                echo "the socket shell ran without an allowlist"; exit 1
+                echo "the socket-restriction step ran without an allowlist"; exit 1
               fi
               test "$("$shell" -c 'echo outside')" = outside
 
@@ -1128,7 +1128,7 @@
               # The same probes from real Claude Code, whose Bash tool
               # runs each command in the sandbox that enrollment wrote
               # into the checkout's .claude/settings.local.json, through
-              # the socket shell. The mock answers its Messages API.
+              # the socket-restriction step. The mock answers its Messages API.
               claude_probe() (
                 cd "$TMPDIR/repo-$1"
                 rm -f "$3"
@@ -1148,7 +1148,7 @@
               claude_probe bus agent-bus-probe.py agent-bus-probe-passed
               claude_probe nobus agent-bus-denied-probe.py agent-bus-denied-passed
               echo "agent-bus probes passed under Claude Code's sandbox"
-              # A Bash command under the socket shell reaches an allowed
+              # A Bash command under the socket-restriction step reaches an allowed
               # host through srt's proxy relay.
               cp ${self}/tests/agent-sandbox/claude-network-probe.py "$TMPDIR/repo-bus/"
               claude_probe bus claude-network-probe.py claude-network-passed

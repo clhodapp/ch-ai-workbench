@@ -22,7 +22,7 @@ here, at enroll and sync time, by union:
   set the same variable or settings scalar to different values are an
   error, reported at enroll time.
 
-A unix-socket allowlist is enforced by the base part's socket shell, a
+A unix-socket allowlist is enforced by the base part's socket-restriction step, a
 Landlock wrapper that reads the allowlist from ``SOCKETS_ENV_VAR`` in the
 settings env. That env is write-guarded at both the sandbox and
 permission layers, and Landlock restrictions only narrow once applied, so
@@ -153,7 +153,7 @@ def compose(
 
     # An explicit allow-all in any module wins and gets no narrowing; a
     # non-empty allowlist otherwise opens upstream's all-or-nothing Linux
-    # filter and narrows it again through the socket shell.
+    # filter and narrows it again through the socket-restriction step.
     allow_all_values = [p.get("allowAllUnixSockets") for p in ordered]
     sockets = grants["allowUnixSockets"]
     narrows = True not in allow_all_values and bool(sockets)
@@ -170,7 +170,7 @@ def compose(
             + [entry for p in ordered for entry in p.get("path") or []]
             + base["pathLast"]
         ),
-        "SHELL": base["socketShell"] if narrows else base["shell"],
+        "SHELL": base["socketRestriction"] if narrows else base["shell"],
         DEVICES_ENV_VAR: "\n".join(grants["devices"] or []),
     }
     if narrows:
