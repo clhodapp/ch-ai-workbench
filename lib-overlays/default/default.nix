@@ -55,6 +55,7 @@
       mkClaudePushPrCheckHook = import ./hooks/claude-push-pr-check-hook.nix;
       mkClaudeRedactHook = import ./hooks/claude-redact-hook.nix;
       mkClaudeRevealHook = import ./hooks/claude-reveal-hook.nix;
+      mkClaudeStackReminderHook = import ./hooks/claude-stack-reminder-hook.nix;
       mkEmacsClaudeConsentHook = import ./hooks/emacs-claude-consent-hook.nix;
       # The Codex hook that asks consent for a queued Codex task's call
       # that would leave its sandbox.

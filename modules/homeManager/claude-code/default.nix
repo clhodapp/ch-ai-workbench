@@ -259,6 +259,13 @@ let
   # (script: claude-pr-origin-hook.sh).
   claudePrOriginHook = workbench.mkClaudePrOriginHook { inherit pkgs; };
 
+  # PostToolUse hook on Bash: a gh pr create whose base is a branch
+  # other than main, master or develop hands the model a note that
+  # GitHub has stacked pull requests, and that a chain of pull
+  # requests should be linked as one with gh-stack
+  # (script: claude-stack-reminder-hook.sh).
+  claudeStackReminderHook = workbench.mkClaudeStackReminderHook { inherit pkgs; };
+
   enabledHooks = lib.filterAttrs (_name: hook: hook.enable) cfg.hooks;
 
   # The prompt API behind the consent spool (`pkgs.ch-ai-workbench.claude-consent`,
@@ -579,10 +586,14 @@ in
         also seeds push-pr-check, the PreToolUse hook on Bash that
         denies a command that appears to run git push once with a reminder to
         confirm the branch's pull request is not already merged, and
-        lets the identical re-issue through, and pr-origin, the
+        lets the identical re-issue through, pr-origin, the
         PostToolUse hook on Bash that records which session created a
         pull request (gh pr create, gh-stack) in
-        $XDG_STATE_HOME/claude-pr-origins/origins.jsonl.
+        $XDG_STATE_HOME/claude-pr-origins/origins.jsonl, and
+        stack-reminder, the PostToolUse hook on Bash that reminds the
+        model of GitHub stacked pull requests when gh pr create opens
+        a pull request into a branch other than main, master or
+        develop.
       '';
     };
 
@@ -1462,6 +1473,12 @@ in
         matcher = "Bash";
         command = "claude-pr-origin-hook";
         package = claudePrOriginHook;
+      };
+      stack-reminder = {
+        event = "PostToolUse";
+        matcher = "Bash";
+        command = "claude-stack-reminder-hook";
+        package = claudeStackReminderHook;
       };
     };
 

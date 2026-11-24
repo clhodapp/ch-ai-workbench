@@ -259,6 +259,7 @@
       # below drive the same scripts a real configuration installs.
       claudePushPrCheckHook = workbench.mkClaudePushPrCheckHook { inherit pkgs; };
       claudePrOriginHook = workbench.mkClaudePrOriginHook { inherit pkgs; };
+      claudeStackReminderHook = workbench.mkClaudeStackReminderHook { inherit pkgs; };
       claudeRedactHook = workbench.mkClaudeRedactHook { inherit pkgs; };
       claudeRevealHook = workbench.mkClaudeRevealHook {
         inherit pkgs;
@@ -1765,6 +1766,53 @@
               touch $out
             '';
 
+        # The stacked pull request reminder: gh pr create into a
+        # branch other than main, master or develop (as --base X,
+        # --base=X, -B X and quoted) names the pull request and the
+        # base in a PostToolUse note; a create into main, master or
+        # develop, a create without a base, a create without a link
+        # in its output, a gh-stack command, gh pr list, and non-JSON
+        # stdin print nothing.
+        claude-stack-reminder-hook =
+          pkgs.runCommand "claude-stack-reminder-hook"
+            {
+              nativeBuildInputs = [ pkgs.jq ];
+            }
+            ''
+              hook=${lib.getExe claudeStackReminderHook}
+              call() {
+                jq -cn --arg c "$1" --arg out "$2" \
+                  '{session_id: "sess-1", hook_event_name: "PostToolUse",
+                    tool_name: "Bash", tool_input: {command: $c},
+                    tool_response: {stdout: $out, stderr: ""}}' | "$hook"
+              }
+              link=https://github.com/o/r/pull/12
+              for c in \
+                'gh pr create --base feat-a --fill' \
+                'gh pr create --base=feat-a --fill' \
+                'gh pr create -B feat-a --fill' \
+                "cd /x && gh pr create --title t --body b --base 'feat-a'" \
+                'gh pr new -Bfeat-a --fill'; do
+                call "$c" "$link" | jq -e --arg l "$link" '
+                  .hookSpecificOutput.hookEventName == "PostToolUse"
+                  and (.hookSpecificOutput.additionalContext
+                       | contains($l) and contains("feat-a") and contains("gh-stack link"))' >/dev/null
+              done
+              for c in \
+                'gh pr create --base main --fill' \
+                'gh pr create -B master --fill' \
+                'gh pr create --base=develop --fill' \
+                'gh pr create --fill' \
+                "gh pr create --base main --title 'fix foo-Bar handling'" \
+                "nix shell 'nixpkgs#gh-stack' -c gh-stack submit --base feat-a" \
+                'gh pr list --base feat-a'; do
+                [ -z "$(call "$c" "$link")" ]
+              done
+              [ -z "$(call 'gh pr create --base feat-a --fill' 'pull request create failed')" ]
+              [ -z "$(echo 'not json' | "$hook")" ]
+              touch $out
+            '';
+
         # The redaction hook: a token in a Read result is replaced
         # in place with the shape kept and a note naming the rule,
         # and the Read is marked for the retry path; an approved
@@ -2054,6 +2102,7 @@
           claude-tic-check-table = check "build" "each regex table entry with an ignore pattern fires on its positive sentences and stays silent on what its ignore pattern removes";
           claude-tic-check-judge = check "build" "the tic-check hooks route each write to the judge dimensions it calls for and report the scores as context";
           claude-pr-origin-hook = check "build" "the pull-request origin hook records each link that gh pr create and gh-stack print, and nothing else";
+          claude-stack-reminder-hook = check "build" "the stack reminder hook names GitHub stacks after gh pr create opens a pull request into a branch other than main, master or develop, and stays silent on everything else";
           claude-redact-hook = check "build" "the redact hook replaces a token in a tool result and marks the read for the reveal hook";
           claude-reveal-hook = check "build" "the reveal hook lets a marked read through only with the answer of the user";
           codex-enrolled-command-consent = check "build" "the consent hook of Codex decides commands in an enrolled checkout as its tests expect";
