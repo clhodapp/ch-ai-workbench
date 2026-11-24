@@ -475,9 +475,9 @@ srt library it embeds: starting srt around each shell command.
 
 ### Polyfills and chains
 
-A polyfill is a program that a caller runs under the name of another
-program. It changes the execution context and then executes the next
-program. A polyfill chain is an ordered list of polyfills that ends in
+A polyfill is a program installed under the name of another program,
+so that a caller that runs that name runs the polyfill. It changes the
+execution context and then executes the next program. A polyfill chain is an ordered list of polyfills that ends in
 the real program. agent-sandbox builds two chains:
 
 | Chain | Stands in for | The caller finds it through | Steps |
