@@ -475,9 +475,14 @@ srt library it embeds: starting srt around each shell command.
 
 ### Polyfills and chains
 
-A polyfill is a program installed under the name of another program,
-so that a caller that runs that name runs the polyfill. It changes the
-execution context and then executes the next program. A polyfill chain is an ordered list of polyfills that ends in
+A polyfill supplies a capability that an environment lacks, behind the
+interface its callers already use, so the callers need no change. The
+capabilities here are sandboxing that a program's callers do not
+provide: srt around a shell command, Landlock's socket restriction, and
+device nodes inside a sandbox. Each polyfill is installed under the
+name of the program whose callers lack the capability (`bash`,
+`bwrap`). It changes the execution context and then executes the next
+program. A polyfill chain is an ordered list of polyfills that ends in
 the real program. agent-sandbox builds two chains:
 
 | Chain | Stands in for | The caller finds it through | Steps |
