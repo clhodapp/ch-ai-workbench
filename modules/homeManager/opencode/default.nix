@@ -27,10 +27,11 @@
 let
   cfg = config.ch-ai-workbench.opencode;
 
-  # With agent-sandbox enabled in this home-manager configuration, OpenCode runs whole inside
-  # a checkout's sandbox when the checkout is enrolled (`agent-sandbox
-  # run`), and as it is elsewhere. The wrapper reads the provider keys
-  # before that, so the key files need not be readable inside.
+  # With agent-sandbox enabled in this home-manager configuration,
+  # OpenCode runs outside the sandbox with the bash chain of agent-sandbox
+  # as SHELL. The chain runs each shell command inside the sandbox of the
+  # enrolled checkout holding the command's working directory, and runs
+  # it unchanged elsewhere.
   sandboxed = options.ch-ai-workbench ? agent-sandbox && config.ch-ai-workbench.agent-sandbox.enable;
   realOpencode = lib.getExe cfg.package;
 
@@ -83,10 +84,8 @@ let
     nativeBuildInputs = [ pkgs.makeWrapper ];
     postBuild = ''
       rm $out/bin/${cfg.package.meta.mainProgram}
-      makeWrapper ${
-        if sandboxed then lib.getExe config.ch-ai-workbench.agent-sandbox.package else realOpencode
-      } $out/bin/${cfg.package.meta.mainProgram} \
-        ${lib.optionalString sandboxed "--add-flags ${lib.escapeShellArg "run opencode -- ${realOpencode}"}"} \
+      makeWrapper ${realOpencode} $out/bin/${cfg.package.meta.mainProgram} \
+        ${lib.optionalString sandboxed "--set SHELL ${lib.getExe config.ch-ai-workbench.agent-sandbox.bashChains.opencode}"} \
         --set-default OPENCODE_CONFIG ${layer} \
         ${lib.optionalString (!cfg.claudeCodeCompat) "--set OPENCODE_DISABLE_CLAUDE_CODE 1"} \
         ${lib.concatMapStringsSep " " (provider: "--run ${lib.escapeShellArg (readKey provider)}") (
@@ -200,7 +199,8 @@ in
       description = ''
         The command that serves OpenCode over the Agent Client Protocol:
         the opencode command with `acp`, so it reads the declared
-        settings and runs inside a checkout's sandbox the same way. The
+        settings and runs its shell commands through the same bash
+        chain. The
         emacs-integration module hands it to agent-shell.
       '';
     };
@@ -248,17 +248,6 @@ in
                 environment OpenCode is started from.
               '';
             };
-
-            hosts = lib.mkOption {
-              type = lib.types.listOf lib.types.str;
-              default = [ ];
-              example = [ "openrouter.ai" ];
-              description = ''
-                The hosts of this provider's API. With agent-sandbox
-                enabled, OpenCode running inside a checkout's sandbox
-                may reach them.
-              '';
-            };
           };
         }
       );
@@ -288,31 +277,10 @@ in
   config = lib.mkIf cfg.enable (
     lib.mkMerge [
       (lib.optionalAttrs (options.ch-ai-workbench ? agent-sandbox) {
-        # What OpenCode itself needs inside a checkout's sandbox: its
-        # package, the directories of OpenCode (sessions, logs, plugins and the
-        # config `opencode mcp add` writes), the model catalog and the
-        # plugin registry, the providers' APIs, and the store, where the
-        # declared settings, its skills and AGENTS.md are.
+        # OpenCode's shell commands run under the bash chain of this
+        # agent, with the modules of the checkout and baseModules.
         ch-ai-workbench.agent-sandbox = lib.mkIf config.ch-ai-workbench.agent-sandbox.enable {
-          modules.opencode = {
-            description = "OpenCode itself: its package, its directories, models.dev and the providers' APIs";
-            toolset = [ cfg.package ];
-            readStore = true;
-            allowWrite = [
-              "${config.xdg.configHome}/opencode"
-              "${config.xdg.dataHome}/opencode"
-              "${config.xdg.stateHome}/opencode"
-              "${config.xdg.cacheHome}/opencode"
-            ];
-            allowedDomains = [
-              "models.dev"
-              "opencode.ai"
-              "*.opencode.ai"
-              "registry.npmjs.org"
-            ]
-            ++ lib.concatMap (provider: provider.hosts) (lib.attrValues cfg.providers);
-          };
-          agents.opencode.modules = [ "opencode" ];
+          agents.opencode = { };
         };
       })
       {
@@ -320,12 +288,10 @@ in
           baseten = {
             keyVariable = lib.mkDefault "BASETEN_API_KEY";
             apiKeyFile = lib.mkDefault "${config.xdg.configHome}/baseten/api-key";
-            hosts = lib.mkDefault [ "inference.baseten.co" ];
           };
           fireworks-ai = {
             keyVariable = lib.mkDefault "FIREWORKS_API_KEY";
             apiKeyFile = lib.mkDefault "${config.xdg.configHome}/fireworks/api-key";
-            hosts = lib.mkDefault [ "api.fireworks.ai" ];
           };
         };
 

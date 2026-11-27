@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
-"""Run by real Codex inside its native command sandbox, and by real Claude
-Code inside its Bash sandbox, in a checkout that is not enrolled with the
-agent-sandbox module `agent-bus`, under Nix check.
+"""Run by real Codex inside its native command sandbox, by real Claude
+Code inside its Bash sandbox, and through OpenCode's bash chain, in a
+checkout that is not enrolled with the agent-sandbox module `agent-bus`,
+under Nix check.
 
 The daemon is running outside the sandbox. The probe connects to its
 socket directly, so the result shows the socket refused rather than the

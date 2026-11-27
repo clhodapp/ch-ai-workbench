@@ -10,7 +10,7 @@ BASE = {
     "pathFirst": ["/nix/store/ssh-wrapper/bin"],
     "pathLast": ["/nix/store/base-farm/bin", "/nix/store/bwrap/bin"],
     "shell": "/nix/store/bash/bin/bash",
-    "socketShell": "/nix/store/agent-sandbox-socket-shell",
+    "socketRestriction": "/nix/store/agent-sandbox-socket-restriction",
 }
 
 WORK = {

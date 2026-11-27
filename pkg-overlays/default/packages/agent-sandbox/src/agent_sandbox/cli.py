@@ -119,7 +119,11 @@ def _apply(
     write_sidecar(root, modules, fragment, declined, expires)
     from .codex import sync_enrollment
 
-    sync_enrollment(root, modules, load_registry())
+    registry = load_registry()
+    sync_enrollment(root, modules, registry)
+    from .shell import sync_shell_rules
+
+    sync_shell_rules(root, modules, registry)
     if quiet:
         return
     state = "updated" if changed else "already current"

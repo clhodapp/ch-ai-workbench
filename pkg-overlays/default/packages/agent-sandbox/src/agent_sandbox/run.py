@@ -24,7 +24,7 @@ API hosts). What differs from the Claude Code fragment:
   write guards (the checkout's settings files and sidecar, the index of
   expiring checkouts) go to ``denyWrite``.
 - A unix-socket allowlist is enforced by starting the agent itself through
-  the socket shell, so the agent process is narrowed and not only the
+  the socket-restriction step, so the agent process is narrowed and not only the
   commands it runs.
 - srt starts bubblewrap with ``--new-session``, which leaves the agent
   without a controlling terminal, so a terminal UI never hears of a
@@ -76,6 +76,55 @@ def runtime_dir() -> Path:
     return Path(base) / "agent-sandbox"
 
 
+def srt_domain(entry: str) -> str | None:
+    """``entry`` as srt's settings file accepts it, or None when srt has
+    no pattern for it. srt takes a wildcard only as a whole leading label
+    (``*.example.com``), so a label holding a wildcard and every label
+    before it become one leading ``*``:
+    ``productionresultssa*.blob.core.windows.net`` becomes
+    ``*.blob.core.windows.net``. A bare ``*``, and a pattern that would
+    keep fewer than two labels after the ``*``, have no srt form. A port
+    suffix and IP literals are kept as they are."""
+    if entry.startswith("[") or entry.count(":") > 1:
+        return entry
+    host, _, port = entry.partition(":")
+    labels = host.split(".")
+    starred = [i for i, label in enumerate(labels) if "*" in label]
+    if not starred:
+        return entry
+    rest = labels[starred[-1] + 1:]
+    if len(rest) < 2:
+        return None
+    return ".".join(["*", *rest]) + (f":{port}" if port else "")
+
+
+def srt_domains(entries: list[str]) -> tuple[list[str], bool]:
+    """The domains of a list as srt's settings file accepts them, and
+    whether the list grants every host (``*``). Entries srt has no form
+    for are left out; a deny list widened this way only denies more."""
+    out: list[str] = []
+    allow_all = False
+    for entry in entries:
+        if entry == "*":
+            allow_all = True
+            continue
+        translated = srt_domain(entry)
+        if translated is None:
+            print(f"agent-sandbox: srt has no pattern for the domain {entry!r}; leaving it out", file=sys.stderr)
+        elif translated not in out:
+            out.append(translated)
+    return out, allow_all
+
+
+def srt_file_settings(settings: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """``settings`` with domains in the forms srt's settings file accepts,
+    and whether the allowed domains grant every host (``*``)."""
+    network = dict(settings["network"])
+    network["allowedDomains"], allow_all = srt_domains(network["allowedDomains"])
+    network["deniedDomains"], _ = srt_domains(network["deniedDomains"])
+    return {**settings, "network": network}, allow_all
+
+
 def srt_settings(
     fragment: dict[str, Any], root: Path, guards: list[str], scratch: Path, bwrap: str | None,
     *, project_root: Path | None = None,
@@ -117,12 +166,12 @@ def sandboxed_command(
     terminal: bool,
 ) -> list[str]:
     """The command srt runs: the agent's command with the agent's extra
-    arguments after its program, started through the socket shell when the
+    arguments after its program, started through the socket-restriction step when the
     checkout narrows unix sockets, and through ``setsid -c`` on a
     terminal."""
     cmd = [command[0], *(agent.get("args") or []), *command[1:]]
     if env.get(SOCKETS_ENV_VAR):
-        cmd = [base["socketShell"], "-c", 'exec "$0" "$@"', *cmd]
+        cmd = [base["socketRestriction"], "-c", 'exec "$0" "$@"', *cmd]
     if terminal:
         cmd = [base["setsid"], "-w", "-c", *cmd]
     return cmd
@@ -378,14 +427,14 @@ def prepare(
             command = [base["setsid"], "-w", "-c", *command]
         return command, env, server
     settings_file = run_dir / "srt.json"
-    write_text_atomic(settings_file, json.dumps(settings, indent=2) + "\n")
+    write_text_atomic(settings_file, json.dumps(srt_file_settings(settings)[0], indent=2) + "\n")
     argv = [srt, "--settings", str(settings_file), "--", *sandboxed_command(command, agent, env, base, terminal)]
     return argv, env, server
 
 
 def grant_socket(fragment: dict[str, Any], path: str) -> None:
     """Let the sandbox reach the unix socket ``path`` and nothing more:
-    the socket joins the composed allowlist, which the socket shell
+    the socket joins the composed allowlist, which the socket-restriction step
     enforces, unless a chosen module already allows every socket."""
     net = fragment.setdefault("sandbox", {}).setdefault("network", {})
     env = fragment.setdefault("env", {})

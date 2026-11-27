@@ -152,7 +152,7 @@ class ComposeTest(unittest.TestCase):
         net = fragment["sandbox"]["network"]
         self.assertEqual(net["allowUnixSockets"], ["/run/a.sock", "/run/b.sock"])
         self.assertIs(net["allowAllUnixSockets"], True)
-        self.assertEqual(fragment["env"]["SHELL"], BASE["socketShell"])
+        self.assertEqual(fragment["env"]["SHELL"], BASE["socketRestriction"])
         self.assertEqual(fragment["env"][SOCKETS_ENV_VAR], "/run/a.sock\n/run/b.sock")
 
     def test_explicit_allow_all_skips_narrowing(self):

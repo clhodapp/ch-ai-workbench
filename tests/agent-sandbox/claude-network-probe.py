@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Run by real Claude Code inside its Bash sandbox, in a checkout whose
-modules declare unix sockets, so the command runs under the socket shell.
+modules declare unix sockets, so the command runs under the socket-restriction step.
 
 srt relays the sandbox's loopback proxy port to the proxy's unix socket
 from the same shell that runs the command. The request reaches the mock

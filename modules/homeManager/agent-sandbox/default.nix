@@ -222,7 +222,7 @@ let
   '';
 
   # The env variable that carries a composed unix-socket allowlist to the
-  # socket shell; the CLI's composer writes it (SOCKETS_ENV_VAR there).
+  # socket-restriction step; the CLI's composer writes it (SOCKETS_ENV_VAR there).
   socketsEnvVar = "AGENT_SANDBOX_UNIX_SOCKETS";
 
   # The SHELL of every enrollment whose chosen modules declare unix
@@ -268,17 +268,17 @@ let
   # with the relay and must not eval anything. Any other script runs
   # whole under Landlock, so an unrecognized srt keeps the narrowing and
   # loses only the proxy.
-  socketShell = "${socketShellPackage}/bin/bash";
-  socketShellPackage = pkgs.writeTextFile {
-    name = "agent-sandbox-socket-shell";
+  socketRestriction = "${socketRestrictionPackage}/bin/bash";
+  socketRestrictionPackage = pkgs.writeTextFile {
+    name = "agent-sandbox-socket-restriction";
     destination = "/bin/bash";
     executable = true;
     text = ''
       #!${pkgs.runtimeShell}
     ''
-    + socketShellBody;
+    + socketRestrictionBody;
   };
-  socketShellBody = ''
+  socketRestrictionBody = ''
     if [ -n "''${SANDBOX_RUNTIME:-}" ]; then
       if [ -z "''${${socketsEnvVar}:-}" ]; then
         echo "agent-sandbox: ${socketsEnvVar} is empty, so the unix-socket allowlist cannot be enforced; refusing to run" >&2
@@ -322,6 +322,21 @@ let
   # wrapper; the CLI's composer writes it (DEVICES_ENV_VAR there).
   devicesEnvVar = "AGENT_SANDBOX_DEVICES";
 
+  # The agents whose shell commands the bash chain sandboxes, and the
+  # chain of each: the srt step, named `bash`, which starts
+  # sandbox-runtime around a command with the rules the CLI wrote to the
+  # checkout's .agent-sandbox/shell-<agent>.json, and runs the rules'
+  # shell (the socket-restriction step or bash) inside it.
+  srtAgents = lib.filterAttrs (_: agent: agent.backend == "srt") cfg.agents;
+  bashChain =
+    name:
+    pkgs.callPackage ../../../pkg-overlays/default/packages/srt-step {
+      sandbox-runtime = cfg.runtime.sandboxRuntimePackage;
+      agent = name;
+      bash = cfg.runtime.shellPackage;
+    };
+  shellRulesFile = name: ".agent-sandbox/shell-${name}.json";
+
   # The `bwrap` that every enrollment's PATH finds ahead of the one in
   # runtime.sandboxTools. Claude Code builds each sandbox with its
   # filesystem binds first and `--dev /dev` after them. That mounts a
@@ -349,7 +364,7 @@ let
   # makes the wrapper refuse to build the sandbox.
   #
   # The wrapper also carries the user's identity into the sandbox. A
-  # homed or userdb account is not in /etc/passwd, and the socket shell
+  # homed or userdb account is not in /etc/passwd, and the socket-restriction step
   # refuses connections to systemd's userdb sockets, so getpwuid fails
   # inside the sandbox and OpenSSH, for one, exits. When the uid or gid
   # is missing from /etc/passwd or /etc/group, the wrapper resolves it
@@ -473,7 +488,7 @@ let
           [
             baseFarm
             sshWrapper
-            socketShellPackage
+            socketRestrictionPackage
             nativeSocketBoundary
             devicesBwrap
             cfg.runtime.claudePackage
@@ -498,7 +513,7 @@ let
           ]
           ++ map (p: "${p}/bin") cfg.runtime.sandboxTools;
           shell = runtimeShell;
-          socketShell = "${socketShell}";
+          socketRestriction = "${socketRestriction}";
           # For agents that run whole inside the sandbox: the setsid that
           # gives the agent its pseudo-terminal as controlling terminal,
           # and the bwrap sandbox-runtime builds sandboxes with, which
@@ -825,7 +840,8 @@ let
         ".codex/config.toml"
         ".claude/claude-code-sandbox.json"
         expiringIndex
-      ];
+      ]
+      ++ map shellRulesFile (lib.attrNames srtAgents);
     };
     permissions.deny = [
       "Edit(.claude/settings.json)"
@@ -835,7 +851,8 @@ let
       "Edit(.codex/config.toml)"
       "Edit(.claude/claude-code-sandbox.json)"
       "Edit(/${expiringIndex})"
-    ];
+    ]
+    ++ map (name: "Edit(${shellRulesFile name})") (lib.attrNames srtAgents);
   };
 
   trustedExecutable = lib.types.submodule {
@@ -1427,6 +1444,20 @@ in
         the whole agent under sandbox-runtime. Both compose the checkout's
         modules, baseModules and the agent's modules. Elsewhere the command
         runs unchanged. The codex and opencode modules declare their agents.
+      '';
+    };
+
+    bashChains = lib.mkOption {
+      type = lib.types.attrsOf lib.types.package;
+      readOnly = true;
+      default = lib.mapAttrs (name: _: bashChain name) srtAgents;
+      defaultText = lib.literalMD "the bash chain of each agent with backend `srt`";
+      description = ''
+        The bash chain of each agent with backend `srt`: a package whose
+        `bin/bash` runs each shell command of the agent inside
+        sandbox-runtime, with the rules of the enrolled checkout holding
+        the working directory, and runs bash unchanged elsewhere. The
+        agent's module points `SHELL` at it.
       '';
     };
 

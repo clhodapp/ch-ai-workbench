@@ -350,7 +350,7 @@ def prepare_native(settings: dict[str, Any], root: Path, scratch: Path,
         "TMPDIR": str(scratch), "TMPPREFIX": str(scratch / "zsh"),
     }}
     # Unlike a whole-agent sandbox, the native boundary begins at each
-    # tool command. Do not apply the socket shell to the trusted parent.
+    # tool command. Do not apply the socket-restriction step to the trusted parent.
     env["SHELL"] = base["shell"]
     policy = {
         "config": config, "bwrap": base.get("nativeBwrap", base["bwrap"]), "landlock": base["landlock"],

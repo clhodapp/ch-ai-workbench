@@ -154,7 +154,7 @@ class RunTest(unittest.TestCase):
         self.assertIsNone(server)
         self.assertEqual(argv[0], "/bin/codex")
         self.assertEqual(argv[-2:], ["exec", "hi"])
-        self.assertNotIn(BASE["socketShell"], argv)
+        self.assertNotIn(BASE["socketRestriction"], argv)
         self.assertNotIn('sandbox_mode="danger-full-access"', argv)
         self.assertIn(f'default_permissions="{permission_profile_id(self.root)}"', argv)
         policy = json.loads(Path(env["AGENT_SANDBOX_CODEX_POLICY"]).read_text())
@@ -328,7 +328,7 @@ class RunTest(unittest.TestCase):
         argv, _, _ = prepare("coder", ["/bin/coder"], self.root, True)
         cmd = argv[4:]
         self.assertEqual(cmd[:3], ["/nix/store/util-linux/bin/setsid", "-w", "-c"])
-        self.assertEqual(cmd[3:6], [BASE["socketShell"], "-c", 'exec "$0" "$@"'])
+        self.assertEqual(cmd[3:6], [BASE["socketRestriction"], "-c", 'exec "$0" "$@"'])
         self.assertEqual(cmd[6], "/bin/coder")
         settings = json.loads(Path(argv[2]).read_text())
         self.assertEqual(settings["network"]["allowUnixSockets"], ["/run/thing.sock"])
@@ -352,7 +352,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(settings["network"]["allowUnixSockets"], [sock_path])
         self.assertTrue(settings["network"]["allowAllUnixSockets"])
         self.assertEqual(env["AGENT_SANDBOX_UNIX_SOCKETS"], sock_path)
-        self.assertIn(BASE["socketShell"], argv)
+        self.assertIn(BASE["socketRestriction"], argv)
 
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
             conn.connect(sock_path)
